@@ -63,13 +63,21 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_project(self, name: str, code_repo_url: str = "", gov_repo_url: str = "") -> Dict[str, Any]:
-        """Crea un nuevo proyecto con doble repositorio y rama huérfana."""
+    def create_project(self, name: str, code_repo_url: str = "", gov_repo_url: str = "", auto_publish: bool = False) -> Dict[str, Any]:
+        """Crea un nuevo proyecto con doble repositorio y rama huérfana, con opción de publicación autónoma a GitHub."""
         try:
             if not name.strip():
                 return {"success": False, "error": "El nombre del proyecto es obligatorio"}
             proj = self.db.create_project(name=name.strip(), code_repo_url=code_repo_url, gov_repo_url=gov_repo_url)
             self.active_project_uuid = proj["project_uuid"]
+
+            # Auto-publicación si se solicita y hay credenciales de GitHub disponibles
+            if auto_publish:
+                try:
+                    self.publish_project_to_github(proj["project_uuid"], repo_target="app")
+                except Exception as ce:
+                    logger.warning(f"Auto-publish to GitHub omitted: {ce}")
+
             return {"success": True, "project": proj}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -711,14 +719,82 @@ class ApiBridge:
             return {"success": False, "error": "Nombre de rama inválido o repositorio inexistente"}
         return self.github.git_create_branch(repo_path, branch_name.strip())
 
-    def set_project_remote_url(self, project_uuid: Optional[str] = None, remote_url: str = "", remote_name: str = "origin") -> Dict[str, Any]:
-        """Configura o actualiza la URL remota del repositorio de código del proyecto."""
+    def set_project_remote_url(
+        self,
+        project_uuid: Optional[str] = None,
+        remote_url: str = "",
+        remote_name: str = "origin",
+        repo_target: str = "app"
+    ) -> Dict[str, Any]:
+        """Configura o actualiza la URL remota del repositorio del proyecto (app o gov)."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo:
-            return {"success": False, "error": "Repositorio de código no configurado"}
-        return self.github.set_remote_url(code_repo, url=remote_url, remote=remote_name)
+        if not proj:
+            return {"success": False, "error": "Proyecto no encontrado"}
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Repositorio {repo_target} no configurado"}
+        return self.github.set_remote_url(repo_path, url=remote_url, remote=remote_name)
+
+    def publish_project_to_github(
+        self,
+        project_uuid: Optional[str] = None,
+        repo_target: str = "app",
+        repo_name: Optional[str] = None,
+        is_private: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Crea automáticamente el repositorio en GitHub vía API y publica la rama activa
+        de forma autónoma sin intervención humana.
+        """
+        target_uuid = project_uuid or self.active_project_uuid
+        if not target_uuid:
+            self._ensure_active_project()
+            target_uuid = self.active_project_uuid
+
+        proj = self.db.get_project_by_uuid(target_uuid)
+        if not proj:
+            return {"success": False, "error": "Proyecto no encontrado"}
+
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Ruta del repositorio ({repo_target}) no configurada"}
+
+        clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in proj.get("name", "proyecto").lower())
+
+        if not repo_name:
+            if repo_target == "gov":
+                target_repo_name = f"mcp2p-{clean_name}-okf"
+            else:
+                target_repo_name = f"mcp2p-{clean_name}"
+        else:
+            target_repo_name = repo_name.strip()
+
+        desc = f"Repositorio autónomo local-first para {proj.get('name')} ({repo_target.upper()})"
+        res = self.github.auto_create_and_publish_repo(
+            repo_path=repo_path,
+            repo_name=target_repo_name,
+            description=desc,
+            private=is_private
+        )
+
+        if res.get("success") and res.get("repo_url"):
+            # Actualizar URL remota en la base de datos
+            with self.db._write_lock, self.db.get_connection() as conn:
+                with conn:
+                    if repo_target == "gov":
+                        conn.execute("UPDATE projects SET gov_repo_url = ? WHERE project_uuid = ?;", (res["repo_url"], target_uuid))
+                    else:
+                        conn.execute("UPDATE projects SET code_repo_url = ? WHERE project_uuid = ?;", (res["repo_url"], target_uuid))
+
+        return res
+
+    def get_project_sync_pulse(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene la huella reactiva de cambios en tiempo real del proyecto."""
+        target_uuid = project_uuid or self.active_project_uuid
+        if not target_uuid:
+            return {"success": False, "error": "Sin proyecto activo", "fingerprint": ""}
+        return self.db.get_project_sync_fingerprint(target_uuid)
 
     def get_mcp_and_agents_status(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene el estado de la pasarela MCP local y los agentes conectados al enjambre."""

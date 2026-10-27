@@ -54,14 +54,16 @@ export function NewProjectModal({ isOpen, onClose, onSubmit }) {
   const [name, setName] = useState('');
   const [codeUrl, setCodeUrl] = useState('');
   const [govUrl, setGovUrl] = useState('');
+  const [autoPublish, setAutoPublish] = useState(false);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    onSubmit(name.trim(), codeUrl.trim(), govUrl.trim());
+    onSubmit(name.trim(), codeUrl.trim(), govUrl.trim(), autoPublish);
     setName('');
     setCodeUrl('');
     setGovUrl('');
+    setAutoPublish(false);
   };
 
   return (
@@ -132,6 +134,29 @@ export function NewProjectModal({ isOpen, onClose, onSubmit }) {
             }}
           />
         </div>
+
+        <label style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          cursor: 'pointer',
+          fontSize: '12px',
+          padding: '8px 10px',
+          backgroundColor: 'var(--bg-subtle)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-subtle)',
+          marginTop: '2px'
+        }}>
+          <input
+            type="checkbox"
+            checked={autoPublish}
+            onChange={(e) => setAutoPublish(e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+            ⚡ Publicar automáticamente en GitHub al crear (vía API con credenciales guardadas)
+          </span>
+        </label>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
           <button

@@ -281,15 +281,166 @@ class GitHubSyncManager:
             return False
 
     def get_remote_url(self, repo_path: str | Path, remote: str = "origin") -> Optional[str]:
-        """Obtiene la URL configurada para un control remoto."""
+        """Obtiene la URL configurada para un control remoto (sanitizada sin tokens)."""
         path = Path(repo_path)
         try:
             res = subprocess.run(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
             if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
+                import re
+                raw_url = res.stdout.strip()
+                return re.sub(r"https://[^@]+@github\.com", "https://github.com", raw_url)
             return None
         except Exception:
             return None
+
+    def auto_create_and_publish_repo(
+        self,
+        repo_path: str | Path,
+        repo_name: str,
+        description: str = "",
+        private: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Crea automáticamente el repositorio en GitHub vía API con las credenciales
+        autenticadas (PAT o gh), configura origin y publica la rama actual de forma 100% autónoma.
+        """
+        path = Path(repo_path)
+        if not (path / ".git").is_dir():
+            return {"success": False, "error": f"No es un repositorio Git válido: {path}"}
+
+        pat = self.db.get_setting("github_pat_token")
+        if not pat and not self.gh_bin:
+            return {
+                "success": False,
+                "requires_auth": True,
+                "error": "No hay credenciales de GitHub configuradas. Ingresa un Personal Access Token (PAT) en Configuración (F1) para publicar de forma autónoma."
+            }
+
+        # 1. Obtener usuario de GitHub
+        username = self.db.get_setting("github_pat_username")
+        if not username and pat:
+            auth_info = self.save_pat_token(pat)
+            if auth_info.get("success"):
+                username = auth_info.get("username")
+        if not username:
+            username = self._extract_username_from_gh()
+        if not username:
+            return {"success": False, "error": "No se pudo resolver el nombre de usuario de GitHub."}
+
+        # Sanitizar nombre de repositorio (permitir caracteres alfanuméricos, guiones y puntos)
+        clean_repo_name = "".join(c if c.isalnum() or c in "-_." else "-" for c in repo_name).strip("-")
+        if not clean_repo_name:
+            clean_repo_name = f"mcp2p-project-{int(datetime.now(timezone.utc).timestamp())}"
+
+        # 2. Consultar o crear repositorio en GitHub
+        clone_url = None
+        html_url = None
+
+        if pat:
+            # Consultar si ya existe
+            check_req = urllib.request.Request(
+                f"https://api.github.com/repos/{username}/{clean_repo_name}",
+                headers={
+                    "Authorization": f"Bearer {pat}",
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "MCP2P-Desktop-Client"
+                }
+            )
+            try:
+                with urllib.request.urlopen(check_req, timeout=10) as resp:
+                    if resp.status == 200:
+                        repo_info = json.loads(resp.read().decode("utf-8"))
+                        clone_url = repo_info.get("clone_url")
+                        html_url = repo_info.get("html_url")
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    # Crear nuevo repositorio vía API
+                    create_payload = json.dumps({
+                        "name": clean_repo_name,
+                        "description": description or f"MCP2P autonomous repository for {clean_repo_name}",
+                        "private": private,
+                        "auto_init": False
+                    }).encode("utf-8")
+                    create_req = urllib.request.Request(
+                        "https://api.github.com/user/repos",
+                        data=create_payload,
+                        headers={
+                            "Authorization": f"Bearer {pat}",
+                            "Accept": "application/vnd.github+json",
+                            "Content-Type": "application/json",
+                            "User-Agent": "MCP2P-Desktop-Client"
+                        },
+                        method="POST"
+                    )
+                    try:
+                        with urllib.request.urlopen(create_req, timeout=15) as c_resp:
+                            if c_resp.status in (200, 201):
+                                repo_info = json.loads(c_resp.read().decode("utf-8"))
+                                clone_url = repo_info.get("clone_url")
+                                html_url = repo_info.get("html_url")
+                    except urllib.error.HTTPError as ce:
+                        err_body = ce.read().decode("utf-8") if ce.fp else str(ce)
+                        return {"success": False, "error": f"Error al crear repositorio en GitHub (HTTP {ce.code}): {err_body}"}
+                    except Exception as ce:
+                        return {"success": False, "error": f"Error creando repositorio en GitHub: {ce}"}
+                else:
+                    return {"success": False, "error": f"Error verificando repositorio en GitHub (HTTP {e.code}): {e.reason}"}
+            except Exception as e:
+                return {"success": False, "error": f"Error de conexión con GitHub: {e}"}
+
+        elif self.gh_bin:
+            # Fallback a gh CLI
+            proc = subprocess.run(
+                [self.gh_bin, "repo", "create", clean_repo_name, "--private" if private else "--public", "--confirm"],
+                cwd=path,
+                capture_output=True,
+                text=True
+            )
+            clone_url = f"https://github.com/{username}/{clean_repo_name}.git"
+            html_url = f"https://github.com/{username}/{clean_repo_name}"
+
+        if not clone_url:
+            return {"success": False, "error": "No se pudo obtener la URL del repositorio de GitHub."}
+
+        # 3. Asegurar que exista al menos un commit en la rama actual
+        head_check = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True)
+        if head_check.returncode != 0:
+            readme_file = path / "README.md"
+            if not readme_file.exists():
+                readme_file.write_text(f"# {clean_repo_name}\n\nRepositorio autónomo local-first gestionado por MCP2P.\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"chore(init): initial commit for {clean_repo_name}"], cwd=path, capture_output=True)
+
+        # 4. Obtener la rama activa actual
+        b_p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True)
+        current_branch = b_p.stdout.strip() if b_p.returncode == 0 else "main"
+
+        # 5. Configurar origin con credenciales seguras embebidas para push no interactivo
+        auth_remote_url = clone_url
+        if pat and "github.com" in clone_url:
+            auth_remote_url = f"https://{pat}@github.com/{username}/{clean_repo_name}.git"
+
+        self.setup_repo_remote(path, auth_remote_url, "origin")
+
+        # 6. Publicar rama local a GitHub
+        push_res = self.git_push_branch(path, branch=current_branch, remote="origin")
+        if not push_res.get("success"):
+            return {
+                "success": False,
+                "error": f"Repositorio creado en GitHub ({clone_url}), pero falló el push: {push_res.get('error')}",
+                "repo_url": clone_url,
+                "html_url": html_url
+            }
+
+        return {
+            "success": True,
+            "repo_url": clone_url,
+            "html_url": html_url,
+            "branch": current_branch,
+            "username": username,
+            "repo_name": clean_repo_name,
+            "message": f"Repositorio '{clean_repo_name}' creado y publicado exitosamente en GitHub en la rama '{current_branch}'."
+        }
 
     def set_remote_url(self, repo_path: str | Path, url: str, remote: str = "origin") -> Dict[str, Any]:
         """Configura o actualiza la URL remota en el repositorio."""

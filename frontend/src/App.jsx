@@ -131,10 +131,10 @@ export default function App() {
     setActiveTab('kanban');
   };
 
-  const handleCreateProject = async (name, codeUrl, govUrl) => {
+  const handleCreateProject = async (name, codeUrl, govUrl, autoPublish = false) => {
     if (!api) return;
     try {
-      const res = await api.create_project(name, codeUrl, govUrl);
+      const res = await api.create_project(name, codeUrl, govUrl, autoPublish);
       if (res.success) {
         setIsNewProjectOpen(false);
         await loadProjects();

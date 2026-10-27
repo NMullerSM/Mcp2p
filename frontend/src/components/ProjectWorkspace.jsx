@@ -4,6 +4,7 @@ import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
 import { BranchConsensusView } from './BranchConsensusView';
 import { CardDetailModal } from './Modals';
+import { useProjectPulse } from '../hooks/useProjectPulse';
 
 export function ProjectWorkspace({
   project,
@@ -16,6 +17,7 @@ export function ProjectWorkspace({
   const [cards, setCards] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
   const [targetBranch, setTargetBranch] = useState('');
+  const [gitPulseTrigger, setGitPulseTrigger] = useState(0);
 
   const loadCards = useCallback(async () => {
     if (!api || !project) return;
@@ -38,6 +40,16 @@ export function ProjectWorkspace({
   useEffect(() => {
     loadCards();
   }, [loadCards, taskTrigger]);
+
+  // Hook reactivo de sincronización en tiempo real para eventos de agentes MCP y Git
+  useProjectPulse({
+    api,
+    projectUuid: project?.project_uuid,
+    onCardsChange: loadCards,
+    onConsensusChange: () => setGitPulseTrigger(prev => prev + 1),
+    onGitChange: () => setGitPulseTrigger(prev => prev + 1),
+    intervalMs: 1200
+  });
 
   const handleCardMove = async (cardId, targetStatus) => {
     if (!api) return;
@@ -139,6 +151,7 @@ export function ProjectWorkspace({
             api={api}
             initialBranch={targetBranch}
             onOpenCard={handleOpenCardById}
+            gitPulseTrigger={gitPulseTrigger}
           />
         )}
         {activeTab === 'okf' && (

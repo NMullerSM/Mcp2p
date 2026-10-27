@@ -265,10 +265,16 @@ class DatabaseManager:
         okf_adapter.initialize_project_okf(gov_dir, name, p_uuid)
 
         if init_git:
-            # Inicializar repo de código si no existe .git
+            # 1. Inicializar repo de código si no existe .git
             if not (app_dir / ".git").exists():
                 subprocess.run(["git", "init", "-b", "main"], cwd=str(app_dir), capture_output=True)
-            # Inicializar repo de gobernanza con rama huérfana
+                readme = app_dir / "README.md"
+                if not readme.exists():
+                    readme.write_text(f"# {name}\n\nEspacio de desarrollo local-first gestionado por MCP2P.\nUUID: `{p_uuid}`\n", encoding="utf-8")
+                subprocess.run(["git", "add", "."], cwd=str(app_dir), capture_output=True)
+                subprocess.run(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], cwd=str(app_dir), capture_output=True)
+
+            # 2. Inicializar repo de gobernanza con rama huérfana
             if not (gov_dir / ".git").exists():
                 subprocess.run(["git", "init", "-b", "main"], cwd=str(gov_dir), capture_output=True)
                 orphan_branch = f"orphan-conversa-memory-{p_uuid}"
@@ -278,6 +284,14 @@ class DatabaseManager:
                 marker.write_text(f'{{"project_uuid": "{p_uuid}", "name": "{name}"}}\n', encoding="utf-8")
                 subprocess.run(["git", "add", "."], cwd=str(gov_dir), capture_output=True)
                 subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance orphan branch for {p_uuid}"], cwd=str(gov_dir), capture_output=True)
+
+            # 3. Instalar hooks de Git para sincronización en tiempo real
+            for d in (app_dir, gov_dir):
+                hooks_dir = d / ".git" / "hooks"
+                if hooks_dir.is_dir():
+                    post_commit = hooks_dir / "post-commit"
+                    post_commit.write_text("#!/bin/sh\ntouch .git_pulse 2>/dev/null || true\n", encoding="utf-8")
+                    post_commit.chmod(0o755)
 
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -332,6 +346,79 @@ class DatabaseManager:
             cur = conn.execute("SELECT * FROM projects WHERE project_uuid = ?;", (project_uuid,))
             row = cur.fetchone()
             return dict(row) if row else None
+
+    def get_project_sync_fingerprint(self, project_uuid: str) -> Dict[str, Any]:
+        """Calcula una huella de sincronización atómica para detección reactiva de cambios en tiempo real."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 
+                    COUNT(card_id),
+                    COALESCE(MAX(updated_at), ''),
+                    (SELECT COUNT(message_uuid) FROM a2a_messages WHERE project_uuid = ?),
+                    (SELECT COALESCE(MAX(created_at), '') FROM a2a_messages WHERE project_uuid = ?),
+                    (SELECT COUNT(ticket_id) FROM dispute_tickets WHERE project_uuid = ?),
+                    (SELECT COALESCE(MAX(created_at), '') FROM dispute_tickets WHERE project_uuid = ?)
+                FROM kanban_cards
+                WHERE project_uuid = ?;
+                """,
+                (project_uuid, project_uuid, project_uuid, project_uuid, project_uuid)
+            ).fetchone()
+
+        cards_count, cards_max, a2a_count, a2a_max, tickets_count, tickets_max = row if row else (0, "", 0, "", 0, "")
+
+        # Detección de pulso Git
+        proj = self.get_project_by_uuid(project_uuid)
+        app_pulse = 0
+        gov_pulse = 0
+        app_head = ""
+        gov_head = ""
+        if proj:
+            app_p = Path(proj.get("code_repo_path", ""))
+            gov_p = Path(proj.get("gov_repo_path", ""))
+            if (app_p / ".git_pulse").exists():
+                try:
+                    app_pulse = int((app_p / ".git_pulse").stat().st_mtime)
+                except Exception:
+                    pass
+            if (gov_p / ".git_pulse").exists():
+                try:
+                    gov_pulse = int((gov_p / ".git_pulse").stat().st_mtime)
+                except Exception:
+                    pass
+            
+            # Refs de HEAD de repositorios
+            app_head_file = app_p / ".git" / "HEAD"
+            if app_head_file.exists():
+                try:
+                    app_head = app_head_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+            gov_head_file = gov_p / ".git" / "HEAD"
+            if gov_head_file.exists():
+                try:
+                    gov_head = gov_head_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+
+        cards_fp = f"{cards_count}:{cards_max}"
+        a2a_fp = f"{a2a_count}:{a2a_max}:{tickets_count}:{tickets_max}"
+        git_fp = f"{app_pulse}:{gov_pulse}:{app_head}:{gov_head}"
+        fingerprint = f"{cards_fp}:{a2a_fp}:{git_fp}"
+
+        return {
+            "success": True,
+            "project_uuid": project_uuid,
+            "fingerprint": fingerprint,
+            "cards_fingerprint": cards_fp,
+            "a2a_fingerprint": a2a_fp,
+            "git_fingerprint": git_fp,
+            "cards_count": cards_count,
+            "cards_updated_at": cards_max,
+            "a2a_count": a2a_count,
+            "a2a_updated_at": a2a_max,
+            "tickets_count": tickets_count
+        }
 
     # ==========================
     # Métodos de Tarjetas Kanban

@@ -39,7 +39,7 @@ const PALETTE = [
   '#43e8d8'  // Cian
 ];
 
-export function BranchConsensusView({ project, api, initialBranch = '', onOpenCard }) {
+export function BranchConsensusView({ project, api, initialBranch = '', onOpenCard, gitPulseTrigger = 0 }) {
   // Pestaña activa dentro de Control de Cambios: 'graph' (Grafo & Commits) vs 'consensus' (Consenso Dialéctico)
   const [subTab, setSubTab] = useState('graph');
 
@@ -87,7 +87,53 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
 
   useEffect(() => {
     loadData();
-  }, [project, api]);
+  }, [project, api, gitPulseTrigger]);
+
+  const handleAutoPublish = async () => {
+    if (!api || !project) return;
+    setActionLoading(true);
+    setFeedback(null);
+    try {
+      const res = await api.publish_project_to_github(project.project_uuid, repoTarget);
+      if (res.success) {
+        setFeedback({
+          type: 'success',
+          text: `Repositorio creado y publicado exitosamente en GitHub: ${res.repo_url} (Rama: ${res.branch})`
+        });
+        loadData();
+      } else {
+        setFeedback({
+          type: 'error',
+          text: res.error || 'Error al auto-publicar repositorio en GitHub'
+        });
+      }
+    } catch (e) {
+      setFeedback({ type: 'error', text: 'Error: ' + e });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSetRemote = async (e) => {
+    e.preventDefault();
+    if (!api || !project || !remoteUrlInput.trim()) return;
+    setActionLoading(true);
+    setFeedback(null);
+    try {
+      const res = await api.set_project_remote_url(project.project_uuid, remoteUrlInput.trim(), 'origin', repoTarget);
+      if (res.success) {
+        setIsRemoteModalOpen(false);
+        setFeedback({ type: 'success', text: `URL remota origin configurada para repositorio ${repoTarget.toUpperCase()}.` });
+        loadData();
+      } else {
+        setFeedback({ type: 'error', text: res.error || 'Error al configurar URL remota' });
+      }
+    } catch (e) {
+      setFeedback({ type: 'error', text: 'Error: ' + e });
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   // Si cambia el repoTarget, reajustar rama activa
   useEffect(() => {
@@ -648,6 +694,106 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                 }}
               >
                 <Upload size={13} /> Publicar Rama
+              </button>
+            </div>
+          </div>
+
+          {/* Barra de Estado Remoto & Auto-Publicación */}
+          <div style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+            padding: '10px 16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap',
+            fontSize: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+              <Link size={14} color="var(--text-secondary)" />
+              <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>Remoto ({repoTarget.toUpperCase()}):</span>
+              {originUrl ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                  <code style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '11px',
+                    backgroundColor: 'var(--bg-subtle)',
+                    padding: '3px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    maxWidth: '420px'
+                  }}>
+                    {originUrl}
+                  </code>
+                  <button
+                    onClick={() => setIsRemoteModalOpen(true)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      color: 'var(--accent-primary)',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      padding: 0,
+                      textDecoration: 'underline'
+                    }}
+                  >
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
+                <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  Sin repositorio remoto origin vinculado en GitHub.
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {!originUrl && (
+                <button
+                  onClick={handleAutoPublish}
+                  disabled={actionLoading}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    color: '#ffffff',
+                    cursor: actionLoading ? 'wait' : 'pointer',
+                    boxShadow: 'var(--shadow-sm)'
+                  }}
+                  title="Crea el repositorio en GitHub vía API y publica automáticamente esta rama con tus credenciales guardadas"
+                >
+                  <Upload size={13} className={actionLoading ? 'spin' : ''} />
+                  <span>⚡ Publicar Autónomamente en GitHub</span>
+                </button>
+              )}
+              <button
+                onClick={() => setIsRemoteModalOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '5px 10px',
+                  fontSize: '11px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer'
+                }}
+              >
+                {originUrl ? 'Configurar Origin' : 'Vincular URL Manualmente'}
               </button>
             </div>
           </div>
@@ -1228,6 +1374,135 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                 >
                   Crear y Activar
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para configurar URL remota manual */}
+      {isRemoteModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px'
+          }}
+          onClick={() => setIsRemoteModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '20px',
+              width: '100%',
+              maxWidth: '460px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              boxShadow: 'var(--shadow-lg)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                Configurar Repositorio Remoto ({repoTarget === 'app' ? 'App' : 'Gobernanza'})
+              </h3>
+              <button
+                onClick={() => setIsRemoteModalOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
+              Puedes ingresar la URL remota de GitHub para este sub-repositorio o auto-publicarlo directamente con tu GitHub PAT guardado.
+            </p>
+            <form onSubmit={handleSetRemote} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>
+                  URL Remota Git (HTTPS o SSH)
+                </label>
+                <input
+                  autoFocus
+                  required
+                  type="text"
+                  value={remoteUrlInput}
+                  onChange={(e) => setRemoteUrlInput(e.target.value)}
+                  placeholder="https://github.com/usuario/mi-repositorio.git"
+                  style={{
+                    width: '100%',
+                    backgroundColor: 'var(--bg-app)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)',
+                    fontFamily: 'var(--font-mono)',
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRemoteModalOpen(false);
+                    handleAutoPublish();
+                  }}
+                  disabled={actionLoading}
+                  style={{
+                    padding: '7px 12px',
+                    fontSize: '12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    color: 'var(--accent-primary)',
+                    cursor: actionLoading ? 'wait' : 'pointer',
+                    fontWeight: 600
+                  }}
+                >
+                  ⚡ Auto-Crear en GitHub
+                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsRemoteModalOpen(false)}
+                    style={{
+                      padding: '7px 12px',
+                      fontSize: '12px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'transparent',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={actionLoading}
+                    style={{
+                      padding: '7px 14px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Guardar Remoto
+                  </button>
+                </div>
               </div>
             </form>
           </div>

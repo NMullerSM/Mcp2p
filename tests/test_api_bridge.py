@@ -228,4 +228,35 @@ def test_api_bridge_remote_url_and_mcp_agents_status(bridge):
     assert any(ag["agent_id"] == "agent_local_developer" for ag in mcp_res["connected_agents"])
 
 
+def test_project_sync_pulse_and_hooks(bridge):
+    """Verifica el cálculo del pulso atómico y la detección reactiva de cambios."""
+    p_res = bridge.create_project(name="Proyecto Pulse Test")
+    p_uuid = p_res["project"]["project_uuid"]
+
+    # 1. Pulso inicial
+    pulse1 = bridge.get_project_sync_pulse(p_uuid)
+    assert pulse1["success"] is True
+    assert "fingerprint" in pulse1
+    fp1 = pulse1["fingerprint"]
+
+    # 2. Modificar tarjetas Kanban
+    bridge.create_kanban_card("TASK-PULSE-1", "Tarea Pulso", "Desc")
+    pulse2 = bridge.get_project_sync_pulse(p_uuid)
+    fp2 = pulse2["fingerprint"]
+
+    assert fp1 != fp2
+    assert pulse2["cards_fingerprint"] != pulse1["cards_fingerprint"]
+
+    # 3. Disparar evento de pulso Git
+    proj = bridge.db.get_project_by_uuid(p_uuid)
+    app_pulse_file = Path(proj["code_repo_path"]) / ".git_pulse"
+    app_pulse_file.write_text("pulse")
+
+    pulse3 = bridge.get_project_sync_pulse(p_uuid)
+    fp3 = pulse3["fingerprint"]
+    assert fp3 != fp2
+    assert pulse3["git_fingerprint"] != pulse2["git_fingerprint"]
+
+
+
 
