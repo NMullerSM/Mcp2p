@@ -14,8 +14,7 @@
        ========================================================================= -->
   <header class="app-header">
     <div class="brand">
-      <span class="logo-badge">MCP2P</span>
-      <h1 class="app-title">Enjambre Agéntico</h1>
+      <span class="logo-badge" style="font-size: 16px; font-weight: 900; letter-spacing: 0.5px; padding: 4px 10px;">MCP2P</span>
     </div>
 
     <!-- 3 Acciones Primarias -->
@@ -30,9 +29,9 @@
         ☀️
       </button>
 
-      <!-- Acción Guía de Usuario (Heurística 10 de Nielsen) -->
-      <button id="toggle-guide-btn" class="btn" title="Abrir Guía de Usuario (F1)">
-        <span>?</span> Guía (F1)
+      <!-- Acción Configuración y Enlace P2P -->
+      <button id="btn-settings" class="btn" title="Configuración del Nodo, Enlace P2P y Guía">
+        <span>⚙</span> Configuración
       </button>
     </div>
   </header>
@@ -49,11 +48,16 @@
       <div class="hub-header">
         <div class="hub-title-group">
           <h2>Tus Proyectos & Espacios de Trabajo</h2>
-          <p class="hub-subtitle">Cada proyecto opera con doble repositorio aislado: código (app) y gobernanza (OKF).</p>
+          <p class="hub-subtitle">Cada proyecto opera con doble repositorio aislado: código (app_{nombre}) y gobernanza (okf_{nombre}_{id}).</p>
         </div>
-        <button id="btn-new-project-hub" class="btn btn-primary" title="Crear nuevo proyecto aislado (Ctrl+P)">
-          <span>+</span> Nuevo Proyecto
-        </button>
+        <div style="display: flex; gap: 8px;">
+          <button id="btn-join-p2p" class="btn" title="Unirse a un proyecto mediante enlace o token de invitación P2P">
+            <span>🔗</span> Unirse vía P2P
+          </button>
+          <button id="btn-new-project-hub" class="btn btn-primary" title="Crear nuevo proyecto aislado (Ctrl+P)">
+            <span>+</span> Nuevo Proyecto
+          </button>
+        </div>
       </div>
 
       <!-- Grilla Dinámica de Tarjetas de Proyectos -->
@@ -133,17 +137,11 @@
   </main>
 
   <!-- =========================================================================
-       Barra de Estado Inferior (Heurística 1 de Nielsen: Visibilidad del Sistema)
+       Barra de Estado Inferior: Solo SQLite WAL Activo
        ========================================================================= -->
   <footer class="app-statusbar">
     <div class="status-left">
-      <span><span class="pulse-indicator"></span> SISTEMA ACTIVO</span>
-      <span id="status-project">Hub de Proyectos</span>
-      <span id="status-node">Nodo: Conectando...</span>
-    </div>
-    <div class="status-right">
-      <span id="status-wal">SQLite WAL: OK</span>
-      <span id="status-os">Linux</span>
+      <span id="status-wal"><span class="pulse-indicator"></span> SQLite WAL Activo</span>
     </div>
   </footer>
 
@@ -261,7 +259,94 @@
     </div>
   </div>
 
+  <!-- =========================================================================
+       Modal de Configuración y Enlace P2P (QR, Token y Guía)
+       ========================================================================= -->
+  <div id="settings-modal" class="modal-overlay">
+    <div class="modal-box" style="max-width: 520px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="font-size: 16px; font-weight: 700;">⚙ Configuración & Enlace P2P</h3>
+        <button id="close-settings-modal-btn" class="btn btn-sm">✕</button>
+      </div>
+
+      <div style="background: var(--bg-surface); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color); margin-bottom: 14px; font-size: 12px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+          <span style="color: var(--text-secondary);">Nodo Local:</span>
+          <span id="settings-node-uuid" style="font-family: var(--font-mono); font-weight: 600;">node_local</span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span style="color: var(--text-secondary);">Proyecto Activo:</span>
+          <span id="settings-active-proj" style="font-weight: 600;">Ninguno seleccionado</span>
+        </div>
+      </div>
+
+      <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 6px;">Enlace de Invitación P2P del Proyecto</h4>
+      <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+        Comparte este enlace o código QR con tu colaborador para que se vincule automáticamente a este proyecto con sus repositorios emparejados.
+      </p>
+
+      <div style="display: flex; gap: 8px; margin-bottom: 14px;">
+        <input id="input-p2p-invite-url" class="form-input" type="text" readonly style="font-size: 11px; font-family: var(--font-mono);" />
+        <button id="btn-copy-p2p-invite" class="btn btn-secondary" style="white-space: nowrap;">Copiar</button>
+      </div>
+
+      <!-- Contenedor Código QR -->
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; background: var(--bg-surface); border-radius: 8px; border: 1px dashed var(--border-color); margin-bottom: 16px;">
+        <div id="p2p-qr-code-box"></div>
+        <span style="font-size: 11px; color: var(--text-secondary); margin-top: 6px;">Escanea este código desde la otra máquina</span>
+      </div>
+
+      <div style="border-top: 1px solid var(--border-color); padding-top: 12px; display: flex; justify-content: space-between; align-items: center;">
+        <button id="btn-open-guide-from-settings" class="btn btn-sm">
+          📖 Ver Manual & Guía (F1)
+        </button>
+        <button id="btn-done-settings" class="btn btn-primary btn-sm">Listo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       Modal para Unirse a Proyecto P2P
+       ========================================================================= -->
+  <div id="join-p2p-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 style="font-size: 16px; font-weight: 700;">🔗 Unirse a Proyecto P2P</h3>
+      <p style="font-size: 12px; color: var(--text-secondary);">
+        Pega el enlace de invitación (<code>mcp2p://join?...</code>) o el token compartido por tu colaborador. Se generará automáticamente el proyecto con el mismo identificador UUID y estructura de doble repositorio.
+      </p>
+
+      <div class="form-group">
+        <label class="form-label" for="input-join-p2p-token">Enlace o Token de Invitación P2P *</label>
+        <textarea id="input-join-p2p-token" class="form-textarea" rows="3" placeholder="mcp2p://join?token=eyJ..."></textarea>
+      </div>
+
+      <div class="modal-footer">
+        <button id="cancel-join-p2p-btn" class="btn">Cancelar</button>
+        <button id="submit-join-p2p-btn" class="btn btn-primary">Conectar y Desplegar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       Modal de Confirmación para Eliminar Proyecto
+       ========================================================================= -->
+  <div id="delete-project-modal" class="modal-overlay">
+    <div class="modal-box" style="max-width: 400px;">
+      <h3 style="font-size: 16px; font-weight: 700; color: #ef4444;">⚠️ Eliminar Proyecto</h3>
+      <p style="font-size: 13px; color: var(--text-secondary); margin: 12px 0;">
+        ¿Estás seguro de que deseas eliminar el proyecto <strong id="delete-project-name" style="color: var(--text-primary);">...</strong>?
+        Esta acción eliminará todas las tareas, mensajes A2A y disputas asociadas de la base de datos local.
+      </p>
+
+      <div class="modal-footer">
+        <button id="cancel-delete-project-btn" class="btn">Cancelar</button>
+        <button id="confirm-delete-project-btn" class="btn btn-danger" style="background: #dc2626; color: #fff;">Eliminar Definitivamente</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Scripts -->
+  <script src="js/qr.js"></script>
   <script src="js/guide.js"></script>
   <script src="js/kanban.js"></script>
   <script src="js/app.js"></script>

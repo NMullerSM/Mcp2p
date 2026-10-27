@@ -27,6 +27,7 @@ class AppController {
     this.currentTheme = safeStorage.get("mcp2p_theme", "dark");
     this.activeProject = null;
     this.projectsList = [];
+    this.projectToDelete = null;
 
     this.initElements();
     this.applyTheme(this.currentTheme);
@@ -42,28 +43,47 @@ class AppController {
 
     // Botones de Cabecera
     this.themeBtn = document.getElementById("theme-toggle-btn");
-    this.guideToggleBtn = document.getElementById("toggle-guide-btn");
+    this.settingsBtn = document.getElementById("btn-settings");
     this.newProjectHubBtn = document.getElementById("btn-new-project-hub");
+    this.joinP2PBtn = document.getElementById("btn-join-p2p");
     this.newTaskBtn = document.getElementById("btn-new-task");
     this.backToProjectsBtn = document.getElementById("btn-back-projects");
 
     // Elementos de estado
     this.activeProjectTitle = document.getElementById("active-project-title");
     this.activeProjectUuid = document.getElementById("active-project-uuid");
-    this.statusProject = document.getElementById("status-project");
-    this.statusNode = document.getElementById("status-node");
     this.statusWal = document.getElementById("status-wal");
-    this.statusOs = document.getElementById("status-os");
 
     // Modales
     this.projectModal = document.getElementById("new-project-modal");
     this.taskModal = document.getElementById("new-task-modal");
+    this.settingsModal = document.getElementById("settings-modal");
+    this.joinP2PModal = document.getElementById("join-p2p-modal");
+    this.deleteProjectModal = document.getElementById("delete-project-modal");
 
+    // Elementos dentro de Modales
     this.cancelProjectBtn = document.getElementById("cancel-project-modal-btn");
     this.saveProjectBtn = document.getElementById("save-project-btn");
 
     this.cancelTaskBtn = document.getElementById("cancel-task-modal-btn");
     this.saveTaskBtn = document.getElementById("save-task-btn");
+
+    this.closeSettingsBtn = document.getElementById("close-settings-modal-btn");
+    this.doneSettingsBtn = document.getElementById("btn-done-settings");
+    this.copyP2PInviteBtn = document.getElementById("btn-copy-p2p-invite");
+    this.openGuideFromSettingsBtn = document.getElementById("btn-open-guide-from-settings");
+    this.inputP2PInviteUrl = document.getElementById("input-p2p-invite-url");
+    this.p2pQrCodeBox = document.getElementById("p2p-qr-code-box");
+    this.settingsNodeUuid = document.getElementById("settings-node-uuid");
+    this.settingsActiveProj = document.getElementById("settings-active-proj");
+
+    this.cancelJoinP2PBtn = document.getElementById("cancel-join-p2p-btn");
+    this.submitJoinP2PBtn = document.getElementById("submit-join-p2p-btn");
+    this.inputJoinP2PToken = document.getElementById("input-join-p2p-token");
+
+    this.deleteProjectNameEl = document.getElementById("delete-project-name");
+    this.cancelDeleteProjectBtn = document.getElementById("cancel-delete-project-btn");
+    this.confirmDeleteProjectBtn = document.getElementById("confirm-delete-project-btn");
   }
 
   applyTheme(theme) {
@@ -86,22 +106,30 @@ class AppController {
       this.themeBtn.onclick = () => this.toggleTheme();
     }
 
-    // 2. Nuevo Proyecto
+    // 2. Configuración & Enlace P2P
+    if (this.settingsBtn) {
+      this.settingsBtn.onclick = () => this.openSettingsModal();
+    }
+    if (this.closeSettingsBtn) {
+      this.closeSettingsBtn.onclick = () => this.closeSettingsModal();
+    }
+    if (this.doneSettingsBtn) {
+      this.doneSettingsBtn.onclick = () => this.closeSettingsModal();
+    }
+    if (this.copyP2PInviteBtn) {
+      this.copyP2PInviteBtn.onclick = () => this.copyP2PInvite();
+    }
+    if (this.openGuideFromSettingsBtn) {
+      this.openGuideFromSettingsBtn.onclick = () => {
+        this.closeSettingsModal();
+        if (window.guideDrawer) window.guideDrawer.open();
+      };
+    }
+
+    // 3. Nuevo Proyecto Hub
     if (this.newProjectHubBtn) {
       this.newProjectHubBtn.onclick = () => this.openNewProjectModal();
     }
-
-    // 3. Volver al Hub de Proyectos
-    if (this.backToProjectsBtn) {
-      this.backToProjectsBtn.onclick = () => this.showProjectsHub();
-    }
-
-    // 4. Nueva Tarea en Proyecto
-    if (this.newTaskBtn) {
-      this.newTaskBtn.onclick = () => this.openNewTaskModal();
-    }
-
-    // 5. Botones Modales
     if (this.cancelProjectBtn) {
       this.cancelProjectBtn.onclick = () => this.closeNewProjectModal();
     }
@@ -109,6 +137,34 @@ class AppController {
       this.saveProjectBtn.onclick = () => this.submitNewProject();
     }
 
+    // 4. Unirse vía P2P
+    if (this.joinP2PBtn) {
+      this.joinP2PBtn.onclick = () => this.openJoinP2PModal();
+    }
+    if (this.cancelJoinP2PBtn) {
+      this.cancelJoinP2PBtn.onclick = () => this.closeJoinP2PModal();
+    }
+    if (this.submitJoinP2PBtn) {
+      this.submitJoinP2PBtn.onclick = () => this.submitJoinP2P();
+    }
+
+    // 5. Eliminar Proyecto
+    if (this.cancelDeleteProjectBtn) {
+      this.cancelDeleteProjectBtn.onclick = () => this.closeDeleteProjectModal();
+    }
+    if (this.confirmDeleteProjectBtn) {
+      this.confirmDeleteProjectBtn.onclick = () => this.submitDeleteProject();
+    }
+
+    // 6. Volver al Hub de Proyectos
+    if (this.backToProjectsBtn) {
+      this.backToProjectsBtn.onclick = () => this.showProjectsHub();
+    }
+
+    // 7. Nueva Tarea en Proyecto
+    if (this.newTaskBtn) {
+      this.newTaskBtn.onclick = () => this.openNewTaskModal();
+    }
     if (this.cancelTaskBtn) {
       this.cancelTaskBtn.onclick = () => this.closeNewTaskModal();
     }
@@ -116,7 +172,7 @@ class AppController {
       this.saveTaskBtn.onclick = () => this.submitNewTask();
     }
 
-    // 6. Atajos de Teclado Globales
+    // 8. Atajos de Teclado Globales
     window.addEventListener("keydown", (e) => {
       // Ctrl+D o Cmd+D: Alternar Tema
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
@@ -137,10 +193,13 @@ class AppController {
         e.preventDefault();
         this.openNewProjectModal();
       }
-      // ESC: Cerrar Modales o Drawer
+      // ESC: Cerrar Modales
       if (e.key === "Escape") {
         this.closeNewProjectModal();
         this.closeNewTaskModal();
+        this.closeSettingsModal();
+        this.closeJoinP2PModal();
+        this.closeDeleteProjectModal();
       }
     });
   }
@@ -157,22 +216,7 @@ class AppController {
   }
 
   async onBridgeReady() {
-    await this.refreshSystemInfo();
     await this.loadProjectsHub();
-  }
-
-  async refreshSystemInfo() {
-    if (!window.pywebview || !window.pywebview.api) return;
-    try {
-      const info = await window.pywebview.api.get_system_info();
-      if (info.success) {
-        if (this.statusNode) this.statusNode.textContent = `Nodo: ${info.active_node}`;
-        if (this.statusWal) this.statusWal.textContent = `SQLite WAL: ACTIVO`;
-        if (this.statusOs) this.statusOs.textContent = `${info.os} (${info.python_version})`;
-      }
-    } catch (e) {
-      console.warn("[System Info Error]", e);
-    }
   }
 
   // ==========================
@@ -183,7 +227,6 @@ class AppController {
     if (this.viewKanban) this.viewKanban.classList.remove("active");
     if (this.viewProjects) this.viewProjects.classList.add("active");
     if (this.newTaskBtn) this.newTaskBtn.style.display = "none";
-    if (this.statusProject) this.statusProject.textContent = "Hub de Proyectos";
     this.activeProject = null;
     this.loadProjectsHub();
   }
@@ -197,7 +240,6 @@ class AppController {
 
       if (this.activeProjectTitle) this.activeProjectTitle.textContent = project.name;
       if (this.activeProjectUuid) this.activeProjectUuid.textContent = project.project_uuid;
-      if (this.statusProject) this.statusProject.textContent = `Proyecto: ${project.name} [${project.project_uuid}]`;
 
       if (this.viewProjects) this.viewProjects.classList.remove("active");
       if (this.viewKanban) this.viewKanban.classList.add("active");
@@ -246,7 +288,10 @@ class AppController {
               Creado: ${new Date(proj.created_at).toLocaleDateString()}
             </span>
           </div>
-          <span class="project-uuid-badge">${this.escape(proj.project_uuid)}</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="project-uuid-badge">${this.escape(proj.project_uuid)}</span>
+            <button class="btn-delete-proj" title="Eliminar Proyecto">🗑️</button>
+          </div>
         </div>
 
         <div class="repo-align-box">
@@ -256,7 +301,7 @@ class AppController {
           </div>
           <div class="repo-item" title="Repositorio de Gobernanza OKF">
             <span class="repo-badge badge-gov">OKF</span>
-            <span>${this.escape(proj.gov_repo_path || "governance/")}</span>
+            <span>${this.escape(proj.gov_repo_path || "okf/")}</span>
           </div>
         </div>
 
@@ -274,6 +319,14 @@ class AppController {
         };
       }
 
+      const delBtn = card.querySelector(".btn-delete-proj");
+      if (delBtn) {
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          this.confirmDeleteProject(proj);
+        };
+      }
+
       this.projectsGrid.appendChild(card);
     });
 
@@ -284,13 +337,146 @@ class AppController {
     newCard.innerHTML = `
       <span class="plus-icon">+</span>
       <span style="font-size: 14px; font-weight: 600;">Crear Nuevo Proyecto</span>
-      <span style="font-size: 11px;">Aislamiento Doble Repositorio + OKF</span>
+      <span style="font-size: 11px;">Doble Repositorio + OKF Aislado</span>
     `;
     this.projectsGrid.appendChild(newCard);
   }
 
   // ==========================
-  // Modales
+  // Modal de Configuración y Enlace P2P
+  // ==========================
+
+  async openSettingsModal() {
+    if (!this.settingsModal) return;
+    this.settingsModal.classList.add("open");
+
+    if (window.pywebview && window.pywebview.api) {
+      try {
+        const sys = await window.pywebview.api.get_system_info();
+        if (this.settingsNodeUuid) {
+          this.settingsNodeUuid.textContent = sys.active_node || "node_local";
+        }
+        if (this.settingsActiveProj) {
+          this.settingsActiveProj.textContent = this.activeProject 
+            ? `${this.activeProject.name} (${this.activeProject.project_uuid})`
+            : (this.projectsList[0] ? `${this.projectsList[0].name} (${this.projectsList[0].project_uuid})` : "Ningún proyecto activo");
+        }
+
+        // Generar invitación P2P
+        const targetUuid = this.activeProject?.project_uuid || this.projectsList[0]?.project_uuid;
+        if (targetUuid) {
+          const inv = await window.pywebview.api.generate_p2p_invite(targetUuid);
+          if (inv.success) {
+            if (this.inputP2PInviteUrl) this.inputP2PInviteUrl.value = inv.invite_url;
+            if (this.p2pQrCodeBox && window.QRCodeGenerator) {
+              this.p2pQrCodeBox.innerHTML = window.QRCodeGenerator.generateSVG(inv.invite_url, 150);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[Settings Open Error]", err);
+      }
+    }
+  }
+
+  closeSettingsModal() {
+    if (this.settingsModal) this.settingsModal.classList.remove("open");
+  }
+
+  copyP2PInvite() {
+    if (this.inputP2PInviteUrl) {
+      this.inputP2PInviteUrl.select();
+      navigator.clipboard?.writeText(this.inputP2PInviteUrl.value).then(() => {
+        if (this.copyP2PInviteBtn) {
+          const prev = this.copyP2PInviteBtn.textContent;
+          this.copyP2PInviteBtn.textContent = "¡Copiado!";
+          setTimeout(() => { this.copyP2PInviteBtn.textContent = prev; }, 1800);
+        }
+      }).catch(() => {
+        document.execCommand("copy");
+        alert("Enlace P2P copiado al portapapeles.");
+      });
+    }
+  }
+
+  // ==========================
+  // Modal Unirse a Proyecto P2P
+  // ==========================
+
+  openJoinP2PModal() {
+    if (this.joinP2PModal) {
+      this.joinP2PModal.classList.add("open");
+      if (this.inputJoinP2PToken) {
+        this.inputJoinP2PToken.value = "";
+        this.inputJoinP2PToken.focus();
+      }
+    }
+  }
+
+  closeJoinP2PModal() {
+    if (this.joinP2PModal) this.joinP2PModal.classList.remove("open");
+  }
+
+  async submitJoinP2P() {
+    const raw = this.inputJoinP2PToken ? this.inputJoinP2PToken.value.trim() : "";
+    if (!raw) {
+      alert("Por favor ingresa un token o enlace de invitación P2P.");
+      return;
+    }
+
+    try {
+      const res = await window.pywebview.api.join_p2p_project(raw);
+      if (res.success) {
+        this.closeJoinP2PModal();
+        await this.loadProjectsHub();
+        await this.openProjectWorkspace(res.project);
+        alert(res.message || "¡Conectado al proyecto P2P con éxito!");
+      } else {
+        alert("Error al conectar con proyecto P2P: " + res.error);
+      }
+    } catch (err) {
+      alert("Error de comunicación: " + err);
+    }
+  }
+
+  // ==========================
+  // Modal Eliminar Proyecto
+  // ==========================
+
+  confirmDeleteProject(project) {
+    this.projectToDelete = project;
+    if (this.deleteProjectNameEl) {
+      this.deleteProjectNameEl.textContent = `${project.name} (${project.project_uuid})`;
+    }
+    if (this.deleteProjectModal) {
+      this.deleteProjectModal.classList.add("open");
+    }
+  }
+
+  closeDeleteProjectModal() {
+    this.projectToDelete = null;
+    if (this.deleteProjectModal) {
+      this.deleteProjectModal.classList.remove("open");
+    }
+  }
+
+  async submitDeleteProject() {
+    if (!this.projectToDelete || !window.pywebview || !window.pywebview.api) return;
+    try {
+      const res = await window.pywebview.api.delete_project(this.projectToDelete.project_uuid);
+      if (res.success) {
+        this.closeDeleteProjectModal();
+        await this.loadProjectsHub();
+      } else {
+        alert("Error al eliminar proyecto: " + (res.error || "Operación fallida"));
+      }
+    } catch (err) {
+      alert("Error de comunicación: " + err);
+    }
+  }
+
+  // ==========================
+  // Modales Creación
   // ==========================
 
   openNewProjectModal() {

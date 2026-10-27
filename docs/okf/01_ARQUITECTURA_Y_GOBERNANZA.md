@@ -82,6 +82,14 @@ flowchart TD
 * **Decisión**: Aislamiento estricto de doble repositorio (`app/` y `governance/`). La memoria y contexto de los agentes se sincronizan en una rama huérfana aislada `orphan-conversa-memory-{project_uuid}` sin ensuciar la rama `main` o `develop`.
 * **Consecuencias**: Cada agente puede leer y actualizar el contexto activo sin provocar conflictos de merge en el código fuente.
 
+### ADR-008: Estandarización de Carpetas Doble Repo, Enlace de Invitación P2P y Código QR
+* **Contexto**: Para que dos desarrolladores en plataformas distintas (ej. Linux y Windows) colaboren en el mismo proyecto sin fricción, las carpetas deben mantener nombres predecibles y sincronizables (`app_{nombre}` y `okf_{nombre}_{id}`), y debe ser trivial vincularse al proyecto sin configuraciones manuales complejas.
+* **Decisión**:
+  1. Cada proyecto genera automáticamente: `app_{nombre}` con `git init` y `okf_{nombre}_{id}` con `git init` y rama huérfana.
+  2. Se implementa un generador de enlaces de invitación P2P (`mcp2p://join?token=...`) y renderizado directo de código QR SVG en el modal de configuración.
+  3. El colaborador receptor se une con 1 clic ("Unirse vía P2P"), desplegando el mismo identificador UUID y estructura de repositorio en su equipo local.
+* **Consecuencias**: Interoperabilidad multiplataforma inmediata, emparejamiento determinista de proyectos y cero discrepancias de rutas.
+
 ---
 
 ## 4. Historias de Usuario Principales
@@ -92,3 +100,5 @@ flowchart TD
 * **US-04 (Coordinación Agéntica vía MCP)**: Como agente de IA conectado vía Model Context Protocol, quiero consultar y reclamar tareas del backlog de un proyecto de forma atómica para evitar duplicar esfuerzos con otros agentes o humanos.
 * **US-05 (Debate Dialéctico Acotado A2A)**: Como agente colaborador, quiero debatir una propuesta técnica con el agente de mi compañero en un máximo de 3 turnos para alcanzar consenso rápido o escalar a arbitraje sin consumir tokens en bucles infinitos.
 * **US-06 (Persistencia de Contexto en Rama Huérfana)**: Como agente de desarrollo, quiero registrar y recuperar el estado de la sesión en la rama huérfana de gobernanza sin alterar el historial de commits del código fuente.
+* **US-07 (Emparejamiento y Compartición P2P mediante QR / Enlace)**: Como colaborador, quiero compartir mi proyecto mediante un enlace `mcp2p://` o código QR para que mi compañero se conecte y clone ambos repositorios de inmediato con permisos asignados.
+* **US-08 (Mover Tarjetas Manualmente con Drag and Drop)**: Como usuario humano, quiero arrastrar tarjetas entre columnas en el tablero Kanban a mano, activando leases y transiciones de estado de forma visual e intuitiva.

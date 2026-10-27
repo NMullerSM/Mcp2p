@@ -86,3 +86,28 @@ def test_claim_card_lease_collision_prevented(temp_db):
     with pytest.raises(PermissionError) as exc_info:
         temp_db.claim_card_lease(proj_uuid, "CARD-003", "node_beta", duration_minutes=30)
     assert "bloqueada por el nodo node_alpha" in str(exc_info.value)
+
+
+def test_project_folder_naming_and_cascade_delete(temp_db):
+    """Verifica que las carpetas sigan la convención app_{name} y okf_{name}_{uuid} con .git y eliminación en cascada."""
+    proj = temp_db.create_project(name="Modulo Pagos", init_git=True)
+    p_uuid = proj["project_uuid"]
+
+    app_path = Path(proj["code_repo_path"])
+    gov_path = Path(proj["gov_repo_path"])
+
+    assert "app_modulo_pagos" in app_path.name
+    assert "okf_modulo_pagos" in gov_path.name
+    assert (app_path / ".git").is_dir()
+    assert (gov_path / ".git").is_dir()
+    assert (gov_path / "docs" / "okf" / "01_ARQUITECTURA_Y_GOBERNANZA.md").is_file()
+
+    # Crear una tarjeta en el proyecto
+    temp_db.create_card(p_uuid, "CARD-DEL", "Tarea Temporal")
+    assert len(temp_db.get_cards(p_uuid)) == 1
+
+    # Eliminar proyecto
+    assert temp_db.delete_project(p_uuid) is True
+    assert temp_db.get_project_by_uuid(p_uuid) is None
+    # Las tarjetas deben haberse eliminado en cascada
+    assert len(temp_db.get_cards(p_uuid)) == 0

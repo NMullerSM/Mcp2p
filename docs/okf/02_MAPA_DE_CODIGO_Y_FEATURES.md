@@ -50,6 +50,8 @@ graph TD
 | **Sistema Visual y Temas** | [`src/ui/css/themes.css`](src/ui/css/themes.css), [`app.js`](src/ui/js/app.js) | Paleta dual Claro/Oscuro, tokens CSS, contraste WCAG AAA, atajo `Ctrl+D`. | 📄 [Ver Documentación Frontend: `theme_system.md`](docs/okf/frontend/theme_system.md) |
 | **Guía de Usuario Integrada** | [`src/ui/js/guide.js`](src/ui/js/guide.js), [`index.html`](src/ui/index.html) | Panel lateral deslizante (Heurística 10 de Nielsen), atajo `F1`, tabla de atajos. | 📄 [Ver Documentación Frontend: `user_guide_drawer.md`](docs/okf/frontend/user_guide_drawer.md) |
 | **Tablero Kanban & Leases** | [`src/ui/js/kanban.js`](src/ui/js/kanban.js) | Renderizado en 4 columnas, insignias de lease activo, asignaciones y contadores dinámicos. | 📄 [Ver Documentación Frontend: `user_guide_drawer.md`](docs/okf/frontend/user_guide_drawer.md) |
+| **Arrastre Manual Kanban (Drag & Drop)** | [`src/ui/js/kanban.js`](src/ui/js/kanban.js), [`styles.css`](src/ui/css/styles.css) | Mover tarjetas entre columnas a mano con HTML5 Drag and Drop, disparando leases y cambios de estado. | 📄 [Ver Documentación Frontend: `theme_system.md`](docs/okf/frontend/theme_system.md) |
+| **Enlace P2P & Generador QR** | [`src/ui/js/qr.js`](src/ui/js/qr.js), [`app.js`](src/ui/js/app.js) | Generación de enlaces de invitación `mcp2p://join?...`, código QR SVG interactivo y unión de proyectos. | 📄 [Ver Documentación Backend: `a2a_bus.md`](docs/okf/backend/a2a_bus.md) |
 
 ---
 

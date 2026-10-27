@@ -209,28 +209,34 @@ class DatabaseManager:
         base_path: Optional[str] = None,
         code_repo_url: str = "",
         gov_repo_url: str = "",
-        init_git: bool = True
+        init_git: bool = True,
+        project_uuid: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Crea un nuevo proyecto en el subsistema.
-        Genera UUIDv4 único y estructura de doble repositorio (app y governance).
+        Genera UUIDv4 único y estructura de doble repositorio (app_{name} y okf_{name}_{uuid}).
         """
-        project_uuid = f"proj_{uuid.uuid4().hex[:12]}"
+        p_uuid = project_uuid or f"proj_{uuid.uuid4().hex[:12]}"
         now_str = datetime.now(timezone.utc).isoformat()
 
         clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name.lower())
+        short_id = p_uuid.replace("proj_", "")[:8]
         if not base_path:
-            base_dir = self.db_path.parent / "workspace" / f"{clean_name}_{project_uuid}"
+            base_dir = self.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
         else:
             base_dir = Path(base_path).resolve()
 
-        app_dir = base_dir / "app"
-        gov_dir = base_dir / "governance"
+        app_dir = base_dir / f"app_{clean_name}"
+        gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
 
         # Crear carpetas del doble repositorio
         app_dir.mkdir(parents=True, exist_ok=True)
-        (gov_dir / "docs" / "okf" / "adr").mkdir(parents=True, exist_ok=True)
-        (gov_dir / "docs" / "okf" / "skills").mkdir(parents=True, exist_ok=True)
+        gov_dir.mkdir(parents=True, exist_ok=True)
+
+        # Inicializar OKF estándar en el repositorio de gobernanza
+        from src.storage.okf_adapter import OKFAdapter
+        okf_adapter = OKFAdapter()
+        okf_adapter.initialize_project_okf(gov_dir, name, p_uuid)
 
         if init_git:
             # Inicializar repo de código si no existe .git
@@ -239,13 +245,13 @@ class DatabaseManager:
             # Inicializar repo de gobernanza con rama huérfana
             if not (gov_dir / ".git").exists():
                 subprocess.run(["git", "init", "-b", "main"], cwd=str(gov_dir), capture_output=True)
-                orphan_branch = f"orphan-conversa-memory-{project_uuid}"
+                orphan_branch = f"orphan-conversa-memory-{p_uuid}"
                 subprocess.run(["git", "checkout", "--orphan", orphan_branch], cwd=str(gov_dir), capture_output=True)
                 # Crear archivo marcador de nodo
                 marker = gov_dir / ".okf_project.json"
-                marker.write_text(f'{{"project_uuid": "{project_uuid}", "name": "{name}"}}\n', encoding="utf-8")
+                marker.write_text(f'{{"project_uuid": "{p_uuid}", "name": "{name}"}}\n', encoding="utf-8")
                 subprocess.run(["git", "add", "."], cwd=str(gov_dir), capture_output=True)
-                subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance orphan branch for {project_uuid}"], cwd=str(gov_dir), capture_output=True)
+                subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance orphan branch for {p_uuid}"], cwd=str(gov_dir), capture_output=True)
 
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -255,7 +261,7 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
-                        project_uuid,
+                        p_uuid,
                         name,
                         str(base_dir),
                         str(app_dir),
@@ -267,7 +273,18 @@ class DatabaseManager:
                     )
                 )
 
-        return self.get_project_by_uuid(project_uuid) or {}
+        return self.get_project_by_uuid(p_uuid)
+
+    def delete_project(self, project_uuid: str) -> bool:
+        """
+        Elimina un proyecto del subsistema.
+        Por restricción CASCADE de SQLite, se eliminan kanban_cards,
+        a2a_messages, dispute_tickets y outbox_events asociados.
+        """
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute("DELETE FROM projects WHERE project_uuid = ?;", (project_uuid,))
+                return cur.rowcount > 0 or {}
 
     def list_projects(self) -> List[Dict[str, Any]]:
         """Lista todos los proyectos registrados."""

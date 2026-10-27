@@ -87,3 +87,29 @@ def test_api_bridge_a2a_and_memory(bridge):
     read_res = bridge.read_memory_snapshot()
     assert read_res["success"] is True
     assert read_res["snapshot"]["summary"] == "Sesión iniciada con éxito"
+
+
+def test_api_bridge_p2p_invite_and_join_flow(bridge):
+    """Verifica la generación de enlace P2P y la conexión automática con replicación de UUID."""
+    # 1. Crear proyecto inicial
+    p_orig = bridge.create_project(name="Proyecto Distribuidor")
+    assert p_orig["success"] is True
+    orig_uuid = p_orig["project"]["project_uuid"]
+
+    # 2. Generar invitación P2P
+    invite_res = bridge.generate_p2p_invite(orig_uuid)
+    assert invite_res["success"] is True
+    assert "mcp2p://join?token=" in invite_res["invite_url"]
+    assert invite_res["token"]
+
+    # 3. Unirse al proyecto desde otra "instancia" o contexto
+    join_res = bridge.join_p2p_project(invite_res["invite_url"])
+    assert join_res["success"] is True
+    assert join_res["project"]["project_uuid"] == orig_uuid
+
+    # 4. Eliminar proyecto
+    del_res = bridge.delete_project(orig_uuid)
+    assert del_res["success"] is True
+    # Confirmar que ya no existe
+    proj_check = bridge.db.get_project_by_uuid(orig_uuid)
+    assert proj_check is None
