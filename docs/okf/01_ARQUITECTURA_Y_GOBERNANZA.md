@@ -70,6 +70,18 @@ flowchart TD
 * **Decisión**: Implementación de un servidor MCP nativo (`mcp` SDK 2.x) ejecutándose sobre `stdio` exponiendo 7 herramientas deterministas conectadas a la base de datos SQLite WAL.
 * **Consecuencias**: Cualquier IDE o agente conectado vía `mcp.json` puede listar proyectos, manipular tarjetas, solicitar leases atómicos y registrar su SLA de revisión de forma determinista y estandarizada.
 
+### ADR-006: Canal A2A Híbrido: MessagePack para Señales y RFC de 3 Turnos para Dialéctica
+* **Contexto**: Intercambiar mensajes en lenguaje natural para simples señales mecánicas (latidos, leases, cambios de estado) genera un desperdicio masivo de tokens. Por otro lado, negociar cambios arquitectónicos sin una estructura dialéctica genera bucles infinitos de conversación entre agentes.
+* **Decisión**: Se implementa un bus A2A híbrido que separa:
+  1. **Señales Informativas**: Codificadas en binario MessagePack a 0 tokens con latencia <1ms.
+  2. **Coordinación Dialéctica**: Protocolo estricto de máximo 3 turnos (`PROPOSAL` -> `COUNTER_PROPOSAL` -> `RESOLUTION`), requiriendo análisis de impacto y señal de veredicto. Si no hay acuerdo al 3er turno, se escala al jurado.
+* **Consecuencias**: Cero gasto de tokens en operaciones mecánicas y garantía de convergencia en las negociaciones sin loops infinitos.
+
+### ADR-007: Gobernanza Desacoplada OKF y Memoria en Rama Huérfana Git
+* **Contexto**: Mezclar la documentación viva de arquitectura y los logs de memoria conversacional en el repositorio de código principal contamina el historial de Git y los contextos de los agentes de software.
+* **Decisión**: Aislamiento estricto de doble repositorio (`app/` y `governance/`). La memoria y contexto de los agentes se sincronizan en una rama huérfana aislada `orphan-conversa-memory-{project_uuid}` sin ensuciar la rama `main` o `develop`.
+* **Consecuencias**: Cada agente puede leer y actualizar el contexto activo sin provocar conflictos de merge en el código fuente.
+
 ---
 
 ## 4. Historias de Usuario Principales
@@ -78,3 +90,5 @@ flowchart TD
 * **US-02 (Guía de Usuario Integrada F1)**: Como nuevo desarrollador, quiero presionar `F1` y consultar la guía contextual sobre leases y atajos sin salir del tablero.
 * **US-03 (Protección por SLA del Revisor)**: Como colaborador con disponibilidad limitada, quiero definir mi propio SLA de 3 días para que mi compañero pueda avanzar en ramas paralelas sin romper mi ritmo.
 * **US-04 (Coordinación Agéntica vía MCP)**: Como agente de IA conectado vía Model Context Protocol, quiero consultar y reclamar tareas del backlog de un proyecto de forma atómica para evitar duplicar esfuerzos con otros agentes o humanos.
+* **US-05 (Debate Dialéctico Acotado A2A)**: Como agente colaborador, quiero debatir una propuesta técnica con el agente de mi compañero en un máximo de 3 turnos para alcanzar consenso rápido o escalar a arbitraje sin consumir tokens en bucles infinitos.
+* **US-06 (Persistencia de Contexto en Rama Huérfana)**: Como agente de desarrollo, quiero registrar y recuperar el estado de la sesión en la rama huérfana de gobernanza sin alterar el historial de commits del código fuente.

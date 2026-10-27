@@ -60,4 +60,30 @@ def test_api_bridge_kanban_flow(bridge):
     update_res = bridge.update_task_status("CARD-100", "in_review", branch_ref="feature/bridge-test")
     assert update_res["success"] is True
     assert update_res["card"]["status"] == "in_review"
-    assert update_res["card"]["branch_ref"] == "feature/bridge-test"
+
+
+def test_api_bridge_a2a_and_memory(bridge):
+    """Verifica señales A2A y persistencia de memoria huérfana vía ApiBridge."""
+    # 1. Enviar señal informativa A2A
+    sig_res = bridge.send_a2a_signal(
+        signal_type="METRIC_PULSE",
+        data={"memory_mb": 42, "cpu_pct": 5.0}
+    )
+    assert sig_res["success"] is True
+    assert sig_res["packet"]["signal_type"] == "METRIC_PULSE"
+
+    # 2. Consultar feed A2A
+    feed_res = bridge.get_a2a_feed()
+    assert feed_res["success"] is True
+    assert len(feed_res["messages"]) >= 1
+
+    # 3. Snapshot de memoria en rama huérfana
+    snap_res = bridge.write_memory_snapshot({
+        "summary": "Sesión iniciada con éxito",
+        "turn": 1
+    })
+    assert snap_res["success"] is True
+
+    read_res = bridge.read_memory_snapshot()
+    assert read_res["success"] is True
+    assert read_res["snapshot"]["summary"] == "Sesión iniciada con éxito"

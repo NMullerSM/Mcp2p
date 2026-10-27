@@ -12,7 +12,17 @@
 ```mermaid
 graph TD
     AppMain["src/app/main.py<br/>(Punto de Entrada PyWebView)"] --> Bridge["src/app/api_bridge.py<br/>(Puente JS API)"]
+    MCPServer["src/mcp/server.py<br/>(Servidor Local MCP)"] --> MCPTools["src/mcp/tools.py<br/>(Herramientas MCP)"]
+    
     Bridge --> DB["src/storage/db.py<br/>(Motor SQLite WAL)"]
+    Bridge --> Bus["src/a2a/bus.py<br/>(Bus A2A Híbrido)"]
+    Bridge --> OKF["src/storage/okf_adapter.py<br/>(Adaptador OKF)"]
+    
+    MCPTools --> DB
+    MCPTools --> Bus
+    MCPTools --> OKF
+    
+    Bus --> DB
     
     AppMain --> UI_HTML["src/ui/index.html<br/>(Vista Principal)"]
     UI_HTML --> UI_App["src/ui/js/app.js<br/>(Controlador UI & Atajos)"]
@@ -32,9 +42,11 @@ graph TD
 | Feature | Archivos Clave | Responsabilidad | Ficha Técnica Detallada |
 | :--- | :--- | :--- | :--- |
 | **Persistencia SQLite WAL** | [`src/storage/db.py`](src/storage/db.py) | Inicialización DDL, modo WAL, transacciones ACID, leases de tareas y registro de nodos. | 📄 [Ver Documentación Backend: `storage_sqlite.md`](docs/okf/backend/storage_sqlite.md) |
+| **Bus A2A Híbrido (Fase 3)** | [`src/a2a/bus.py`](src/a2a/bus.py) | Canal binario MessagePack (0 tokens) para señales y RFC dialéctico de 3 turnos para consenso. | 📄 [Ver Documentación Backend: `a2a_bus.md`](docs/okf/backend/a2a_bus.md) |
+| **Adaptador OKF & Memoria (Fase 3)** | [`src/storage/okf_adapter.py`](src/storage/okf_adapter.py) | Validación de gobernanza viva, registro de ADRs y sincronización en rama huérfana Git. | 📄 [Ver Documentación Backend: `okf_adapter.md`](docs/okf/backend/okf_adapter.md) |
 | **Puente JS API (PyWebView)** | [`src/app/api_bridge.py`](src/app/api_bridge.py) | Métodos asíncronos expuestos a JavaScript, control de excepciones y nodo local por defecto. | 📄 [Ver Documentación Backend: `api_bridge.md`](docs/okf/backend/api_bridge.md) |
 | **Punto de Entrada de Escritorio** | [`src/app/main.py`](src/app/main.py) | Configuración de ventana de 1280x840, soporte `--headless`, argumentos CLI y cierre limpio. | 📄 [Ver Documentación Backend: `api_bridge.md`](docs/okf/backend/api_bridge.md) |
-| **Servidor Local MCP (Fase 2)** | [`src/mcp/server.py`](src/mcp/server.py), [`src/mcp/tools.py`](src/mcp/tools.py) | Servidor MCP 2.x sobre stdio con 7 herramientas para proyectos, Kanban y leases agénticos. | 📄 [Ver Documentación Backend: `mcp_server.md`](docs/okf/backend/mcp_server.md) |
+| **Servidor Local MCP (Fase 2)** | [`src/mcp/server.py`](src/mcp/server.py), [`src/mcp/tools.py`](src/mcp/tools.py) | Servidor MCP 2.x sobre stdio con 10 herramientas para proyectos, Kanban, A2A y gobernanza. | 📄 [Ver Documentación Backend: `mcp_server.md`](docs/okf/backend/mcp_server.md) |
 | **Sistema Visual y Temas** | [`src/ui/css/themes.css`](src/ui/css/themes.css), [`app.js`](src/ui/js/app.js) | Paleta dual Claro/Oscuro, tokens CSS, contraste WCAG AAA, atajo `Ctrl+D`. | 📄 [Ver Documentación Frontend: `theme_system.md`](docs/okf/frontend/theme_system.md) |
 | **Guía de Usuario Integrada** | [`src/ui/js/guide.js`](src/ui/js/guide.js), [`index.html`](src/ui/index.html) | Panel lateral deslizante (Heurística 10 de Nielsen), atajo `F1`, tabla de atajos. | 📄 [Ver Documentación Frontend: `user_guide_drawer.md`](docs/okf/frontend/user_guide_drawer.md) |
 | **Tablero Kanban & Leases** | [`src/ui/js/kanban.js`](src/ui/js/kanban.js) | Renderizado en 4 columnas, insignias de lease activo, asignaciones y contadores dinámicos. | 📄 [Ver Documentación Frontend: `user_guide_drawer.md`](docs/okf/frontend/user_guide_drawer.md) |

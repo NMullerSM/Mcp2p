@@ -471,8 +471,57 @@ class DatabaseManager:
                 FROM a2a_messages m
                 LEFT JOIN swarm_nodes n ON m.sender_node_uuid = n.node_uuid
                 WHERE m.project_uuid = ?
-                ORDER BY m.created_at DESC LIMIT ?;
+                ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?;
                 """,
                 (project_uuid, limit)
             )
             return [dict(row) for row in cur.fetchall()]
+
+    # ==========================
+    # Cola Outbox Append-Only
+    # ==========================
+
+    def enqueue_outbox_event(
+        self,
+        project_uuid: str,
+        node_uuid: str,
+        event_type: str,
+        payload_raw: str,
+        event_uuid: Optional[str] = None
+    ) -> str:
+        """Encola un evento transaccional en el outbox para sincronización P2P."""
+        uid = event_uuid or str(uuid.uuid4())
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO outbox_events (event_uuid, project_uuid, node_uuid, event_type, payload_raw, sync_status)
+                    VALUES (?, ?, ?, ?, ?, 'pending');
+                    """,
+                    (uid, project_uuid, node_uuid, event_type, payload_raw)
+                )
+        return uid
+
+    def get_pending_outbox_events(self, project_uuid: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Recupera los eventos pendientes de sincronización de un proyecto."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT * FROM outbox_events
+                WHERE project_uuid = ? AND sync_status = 'pending'
+                ORDER BY created_at ASC LIMIT ?;
+                """,
+                (project_uuid, limit)
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def mark_outbox_event_status(self, event_uuid: str, sync_status: str) -> None:
+        """Actualiza el estado de sincronización de un evento outbox ('pending', 'flushed_to_branch', 'acked')."""
+        if sync_status not in ('pending', 'flushed_to_branch', 'acked'):
+            raise ValueError(f"Estado de sincronización outbox no válido: {sync_status}")
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE outbox_events SET sync_status = ? WHERE event_uuid = ?;",
+                    (sync_status, event_uuid)
+                )

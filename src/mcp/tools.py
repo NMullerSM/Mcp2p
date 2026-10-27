@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
+from src.a2a.bus import A2ABus, A2AIntent
+from src.storage.okf_adapter import OKFAdapter
 
 
 class MCPToolsHandler:
@@ -16,6 +18,8 @@ class MCPToolsHandler:
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
         self.db = db_manager or DatabaseManager.get_instance()
+        self.bus = A2ABus(db=self.db)
+        self.okf = OKFAdapter()
 
     def list_projects(self) -> str:
         """Lista todos los proyectos registrados con su UUID y rutas de doble repositorio."""
@@ -179,6 +183,111 @@ class MCPToolsHandler:
                 "success": True,
                 "message": f"Nodo {node_uuid} registrado con éxito en el enjambre P2P",
                 "node": node
+            }, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    # ==========================================
+    # Herramientas de Coordinación A2A y OKF
+    # ==========================================
+
+    def send_coordination_rfc(
+        self,
+        project_uuid: str,
+        sender_node_uuid: str,
+        stage: str,
+        session_id: str,
+        payload_json: str,
+        card_id: Optional[str] = None
+    ) -> str:
+        """
+        Envía un turno dentro del protocolo RFC Dialéctico de 3 turnos (PROPOSAL, COUNTER_PROPOSAL, RESOLUTION).
+        """
+        try:
+            data = json.loads(payload_json)
+            stage_upper = stage.upper()
+
+            if stage_upper == "PROPOSAL":
+                res = self.bus.send_proposal(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    session_id=session_id,
+                    component=data.get("component", "system"),
+                    intent=data.get("intent", ""),
+                    rationale=data.get("rationale", ""),
+                    diff_ref=data.get("diff_ref", ""),
+                    impact=data.get("impact", ""),
+                    card_id=card_id
+                )
+            elif stage_upper == "COUNTER_PROPOSAL":
+                res = self.bus.send_counter_proposal(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    session_id=session_id,
+                    critique=data.get("critique", ""),
+                    alternative=data.get("alternative", {}),
+                    verdict_signal=data.get("verdict_signal", "COMPROMISE"),
+                    card_id=card_id
+                )
+            elif stage_upper == "RESOLUTION":
+                res = self.bus.send_resolution(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    session_id=session_id,
+                    final_decision=data.get("final_decision", "AGREED"),
+                    synthesis_notes=data.get("synthesis_notes", ""),
+                    agreed_branch=data.get("agreed_branch"),
+                    card_id=card_id
+                )
+            else:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Etapa RFC inválida: {stage}. Use PROPOSAL, COUNTER_PROPOSAL o RESOLUTION."
+                }, indent=2)
+
+            return json.dumps({"success": True, "event": res}, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    def get_coordination_session(self, project_uuid: str, session_id: str) -> str:
+        """
+        Consulta la secuencia completa de turnos intercambiados en una sesión dialéctica.
+        """
+        try:
+            turns = self.bus.get_session_turns(project_uuid=project_uuid, session_id=session_id)
+            return json.dumps({
+                "success": True,
+                "project_uuid": project_uuid,
+                "session_id": session_id,
+                "turns_count": len(turns),
+                "turns": turns
+            }, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    def inspect_okf_governance(self, project_uuid: str) -> str:
+        """
+        Inspecciona y valida la integridad de la gobernanza OKF para el repositorio de un proyecto.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return json.dumps({"success": False, "error": f"Proyecto {project_uuid} no encontrado"}, indent=2)
+
+            gov_path = proj.get("gov_repo_path")
+            if not gov_path:
+                return json.dumps({"success": False, "error": "Ruta de gobernanza no configurada"}, indent=2)
+
+            report = self.okf.validate_okf_integrity(gov_path)
+            orphan_mem = self.okf.read_orphan_memory_snapshot(gov_path, project_uuid)
+
+            return json.dumps({
+                "success": True,
+                "project_uuid": project_uuid,
+                "gov_repo_path": gov_path,
+                "validation": report,
+                "orphan_memory_active": orphan_mem is not None,
+                "orphan_memory_snapshot": orphan_mem
             }, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)

@@ -11,6 +11,8 @@ import platform
 import sys
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
+from src.a2a.bus import A2ABus, A2AIntent
+from src.storage.okf_adapter import OKFAdapter
 
 
 class ApiBridge:
@@ -18,6 +20,8 @@ class ApiBridge:
 
     def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
         self.db = db_manager or DatabaseManager.get_instance()
+        self.bus = A2ABus(db=self.db)
+        self.okf = OKFAdapter()
         self._ensure_local_node()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
@@ -161,6 +165,84 @@ class ApiBridge:
                 self._ensure_active_project()
             messages = self.db.get_recent_a2a_messages(project_uuid=self.active_project_uuid, limit=limit)
             return {"success": True, "messages": messages}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def send_a2a_signal(self, signal_type: str, data: Dict[str, Any], card_id: Optional[str] = None) -> Dict[str, Any]:
+        """Envía una señal operativa a 0 tokens por el canal A2A."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            packet = self.bus.send_informative(
+                project_uuid=self.active_project_uuid,
+                sender_node_uuid=local_node,
+                signal_type=signal_type,
+                data=data,
+                card_id=card_id
+            )
+            return {"success": True, "packet": packet}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_a2a_session_turns(self, session_id: str) -> Dict[str, Any]:
+        """Consulta los turnos del RFC dialéctico de una sesión."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            turns = self.bus.get_session_turns(project_uuid=self.active_project_uuid, session_id=session_id)
+            return {"success": True, "turns": turns}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def validate_project_okf(self) -> Dict[str, Any]:
+        """Valida la integridad de la documentación OKF del proyecto activo."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            proj = self.db.get_project_by_uuid(self.active_project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto activo no encontrado"}
+            gov_path = proj.get("gov_repo_path")
+            if not gov_path:
+                return {"success": False, "error": "Ruta de gobernanza no configurada"}
+            report = self.okf.validate_okf_integrity(gov_path)
+            return {"success": True, "report": report}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def write_memory_snapshot(self, snapshot_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Escribe un snapshot en la rama huérfana de memoria del proyecto activo."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            proj = self.db.get_project_by_uuid(self.active_project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto activo no encontrado"}
+            gov_path = proj.get("gov_repo_path")
+            res = self.okf.write_orphan_memory_snapshot(
+                gov_base_path=gov_path,
+                project_uuid=self.active_project_uuid,
+                snapshot_data=snapshot_data
+            )
+            return {"success": True, "result": res}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def read_memory_snapshot(self) -> Dict[str, Any]:
+        """Lee el último snapshot de la rama huérfana del proyecto activo."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            proj = self.db.get_project_by_uuid(self.active_project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto activo no encontrado"}
+            gov_path = proj.get("gov_repo_path")
+            mem = self.okf.read_orphan_memory_snapshot(
+                gov_base_path=gov_path,
+                project_uuid=self.active_project_uuid
+            )
+            return {"success": True, "snapshot": mem}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

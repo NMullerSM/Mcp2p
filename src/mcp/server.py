@@ -123,6 +123,44 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
             reviewer_sla_hours=reviewer_sla_hours
         )
 
+    # 8. Herramienta: Enviar Turno RFC Dialéctico A2A
+    @server.tool()
+    def send_coordination_rfc(
+        project_uuid: str,
+        sender_node_uuid: str,
+        stage: str,
+        session_id: str,
+        payload_json: str,
+        card_id: Optional[str] = None
+    ) -> str:
+        """
+        Envía un turno dialéctico de coordinación entre agentes (PROPOSAL, COUNTER_PROPOSAL, RESOLUTION).
+        """
+        return handler.send_coordination_rfc(
+            project_uuid=project_uuid,
+            sender_node_uuid=sender_node_uuid,
+            stage=stage,
+            session_id=session_id,
+            payload_json=payload_json,
+            card_id=card_id
+        )
+
+    # 9. Herramienta: Consultar Sesión de Coordinación A2A
+    @server.tool()
+    def get_coordination_session(project_uuid: str, session_id: str) -> str:
+        """
+        Consulta la secuencia de turnos dialécticos intercambiados en una sesión de coordinación.
+        """
+        return handler.get_coordination_session(project_uuid=project_uuid, session_id=session_id)
+
+    # 10. Herramienta: Inspeccionar Gobernanza OKF
+    @server.tool()
+    def inspect_okf_governance(project_uuid: str) -> str:
+        """
+        Inspecciona y valida la integridad de la gobernanza OKF y el estado de la memoria huérfana del proyecto.
+        """
+        return handler.inspect_okf_governance(project_uuid=project_uuid)
+
     return server
 
 

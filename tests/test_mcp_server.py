@@ -139,3 +139,43 @@ def test_mcp_server_initialization():
     assert "create_kanban_task" in tool_names
     assert "get_project_context" in tool_names
     assert "register_agent_node" in tool_names
+    assert "send_coordination_rfc" in tool_names
+    assert "get_coordination_session" in tool_names
+    assert "inspect_okf_governance" in tool_names
+
+
+def test_mcp_coordination_and_okf_tools(mcp_handler):
+    """Verifica las herramientas MCP de coordinación dialéctica e inspección OKF."""
+    handler, db = mcp_handler
+    projects = db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    # 1. Enviar turno 1: PROPOSAL
+    proposal_data = {
+        "component": "cache",
+        "intent": "Implementar LRU en memoria",
+        "rationale": "Reducir I/O",
+        "diff_ref": "diff-cache-1",
+        "impact": "Bajo"
+    }
+    raw_p1 = handler.send_coordination_rfc(
+        project_uuid=proj_uuid,
+        sender_node_uuid="node_alpha",
+        stage="PROPOSAL",
+        session_id="session-rfc-1",
+        payload_json=json.dumps(proposal_data)
+    )
+    res_p1 = json.loads(raw_p1)
+    assert res_p1["success"] is True
+
+    # 2. Consultar turnos de la sesión
+    raw_sess = handler.get_coordination_session(proj_uuid, "session-rfc-1")
+    res_sess = json.loads(raw_sess)
+    assert res_sess["success"] is True
+    assert res_sess["turns_count"] == 1
+
+    # 3. Inspeccionar gobernanza OKF
+    raw_gov = handler.inspect_okf_governance(proj_uuid)
+    res_gov = json.loads(raw_gov)
+    assert res_gov["success"] is True
+    assert "validation" in res_gov
