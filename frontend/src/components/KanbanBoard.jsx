@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
-import { Lock, User, GitBranch } from 'lucide-react';
+import { Lock, User, GitBranch, CheckSquare, ExternalLink } from 'lucide-react';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Por Hacer', dotColor: '#94a3b8' },
   { id: 'in_progress', title: 'En Proceso', dotColor: '#6366f1' },
   { id: 'in_review', title: 'En Revisión', dotColor: '#f59e0b' },
-  { id: 'consolidated', title: 'Consolidado', dotColor: '#10b981' }
+  { id: 'merged', title: 'Fusionado / Consolidado', dotColor: '#10b981' }
 ];
 
-export function KanbanBoard({ cards, onCardMove }) {
+export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
   const [draggedCardId, setDraggedCardId] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
 
@@ -52,11 +52,20 @@ export function KanbanBoard({ cards, onCardMove }) {
       display: 'flex',
       gap: '16px',
       height: '100%',
+      width: '100%',
       overflowX: 'auto',
-      padding: '4px'
+      padding: '4px 0',
+      scrollBehavior: 'smooth'
     }}>
       {COLUMNS.map((col) => {
-        const colCards = cards.filter(c => (c.status || 'backlog') === col.id);
+        const colCards = cards.filter(c => {
+          const st = c.status || 'backlog';
+          if (col.id === 'merged') {
+            return st === 'merged' || st === 'consolidated';
+          }
+          return st === col.id;
+        });
+
         const isDragOver = dragOverCol === col.id;
 
         return (
@@ -66,9 +75,9 @@ export function KanbanBoard({ cards, onCardMove }) {
             onDragLeave={(e) => handleDragLeave(e, col.id)}
             onDrop={(e) => handleDrop(e, col.id)}
             style={{
-              flex: '1 1 300px',
-              minWidth: '280px',
-              maxWidth: '360px',
+              flex: '1 1 270px',
+              minWidth: '250px',
+              maxWidth: '380px',
               backgroundColor: isDragOver ? 'var(--bg-subtle)' : 'var(--bg-card)',
               border: isDragOver ? '2px dashed var(--accent-primary)' : '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-lg)',
@@ -115,7 +124,8 @@ export function KanbanBoard({ cards, onCardMove }) {
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              gap: '10px'
+              gap: '10px',
+              paddingRight: '2px'
             }}>
               {colCards.map((card) => {
                 const isDragging = draggedCardId === card.card_id;
@@ -127,6 +137,8 @@ export function KanbanBoard({ cards, onCardMove }) {
                     draggable
                     onDragStart={(e) => handleDragStart(e, card.card_id)}
                     onDragEnd={handleDragEnd}
+                    onClick={() => onSelectCard && onSelectCard(card)}
+                    title="Click para ver detalles, modificar o aceptar tarea"
                     style={{
                       backgroundColor: 'var(--bg-surface)',
                       border: '1px solid var(--border-subtle)',
@@ -135,12 +147,14 @@ export function KanbanBoard({ cards, onCardMove }) {
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
-                      cursor: 'grab',
+                      cursor: 'pointer',
                       opacity: isDragging ? 0.35 : 1,
                       transform: isDragging ? 'scale(0.98)' : 'scale(1)',
                       boxShadow: 'var(--shadow-sm)',
-                      transition: 'transform 0.15s, opacity 0.15s'
+                      transition: 'transform 0.15s, opacity 0.15s, border-color 0.15s'
                     }}
+                    onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
                   >
                     {/* Card Top */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -152,21 +166,40 @@ export function KanbanBoard({ cards, onCardMove }) {
                       }}>
                         {card.card_id}
                       </span>
-                      {hasLease && (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          fontSize: '10px',
-                          fontFamily: 'var(--font-mono)',
-                          backgroundColor: 'var(--badge-lease)',
-                          color: 'var(--badge-lease-text)',
-                          padding: '2px 6px',
-                          borderRadius: 'var(--radius-sm)'
-                        }}>
-                          <Lock size={10} /> Lease Activo
-                        </span>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {card.acceptance_criteria && (
+                          <span
+                            title="Tiene criterios de aceptación definidos"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '2px',
+                              fontSize: '10px',
+                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                              color: 'var(--accent-primary)',
+                              padding: '1px 5px',
+                              borderRadius: '3px'
+                            }}
+                          >
+                            <CheckSquare size={10} /> Criterios
+                          </span>
+                        )}
+                        {hasLease && (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            fontSize: '10px',
+                            fontFamily: 'var(--font-mono)',
+                            backgroundColor: 'var(--badge-lease)',
+                            color: 'var(--badge-lease-text)',
+                            padding: '2px 6px',
+                            borderRadius: 'var(--radius-sm)'
+                          }}>
+                            <Lock size={10} /> Lease
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Card Title */}
@@ -204,7 +237,7 @@ export function KanbanBoard({ cards, onCardMove }) {
                         <span>{card.assignee_node_uuid ? card.assignee_node_uuid.slice(0, 12) : 'Sin asignar'}</span>
                       </div>
                       {card.branch_ref && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent-primary)' }}>
                           <GitBranch size={10} />
                           <span>{card.branch_ref}</span>
                         </div>

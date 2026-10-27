@@ -63,7 +63,7 @@ class DatabaseManager:
         """Inicializa todas las tablas del enjambre P2P y proyectos."""
         with self._write_lock, self.get_connection() as conn:
             with conn:
-                # Comprobar y migrar tablas existentes si falta project_uuid
+                # Comprobar y migrar tablas existentes si falta project_uuid o acceptance_criteria
                 cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='kanban_cards';")
                 if cur.fetchone():
                     cols = [row["name"] for row in conn.execute("PRAGMA table_info(kanban_cards);").fetchall()]
@@ -75,6 +75,8 @@ class DatabaseManager:
                         DROP TABLE IF EXISTS dispute_tickets;
                         DROP TABLE IF EXISTS outbox_events;
                         """)
+                    elif "acceptance_criteria" not in cols:
+                        conn.execute("ALTER TABLE kanban_cards ADD COLUMN acceptance_criteria TEXT DEFAULT '';")
 
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
@@ -109,6 +111,7 @@ class DatabaseManager:
                     project_uuid TEXT NOT NULL,
                     title TEXT NOT NULL,
                     description TEXT DEFAULT '',
+                    acceptance_criteria TEXT DEFAULT '',
                     status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated')) NOT NULL DEFAULT 'backlog',
                     assignee_node_uuid TEXT,
                     lease_expires_at DATETIME,
@@ -349,17 +352,58 @@ class DatabaseManager:
                 )
             return [dict(row) for row in cur.fetchall()]
 
-    def create_card(self, project_uuid: str, card_id: str, title: str, description: str = "") -> Dict[str, Any]:
+    def create_card(
+        self,
+        project_uuid: str,
+        card_id: str,
+        title: str,
+        description: str = "",
+        acceptance_criteria: str = ""
+    ) -> Dict[str, Any]:
         """Crea una nueva tarjeta en el backlog asociada a un proyecto."""
         now = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO kanban_cards (card_id, project_uuid, title, description, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, 'backlog', ?, ?);
+                    INSERT INTO kanban_cards (card_id, project_uuid, title, description, acceptance_criteria, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?);
                     """,
-                    (card_id, project_uuid, title, description, now, now)
+                    (card_id, project_uuid, title, description, acceptance_criteria, now, now)
+                )
+        return self.get_card_by_id(project_uuid, card_id) or {}
+
+    def update_card_details(
+        self,
+        project_uuid: str,
+        card_id: str,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        acceptance_criteria: Optional[str] = None,
+        status: Optional[str] = None,
+        branch_ref: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Actualiza los detalles completos de una tarjeta (título, descripción, criterios de aceptación, estado y rama)."""
+        card = self.get_card_by_id(project_uuid, card_id)
+        if not card:
+            raise ValueError(f"Tarjeta no encontrada: {card_id}")
+
+        new_title = title if title is not None else card["title"]
+        new_desc = description if description is not None else card.get("description", "")
+        new_crit = acceptance_criteria if acceptance_criteria is not None else card.get("acceptance_criteria", "")
+        new_status = status if status is not None else card["status"]
+        new_branch = branch_ref if branch_ref is not None else card.get("branch_ref")
+
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE kanban_cards
+                    SET title = ?, description = ?, acceptance_criteria = ?, status = ?, branch_ref = ?, updated_at = ?
+                    WHERE project_uuid = ? AND card_id = ?;
+                    """,
+                    (new_title, new_desc, new_crit, new_status, new_branch, now_str, project_uuid, card_id)
                 )
         return self.get_card_by_id(project_uuid, card_id) or {}
 
@@ -394,8 +438,9 @@ class DatabaseManager:
 
                 current_assignee = card["assignee_node_uuid"]
                 current_expiry = card["lease_expires_at"]
+                current_status = card["status"]
 
-                if current_assignee and current_assignee != node_uuid and current_expiry:
+                if current_assignee and current_assignee != node_uuid and current_expiry and current_status == "in_progress":
                     expiry_dt = datetime.fromisoformat(current_expiry)
                     if expiry_dt > now:
                         raise PermissionError(
@@ -424,7 +469,16 @@ class DatabaseManager:
         now_str = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
-                if branch_ref:
+                if new_status == "backlog":
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards 
+                        SET status = ?, assignee_node_uuid = NULL, lease_expires_at = NULL, branch_ref = NULL, updated_at = ?
+                        WHERE project_uuid = ? AND card_id = ?;
+                        """,
+                        (new_status, now_str, project_uuid, card_id)
+                    )
+                elif branch_ref:
                     conn.execute(
                         """
                         UPDATE kanban_cards 

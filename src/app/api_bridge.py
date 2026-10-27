@@ -13,6 +13,7 @@ import platform
 import sys
 import urllib.parse
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
@@ -379,8 +380,14 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_kanban_card(self, card_id: str, title: str, description: str = "") -> Dict[str, Any]:
-        """Crea una nueva tarjeta en el proyecto activo."""
+    def create_kanban_card(
+        self,
+        card_id: str,
+        title: str,
+        description: str = "",
+        acceptance_criteria: str = ""
+    ) -> Dict[str, Any]:
+        """Crea una nueva tarjeta en el proyecto activo con criterios de aceptación opcionales."""
         try:
             if not self.active_project_uuid:
                 self._ensure_active_project()
@@ -390,7 +397,34 @@ class ApiBridge:
                 project_uuid=self.active_project_uuid,
                 card_id=card_id.strip(),
                 title=title.strip(),
-                description=description.strip()
+                description=description.strip(),
+                acceptance_criteria=acceptance_criteria.strip()
+            )
+            return {"success": True, "card": card}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def update_kanban_card_details(
+        self,
+        card_id: str,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        acceptance_criteria: Optional[str] = None,
+        status: Optional[str] = None,
+        branch_ref: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Actualiza los detalles completos de una tarjeta: título, descripción, criterios de aceptación, estado y rama."""
+        try:
+            if not self.active_project_uuid:
+                self._ensure_active_project()
+            card = self.db.update_card_details(
+                project_uuid=self.active_project_uuid,
+                card_id=card_id,
+                title=title,
+                description=description,
+                acceptance_criteria=acceptance_criteria,
+                status=status,
+                branch_ref=branch_ref
             )
             return {"success": True, "card": card}
         except Exception as e:
@@ -526,6 +560,212 @@ class ApiBridge:
                 project_uuid=self.active_project_uuid
             )
             return {"success": True, "snapshot": mem}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==========================
+    # Ramas Git y Consenso Dialéctico
+    # ==========================
+
+    def get_branches_and_consensus(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene el historial visual de ramas Git, commits y sesiones dialécticas de consenso A2A."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            code_repo = proj.get("code_repo_path")
+            git_data = self.github.get_git_branches_and_log(code_repo) if code_repo else {"branches": [], "commits": []}
+
+            # Sesiones dialécticas desde a2a_messages
+            with self.db.get_connection() as conn:
+                msgs = conn.execute(
+                    "SELECT * FROM a2a_messages WHERE project_uuid = ? ORDER BY created_at ASC;",
+                    (target_uuid,)
+                ).fetchall()
+                tickets = conn.execute(
+                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? ORDER BY created_at DESC;",
+                    (target_uuid,)
+                ).fetchall()
+
+            sessions_map: Dict[str, Any] = {}
+            for row in msgs:
+                try:
+                    payload = json.loads(row["payload_rfc_yaml"])
+                except Exception:
+                    payload = {"raw": row["payload_rfc_yaml"]}
+
+                session_id = payload.get("session_id") or row["message_uuid"]
+                if session_id not in sessions_map:
+                    sessions_map[session_id] = {
+                        "session_id": session_id,
+                        "card_id": row["card_id"],
+                        "component": payload.get("component", "General"),
+                        "intent": payload.get("intent", ""),
+                        "status": "IN_DISCUSSION",
+                        "agreed_branch": None,
+                        "turns": []
+                    }
+
+                turn_data = {
+                    "turn": payload.get("turn", 1),
+                    "stage": payload.get("stage", "PROPOSAL"),
+                    "sender_node": row["sender_node_uuid"],
+                    "verdict_signal": payload.get("verdict_signal"),
+                    "critique": payload.get("critique"),
+                    "alternative": payload.get("alternative"),
+                    "rationale": payload.get("rationale"),
+                    "diff_ref": payload.get("diff_ref"),
+                    "final_decision": payload.get("final_decision"),
+                    "synthesis_notes": payload.get("synthesis_notes"),
+                    "timestamp": payload.get("timestamp") or row["created_at"]
+                }
+                sessions_map[session_id]["turns"].append(turn_data)
+
+                if payload.get("final_decision") == "AGREED":
+                    sessions_map[session_id]["status"] = "AGREED"
+                    sessions_map[session_id]["agreed_branch"] = payload.get("agreed_branch") or payload.get("diff_ref")
+                elif payload.get("final_decision") == "REJECTED":
+                    sessions_map[session_id]["status"] = "REJECTED"
+
+            sessions_list = list(sessions_map.values())
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "git": git_data,
+                "sessions": sessions_list,
+                "disputes": [dict(t) for t in tickets]
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def git_fetch_action(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Ejecuta git fetch en el repositorio de código del proyecto."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo:
+            return {"success": False, "error": "Repositorio de código no configurado"}
+        return self.github.git_fetch(code_repo)
+
+    def git_pull_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None) -> Dict[str, Any]:
+        """Ejecuta git pull en el repositorio de código del proyecto."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo:
+            return {"success": False, "error": "Repositorio de código no configurado"}
+        return self.github.git_pull(code_repo, branch=branch)
+
+    def git_push_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None) -> Dict[str, Any]:
+        """Publica la rama local en el remoto configurado."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo:
+            return {"success": False, "error": "Repositorio de código no configurado"}
+        if not branch:
+            b_info = self.github.get_git_branches_and_log(code_repo)
+            branch = b_info.get("current_branch", "main")
+        return self.github.git_push_branch(code_repo, branch=branch)
+
+    def git_merge_action(self, project_uuid: Optional[str] = None, source_branch: str = "", target_branch: str = "main") -> Dict[str, Any]:
+        """Fusiona una rama de feature a la rama principal."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo:
+            return {"success": False, "error": "Repositorio de código no configurado"}
+        if not source_branch:
+            return {"success": False, "error": "Debe especificar la rama origen a fusionar"}
+        return self.github.git_merge(code_repo, source_branch=source_branch, target_branch=target_branch)
+
+    def git_create_branch_action(self, project_uuid: Optional[str] = None, branch_name: str = "") -> Dict[str, Any]:
+        """Crea una nueva rama en el repositorio de código."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo or not branch_name.strip():
+            return {"success": False, "error": "Nombre de rama inválido"}
+        return self.github.git_create_branch(code_repo, branch_name.strip())
+
+    # ==========================
+    # Árbol y Visor OKF en Crudo
+    # ==========================
+
+    def get_okf_raw_tree(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene el árbol completo de carpetas y archivos en crudo de docs/okf."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = proj.get("gov_repo_path")
+            if not gov_path:
+                return {"success": False, "error": "Ruta de gobernanza no configurada"}
+
+            self.okf.ensure_okf_structure(gov_path, proj.get("name", "Proyecto"), target_uuid)
+            docs_okf = Path(gov_path) / "docs" / "okf"
+
+            tree = []
+            if docs_okf.is_dir():
+                for root, dirs, files in os.walk(docs_okf):
+                    rel_root = os.path.relpath(root, docs_okf)
+                    for f in sorted(files):
+                        rel_path = f if rel_root == "." else os.path.join(rel_root, f)
+                        full_p = Path(root) / f
+                        tree.append({
+                            "path": rel_path,
+                            "name": f,
+                            "folder": rel_root if rel_root != "." else "",
+                            "size_bytes": full_p.stat().st_size if full_p.exists() else 0
+                        })
+
+            return {"success": True, "tree": tree, "base_path": str(docs_okf)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def read_okf_file(self, project_uuid: Optional[str] = None, file_path: str = "") -> Dict[str, Any]:
+        """Lee el contenido en crudo de un archivo de docs/okf."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = proj.get("gov_repo_path")
+            docs_okf = Path(gov_path) / "docs" / "okf"
+            target_file = (docs_okf / file_path).resolve()
+
+            # Evitar Path Traversal
+            if not str(target_file).startswith(str(docs_okf.resolve())):
+                return {"success": False, "error": "Acceso denegado fuera de docs/okf"}
+
+            if not target_file.is_file():
+                return {"success": False, "error": f"Archivo no encontrado: {file_path}"}
+
+            content = target_file.read_text(encoding="utf-8", errors="ignore")
+            return {
+                "success": True,
+                "file_path": file_path,
+                "name": target_file.name,
+                "content": content
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 

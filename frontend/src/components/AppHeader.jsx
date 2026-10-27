@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, Settings, Plus, ArrowLeft, Kanban, BookOpen, Users, Github } from 'lucide-react';
+import { Sun, Moon, Settings, Plus, ArrowLeft, Kanban, GitBranch, Users, Github } from 'lucide-react';
 
 export function AppHeader({
   theme,
@@ -21,13 +21,15 @@ export function AppHeader({
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '0 20px',
+      padding: '0 clamp(10px, 2vw, 20px)',
       flexShrink: 0,
       zIndex: 20,
-      gap: '16px'
+      gap: '12px',
+      overflowX: 'auto',
+      whiteSpace: 'nowrap'
     }}>
       {/* 1. SECCIÓN IZQUIERDA: Marca, Breadcrumbs e Identificador de Proyecto */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: '240px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
         <span style={{
           background: 'var(--accent-primary)',
           color: '#ffffff',
@@ -45,7 +47,7 @@ export function AppHeader({
         <span style={{ color: 'var(--border-subtle)', fontWeight: 300 }}>|</span>
 
         {activeProject ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               onClick={onBackToProjects}
               title="Volver al Hub de Proyectos"
@@ -67,10 +69,10 @@ export function AppHeader({
               <ArrowLeft size={13} /> Hub
             </button>
             <span style={{
-              fontSize: '14px',
+              fontSize: '13px',
               fontWeight: 700,
               color: 'var(--text-primary)',
-              maxWidth: '180px',
+              maxWidth: 'clamp(100px, 15vw, 200px)',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis'
@@ -79,10 +81,10 @@ export function AppHeader({
             </span>
             <span style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: '11px',
+              fontSize: '10px',
               backgroundColor: 'var(--bg-subtle)',
               color: 'var(--accent-primary)',
-              padding: '2px 7px',
+              padding: '2px 6px',
               borderRadius: 'var(--radius-sm)',
               fontWeight: 600
             }}>
@@ -110,7 +112,7 @@ export function AppHeader({
       </div>
 
       {/* 2. SECCIÓN CENTRAL: Segmented Switcher tipo Parma */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, minWidth: 0 }}>
         {activeProject ? (
           <div style={{
             display: 'inline-flex',
@@ -118,11 +120,12 @@ export function AppHeader({
             padding: '3px',
             borderRadius: 'var(--radius-md)',
             gap: '3px',
-            border: '1px solid var(--border-subtle)'
+            border: '1px solid var(--border-subtle)',
+            overflowX: 'auto'
           }}>
             {[
               { id: 'kanban', label: 'Tablero Kanban', icon: Kanban },
-              { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
+              { id: 'branches', label: 'Ramas & Git', icon: GitBranch },
               { id: 'collaborators', label: 'Colaboradores P2P', icon: Users }
             ].map(tab => {
               const Icon = tab.icon;
@@ -135,7 +138,7 @@ export function AppHeader({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    padding: '5px 14px',
+                    padding: '5px clamp(8px, 1.2vw, 14px)',
                     fontSize: '12px',
                     fontWeight: isSelected ? 600 : 500,
                     borderRadius: 'var(--radius-sm)',
@@ -144,17 +147,18 @@ export function AppHeader({
                     color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
                     cursor: 'pointer',
                     boxShadow: isSelected ? 'var(--shadow-sm)' : 'none',
-                    transition: 'var(--transition)'
+                    transition: 'var(--transition)',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   <Icon size={14} color={isSelected ? 'var(--accent-primary)' : 'currentColor'} />
-                  {tab.label}
+                  <span>{tab.label}</span>
                 </button>
               );
             })}
           </div>
         ) : (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             Enjambre P2P Descentralizado • Zero-Tokens • Gobernanza OKF
           </div>
         )}

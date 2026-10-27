@@ -161,3 +161,41 @@ def test_api_bridge_okf_repair(bridge):
     assert repair_res["success"] is True
     assert repair_res["report"]["valid"] is True
 
+
+def test_api_bridge_branches_and_consensus_and_okf_tree(bridge):
+    """Verifica la consulta de ramas Git, sesiones de consenso y árbol OKF."""
+    p_res = bridge.create_project(name="Proyecto Git & Consenso")
+    p_uuid = p_res["project"]["project_uuid"]
+
+    # 1. Consultar ramas y consenso
+    bc_res = bridge.get_branches_and_consensus(p_uuid)
+    assert bc_res["success"] is True
+    assert "git" in bc_res
+    assert "sessions" in bc_res
+
+    # 2. Consultar árbol de archivos OKF
+    tree_res = bridge.get_okf_raw_tree(p_uuid)
+    assert tree_res["success"] is True
+    assert len(tree_res["tree"]) >= 2
+    assert any("01_ARQUITECTURA_Y_GOBERNANZA.md" in f["path"] for f in tree_res["tree"])
+
+    # 3. Leer archivo OKF
+    file_res = bridge.read_okf_file(p_uuid, "01_ARQUITECTURA_Y_GOBERNANZA.md")
+    assert file_res["success"] is True
+    assert "OKF-01" in file_res["content"]
+
+    # 4. Actualizar tarjeta con criterios de aceptación
+    card_res = bridge.create_kanban_card("TASK-TEST-CRIT", "Tarea con Criterios", "Desc")
+    assert card_res["success"] is True
+
+    update_res = bridge.update_kanban_card_details(
+        card_id="TASK-TEST-CRIT",
+        title="Tarea con Criterios Actualizada",
+        acceptance_criteria="1. Tests pasando\n2. Linting OK",
+        status="in_review"
+    )
+    assert update_res["success"] is True
+    assert update_res["card"]["acceptance_criteria"] == "1. Tests pasando\n2. Linting OK"
+    assert update_res["card"]["status"] == "in_review"
+
+

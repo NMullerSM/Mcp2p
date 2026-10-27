@@ -1,5 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { X, Copy, Check, Terminal, Share2, Github, BookOpen, ShieldCheck, Key, RefreshCw, Eye, EyeOff, LogOut } from 'lucide-react';
+import {
+  X,
+  Copy,
+  Check,
+  Terminal,
+  Share2,
+  Github,
+  BookOpen,
+  ShieldCheck,
+  Key,
+  RefreshCw,
+  Eye,
+  EyeOff,
+  LogOut,
+  FolderTree,
+  FileText,
+  FileCode,
+  File,
+  UserCheck
+} from 'lucide-react';
 
 export function SettingsDrawer({
   isOpen,
@@ -26,6 +45,13 @@ export function SettingsDrawer({
   const [patLoading, setPatLoading] = useState(false);
   const [patMessage, setPatMessage] = useState(null);
 
+  // Estados del Visor OKF en Crudo
+  const [okfTree, setOkfTree] = useState([]);
+  const [selectedFilePath, setSelectedFilePath] = useState('');
+  const [selectedFileContent, setSelectedFileContent] = useState('');
+  const [fileLoading, setFileLoading] = useState(false);
+  const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
+
   const targetProject = activeProject || (projectsList && projectsList[0]);
 
   // Sincronizar tab si cambia initialTab al abrir
@@ -34,6 +60,37 @@ export function SettingsDrawer({
       setActiveTab(initialTab);
     }
   }, [isOpen, initialTab]);
+
+  const loadOkfTree = async () => {
+    if (!api || !targetProject) return;
+    try {
+      const res = await api.get_okf_raw_tree(targetProject.project_uuid);
+      if (res.success && res.tree?.length > 0) {
+        setOkfTree(res.tree);
+        const first = res.tree[0].path;
+        setSelectedFilePath(first);
+        loadFile(first);
+      }
+    } catch (e) {
+      console.error("Error al cargar árbol OKF:", e);
+    }
+  };
+
+  const loadFile = async (path) => {
+    if (!api || !targetProject || !path) return;
+    setFileLoading(true);
+    try {
+      const res = await api.read_okf_file(targetProject.project_uuid, path);
+      if (res.success) {
+        setSelectedFilePath(path);
+        setSelectedFileContent(res.content);
+      }
+    } catch (e) {
+      console.error("Error al leer archivo OKF:", e);
+    } finally {
+      setFileLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isOpen || !api) return;
@@ -63,6 +120,8 @@ export function SettingsDrawer({
           setAgentPrompt(res.agent_seed_prompt);
         }
       });
+
+      loadOkfTree();
     }
   }, [isOpen, api, targetProject, onGithubStatusChange]);
 
@@ -153,14 +212,14 @@ export function SettingsDrawer({
         />
       )}
 
-      {/* Drawer Container */}
+      {/* Drawer Container (Totalmente Responsive) */}
       <aside
         style={{
           position: 'fixed',
           top: 0,
           right: 0,
-          width: '520px',
-          maxWidth: '92vw',
+          width: 'clamp(340px, 52vw, 760px)',
+          maxWidth: '96vw',
           height: '100vh',
           backgroundColor: 'var(--bg-surface)',
           borderLeft: '1px solid var(--border-subtle)',
@@ -205,12 +264,14 @@ export function SettingsDrawer({
         {/* Tab Navigation */}
         <div style={{
           display: 'flex',
+          overflowX: 'auto',
           borderBottom: '1px solid var(--border-subtle)',
           backgroundColor: 'var(--bg-subtle)',
           padding: '4px 8px 0 8px',
-          gap: '4px'
+          gap: '2px'
         }}>
           {[
+            { id: 'okf_viewer', label: 'Visor OKF', icon: FolderTree },
             { id: 'p2p', label: 'Enlace P2P', icon: Share2 },
             { id: 'mcp', label: 'Agentes MCP', icon: Terminal },
             { id: 'github', label: 'GitHub Auth', icon: Github },
@@ -234,6 +295,7 @@ export function SettingsDrawer({
                   backgroundColor: 'transparent',
                   color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
                   cursor: 'pointer',
+                  whiteSpace: 'nowrap',
                   transition: 'var(--transition)'
                 }}
               >
@@ -245,7 +307,141 @@ export function SettingsDrawer({
         </div>
 
         {/* Content Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
+
+          {/* TAB 0: Visor OKF en Crudo */}
+          {activeTab === 'okf_viewer' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '14px' }}>
+              <div>
+                <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 4px 0' }}>Árbol de Gobernanza OKF en Crudo</h4>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0 }}>
+                  Explora y visualiza directamente los archivos Markdown y esquemas JSON del repositorio <code>docs/okf/</code>.
+                </p>
+              </div>
+
+              {/* Split Viewer Container */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(180px, 1fr) 2fr',
+                gap: '12px',
+                minHeight: '420px',
+                height: 'calc(100vh - 220px)'
+              }}>
+                {/* File Tree Left Pane */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '10px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px'
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', padding: '4px 6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FolderTree size={14} /> docs/okf/
+                  </div>
+
+                  {okfTree.map(file => {
+                    const isSelected = selectedFilePath === file.path;
+                    const isJson = file.name.endsWith('.json');
+                    const FileIcon = isJson ? FileCode : FileText;
+
+                    return (
+                      <button
+                        key={file.path}
+                        onClick={() => loadFile(file.path)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '6px 8px',
+                          fontSize: '11px',
+                          fontFamily: 'var(--font-mono)',
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: isSelected ? 'var(--bg-subtle)' : 'transparent',
+                          color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)',
+                          fontWeight: isSelected ? 600 : 400,
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          transition: 'var(--transition)'
+                        }}
+                      >
+                        <FileIcon size={12} color={isSelected ? 'var(--accent-primary)' : 'var(--text-secondary)'} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {file.path}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* File Content Right Pane */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden'
+                }}>
+                  {/* File Header Toolbar */}
+                  <div style={{
+                    padding: '8px 12px',
+                    borderBottom: '1px solid var(--border-subtle)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    backgroundColor: 'var(--bg-subtle)'
+                  }}>
+                    <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      {selectedFilePath || 'Selecciona un archivo'}
+                    </span>
+
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={() => copyToClipboard(selectedFileContent, setCopiedConfig)}
+                        title="Copiar contenido"
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-secondary)',
+                          cursor: 'pointer',
+                          padding: '3px 6px',
+                          fontSize: '11px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '3px'
+                        }}
+                      >
+                        {copiedConfig ? <Check size={12} color="var(--accent-success)" /> : <Copy size={12} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* File Body */}
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+                    {fileLoading ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Cargando contenido...</div>
+                    ) : (
+                      <pre style={{
+                        margin: 0,
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        lineHeight: 1.5,
+                        color: 'var(--text-primary)',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word'
+                      }}>
+                        {selectedFileContent}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* TAB 1: Enlace P2P */}
           {activeTab === 'p2p' && (
@@ -424,7 +620,7 @@ export function SettingsDrawer({
             </div>
           )}
 
-          {/* TAB 3: GitHub (Dual Auth: PAT y gh CLI) */}
+          {/* TAB 3: GitHub (Dual Auth: PAT y gh CLI + Git Identity) */}
           {activeTab === 'github' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
@@ -433,6 +629,29 @@ export function SettingsDrawer({
                   Conecta tu identidad de GitHub mediante <strong>Personal Access Token (PAT)</strong> o <strong>GitHub CLI (gh)</strong> según tus preferencias de desarrollo.
                 </p>
               </div>
+
+              {/* Identidad Git Global Detectada (GitHub Desktop Friendly) */}
+              {githubStatus?.git_identity?.name && (
+                <div style={{
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px'
+                }}>
+                  <UserCheck size={18} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
+                  <div style={{ fontSize: '12px' }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Identidad Git Local: {githubStatus.git_identity.name}
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                      {githubStatus.git_identity.email} • Detectado desde Git Config / GitHub Desktop
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Estado Actual */}
               <div style={{
@@ -513,11 +732,11 @@ export function SettingsDrawer({
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Key size={16} color="var(--accent-primary)" />
-                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Método 1: Personal Access Token (PAT)</h5>
+                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Método 1: Personal Access Token (PAT) (Recomendado)</h5>
                 </div>
 
                 <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
-                  Ingresa un token de GitHub (con alcance <code>repo</code>) generado desde tu cuenta en <em>Settings &gt; Developer settings &gt; Personal access tokens</em>.
+                  Si usas GitHub Desktop, el método recomendado es el Personal Access Token (con alcance <code>repo</code>), ya que GitHub Desktop no incluye la herramienta CLI en el sistema.
                 </p>
 
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -619,7 +838,7 @@ export function SettingsDrawer({
                 </div>
 
                 <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
-                  Si tienes instalado <code>gh</code> en tu sistema, puedes iniciar sesión ejecutando en tu terminal:
+                  Si instalas <code>gh</code> en tu terminal, puedes iniciar sesión automáticamente ejecutando:
                 </p>
 
                 <pre style={{

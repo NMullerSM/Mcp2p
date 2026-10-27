@@ -34,6 +34,7 @@ export default function App() {
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState(null);
+  const [taskTrigger, setTaskTrigger] = useState(0);
 
   // Aplicar tema
   useEffect(() => {
@@ -180,12 +181,13 @@ export default function App() {
     }
   };
 
-  const handleCreateTask = async (cardId, title, desc) => {
+  const handleCreateTask = async (cardId, title, desc, criteria = '') => {
     if (!api) return;
     try {
-      const res = await api.create_kanban_card(cardId, title, desc);
+      const res = await api.create_kanban_card(cardId, title, desc, criteria);
       if (res.success) {
         setIsNewTaskOpen(false);
+        setTaskTrigger(prev => prev + 1);
       } else {
         alert("Error al crear tarea: " + res.error);
       }
@@ -236,6 +238,7 @@ export default function App() {
               loadProjects();
             }}
             api={api}
+            taskTrigger={taskTrigger}
           />
         ) : (
           <ProjectsHub
