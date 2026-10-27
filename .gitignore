@@ -48,3 +48,7 @@ ENV/
 # Local Project Workspaces
 workspace/
 .orphan_memory/
+
+# Node & Frontend
+frontend/node_modules/
+frontend/dist/

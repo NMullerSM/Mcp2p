@@ -20,13 +20,22 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def get_ui_html_path() -> str:
-    """Resuelve la ruta absoluta al archivo index.html."""
+def get_ui_target() -> str:
+    """Resuelve la URL o ruta local al archivo index.html."""
     current_dir = Path(__file__).resolve().parent
-    ui_path = current_dir.parent / "ui" / "index.html"
-    if not ui_path.exists():
-        raise FileNotFoundError(f"No se encontró el archivo de interfaz en: {ui_path}")
-    return str(ui_path)
+    root_dir = current_dir.parent.parent
+
+    # 1. Comprobar build compilado de React (Vite)
+    react_dist = root_dir / "frontend" / "dist" / "index.html"
+    if react_dist.exists():
+        return f"file://{react_dist}"
+
+    # 2. Fallback a la UI clásica en src/ui
+    vanilla_ui = current_dir.parent / "ui" / "index.html"
+    if vanilla_ui.exists():
+        return f"file://{vanilla_ui}"
+
+    raise FileNotFoundError("No se encontró ningún archivo de interfaz válido (frontend/dist ni src/ui).")
 
 
 def main() -> int:
@@ -49,20 +58,20 @@ def main() -> int:
         print(f"[MCP2P Error] PyWebView no está instalado en este entorno: {e}")
         return 1
 
-    html_file = get_ui_html_path()
+    target_url = get_ui_target()
 
     window = webview.create_window(
         title="MCP2P — Plataforma Agéntica Local-First",
-        url=f"file://{html_file}",
+        url=target_url,
         js_api=api,
         width=1280,
         height=840,
         min_size=(960, 600),
-        background_color="#121316",
+        background_color="#0f1013",
         text_select=True
     )
 
-    print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView...")
+    print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
     webview.start(debug=args.debug)
     print("[MCP2P] Ventana cerrada. Sesión finalizada limpiamente.")
     return 0

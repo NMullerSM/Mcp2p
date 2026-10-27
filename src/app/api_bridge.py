@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
+from src.p2p.crypto import NodeCryptoManager
+from src.storage.github_sync import GitHubSyncManager
 
 
 class ApiBridge:
@@ -26,6 +28,8 @@ class ApiBridge:
         self.db = db_manager or DatabaseManager.get_instance()
         self.bus = A2ABus(db=self.db)
         self.okf = OKFAdapter()
+        self.crypto = NodeCryptoManager()
+        self.github = GitHubSyncManager()
         self._ensure_local_node()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
@@ -92,7 +96,7 @@ class ApiBridge:
             return {"success": False, "error": str(e)}
 
     def generate_p2p_invite(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Genera un enlace y token de invitación P2P para compartir el proyecto con otro colaborador."""
+        """Genera un enlace y token de invitación P2P firmado criptográficamente para compartir el proyecto."""
         try:
             target_uuid = project_uuid or self.active_project_uuid
             if not target_uuid:
@@ -104,16 +108,20 @@ class ApiBridge:
                 return {"success": False, "error": "Proyecto no encontrado"}
 
             local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            gh_status = self.github.get_auth_status()
+
             payload = {
                 "project_uuid": proj["project_uuid"],
                 "name": proj["name"],
                 "code_repo_url": proj.get("code_repo_url", ""),
                 "gov_repo_url": proj.get("gov_repo_url", ""),
                 "sender_node_uuid": local_node,
+                "sender_github": gh_status.get("username", ""),
+                "sender_pubkey": self.crypto.public_key_base64,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            json_bytes = json.dumps(payload).encode("utf-8")
-            token = base64.urlsafe_b64encode(json_bytes).decode("ascii")
+
+            token = self.crypto.create_signed_invite_token(payload)
             invite_url = f"mcp2p://join?token={token}"
 
             return {
@@ -128,7 +136,7 @@ class ApiBridge:
             return {"success": False, "error": str(e)}
 
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
-        """Se une a un proyecto P2P a partir de un enlace o token de invitación."""
+        """Se une a un proyecto P2P a partir de un enlace o token firmado criptográficamente."""
         try:
             raw = invite_str.strip()
             token = raw
@@ -140,10 +148,9 @@ class ApiBridge:
             if not token:
                 return {"success": False, "error": "Token de invitación P2P no válido"}
 
-            # Decodificar payload base64
-            padded = token + "=" * (-len(token) % 4)
-            data_bytes = base64.urlsafe_b64decode(padded)
-            payload = json.loads(data_bytes.decode("utf-8"))
+            is_valid, payload, err = self.crypto.decode_and_verify_invite_token(token)
+            if not is_valid:
+                return {"success": False, "error": err or "Firma criptográfica inválida"}
 
             p_uuid = payload.get("project_uuid")
             p_name = payload.get("name")
@@ -170,15 +177,147 @@ class ApiBridge:
             if sender_node:
                 self.db.register_or_update_node(
                     node_uuid=sender_node,
-                    developer_name=f"Peer {sender_node[:8]}",
+                    developer_name=payload.get("sender_github") or f"Peer {sender_node[:8]}",
                     agent_id=f"agent_{sender_node[:8]}",
                     reviewer_sla_hours=72,
                     status="online"
+                )
+                # Registrar al emisor como colaborador aprobado
+                self.db.add_or_request_collaborator(
+                    project_uuid=p_uuid,
+                    node_uuid=sender_node,
+                    github_username=payload.get("sender_github", ""),
+                    public_key=payload.get("sender_pubkey", ""),
+                    role="collaborator",
+                    status="approved"
                 )
 
             return {"success": True, "project": proj, "message": "Conectado al proyecto P2P exitosamente"}
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
+
+    # ==========================
+    # Colaboradores & Aprobación HITL
+    # ==========================
+
+    def get_project_collaborators(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene la lista de colaboradores y solicitudes de un proyecto."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+            collaborators = self.db.get_project_collaborators(target_uuid)
+            return {"success": True, "collaborators": collaborators}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def approve_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
+        """Aprobación explícita (Human-in-the-Loop) de un colaborador por el dueño del proyecto."""
+        try:
+            res = self.db.approve_collaborator(project_uuid, node_uuid)
+            return {"success": res}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def reject_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
+        """Rechaza la solicitud de un colaborador."""
+        try:
+            res = self.db.reject_collaborator(project_uuid, node_uuid)
+            return {"success": res}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==========================
+    # Gobernanza OKF (ADRs & Skills)
+    # ==========================
+
+    def get_okf_overview(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Recupera la lista de ADRs y Skills del repositorio OKF para visualización."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = proj.get("gov_repo_path")
+            adrs = self.okf.get_okf_adrs(gov_path)
+            skills = self.okf.get_okf_skills(gov_path)
+            validation = self.okf.validate_okf_integrity(gov_path)
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "adrs": adrs,
+                "skills": skills,
+                "validation": validation
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==========================
+    # Conector MCP para Agentes (Claude / Cursor / Antigravity)
+    # ==========================
+
+    def get_mcp_config_snippet(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Genera el bloque JSON de conexión MCP y el Prompt Semilla para copiar al agente."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            p_name = proj["name"] if proj else "Proyecto MCP2P"
+            python_path = sys.executable
+
+            mcp_json_config = {
+                "mcpServers": {
+                    "mcp2p": {
+                        "command": python_path,
+                        "args": ["-m", "src.mcp.server", "--transport", "stdio"],
+                        "env": {
+                            "MCP2P_ACTIVE_PROJECT": target_uuid or ""
+                        }
+                    }
+                }
+            }
+
+            agent_seed_prompt = (
+                f"Actúa como un agente colaborador del enjambre MCP2P para el proyecto '{p_name}' (UUID: `{target_uuid}`).\n"
+                f"Estás conectado mediante el servidor local MCP de MCP2P.\n"
+                f"Protocolo de colaboración:\n"
+                f"1. Antes de codificar, inspecciona el tablero con `get_kanban_board` y reclama tu tarea con `claim_kanban_task` para obtener el lease atómico.\n"
+                f"2. Consulta la gobernanza viva y decisiones técnicas con `inspect_okf_governance`.\n"
+                f"3. Si necesitas proponer un cambio arquitectónico o PR, utiliza el canal dialéctico de 3 turnos con `send_coordination_rfc` (Turno 1: PROPOSAL).\n"
+                f"4. Al concluir tu tarea, libera el lease con `release_kanban_task` asociando la rama del código."
+            )
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "project_name": p_name,
+                "mcp_json": json.dumps(mcp_json_config, indent=2, ensure_ascii=False),
+                "agent_seed_prompt": agent_seed_prompt
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==========================
+    # Estado de GitHub
+    # ==========================
+
+    def get_github_status(self) -> Dict[str, Any]:
+        """Verifica el estado de autenticación y usuario de GitHub."""
+        try:
+            status = self.github.get_auth_status()
+            return {"success": True, "github": status}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def get_active_project(self) -> Dict[str, Any]:
         """Devuelve el proyecto actualmente activo."""

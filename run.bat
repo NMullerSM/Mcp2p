@@ -15,6 +15,15 @@ if exist "%DIR%.venv\Scripts\python.exe" (
 
 set "PYTHONPATH=%DIR%;%PYTHONPATH%"
 
+if not exist "%DIR%frontend\dist\index.html" (
+    if exist "%DIR%frontend\package.json" (
+        echo [MCP2P] Compilando bundle de React...
+        cd /d "%DIR%frontend"
+        call npm run build
+        cd /d "%DIR%"
+    )
+)
+
 echo [MCP2P] Iniciando aplicacion de escritorio en Windows...
 "%PYTHON_BIN%" src\app\main.py %*
 

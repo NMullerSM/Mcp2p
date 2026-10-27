@@ -82,13 +82,21 @@ flowchart TD
 * **Decisión**: Aislamiento estricto de doble repositorio (`app/` y `governance/`). La memoria y contexto de los agentes se sincronizan en una rama huérfana aislada `orphan-conversa-memory-{project_uuid}` sin ensuciar la rama `main` o `develop`.
 * **Consecuencias**: Cada agente puede leer y actualizar el contexto activo sin provocar conflictos de merge en el código fuente.
 
-### ADR-008: Estandarización de Carpetas Doble Repo, Enlace de Invitación P2P y Código QR
+### ADR-008: Estandarización de Carpetas Doble Repo y Enlace de Invitación P2P
 * **Contexto**: Para que dos desarrolladores en plataformas distintas (ej. Linux y Windows) colaboren en el mismo proyecto sin fricción, las carpetas deben mantener nombres predecibles y sincronizables (`app_{nombre}` y `okf_{nombre}_{id}`), y debe ser trivial vincularse al proyecto sin configuraciones manuales complejas.
 * **Decisión**:
   1. Cada proyecto genera automáticamente: `app_{nombre}` con `git init` y `okf_{nombre}_{id}` con `git init` y rama huérfana.
-  2. Se implementa un generador de enlaces de invitación P2P (`mcp2p://join?token=...`) y renderizado directo de código QR SVG en el modal de configuración.
+  2. Se implementa un generador de enlaces de invitación P2P (`mcp2p://join?token=...`) copiable en 1 clic.
   3. El colaborador receptor se une con 1 clic ("Unirse vía P2P"), desplegando el mismo identificador UUID y estructura de repositorio en su equipo local.
 * **Consecuencias**: Interoperabilidad multiplataforma inmediata, emparejamiento determinista de proyectos y cero discrepancias de rutas.
+
+### ADR-009: Frontend React + Vite con Drawer Lateral y Aprobación HITL de Colaboradores
+* **Contexto**: Se requiere una interfaz más reactiva, modular y visual para inspeccionar Kanban, ADRs, Skills y conectar agentes MCP sin recargar la página ni bloquear el hilo de ejecución de PyWebView.
+* **Decisión**:
+  1. Se implementa el frontend en **React + Vite** sirviendo un build estático offline en PyWebView.
+  2. La configuración se despliega en un **drawer lateral derecho** con animación suave, conteniendo enlaces P2P, snippets MCP para Claude/Cursor y manual de atajos.
+  3. Los colaboradores que se unen a un proyecto requieren **aprobación humana explícita (Human-in-the-Loop)** antes de poder operar sobre los repositorios.
+* **Consecuencias**: Experiencia de usuario de nivel producción, cero consumo de tokens en renderizado y control soberano sobre quién accede al proyecto.
 
 ---
 
@@ -100,5 +108,7 @@ flowchart TD
 * **US-04 (Coordinación Agéntica vía MCP)**: Como agente de IA conectado vía Model Context Protocol, quiero consultar y reclamar tareas del backlog de un proyecto de forma atómica para evitar duplicar esfuerzos con otros agentes o humanos.
 * **US-05 (Debate Dialéctico Acotado A2A)**: Como agente colaborador, quiero debatir una propuesta técnica con el agente de mi compañero en un máximo de 3 turnos para alcanzar consenso rápido o escalar a arbitraje sin consumir tokens en bucles infinitos.
 * **US-06 (Persistencia de Contexto en Rama Huérfana)**: Como agente de desarrollo, quiero registrar y recuperar el estado de la sesión en la rama huérfana de gobernanza sin alterar el historial de commits del código fuente.
-* **US-07 (Emparejamiento y Compartición P2P mediante QR / Enlace)**: Como colaborador, quiero compartir mi proyecto mediante un enlace `mcp2p://` o código QR para que mi compañero se conecte y clone ambos repositorios de inmediato con permisos asignados.
+* **US-07 (Emparejamiento y Compartición P2P mediante Enlace Directo)**: Como colaborador, quiero compartir mi proyecto mediante un enlace `mcp2p://` firmado para que mi compañero se conecte y clone ambos repositorios de inmediato.
 * **US-08 (Mover Tarjetas Manualmente con Drag and Drop)**: Como usuario humano, quiero arrastrar tarjetas entre columnas en el tablero Kanban a mano, activando leases y transiciones de estado de forma visual e intuitiva.
+* **US-09 (Control de Aprobación de Colaboradores)**: Como dueño del proyecto, quiero revisar las solicitudes de colaboradores pendientes y aprobarlas con 1 clic para que ningún agente autorice accesos a ciegas.
+* **US-10 (Conexión Inmediata de Agentes MCP)**: Como desarrollador, quiero abrir la configuración y copiar el bloque JSON y el prompt semilla para que mi agente en Cursor o Claude se conecte y empiece a colaborar de inmediato.

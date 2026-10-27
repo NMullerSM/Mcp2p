@@ -24,5 +24,11 @@ fi
 
 export PYTHONPATH="$DIR:$PYTHONPATH"
 
+# Compilar frontend React si aún no existe el build
+if [ ! -f "$DIR/frontend/dist/index.html" ] && [ -d "$DIR/frontend" ]; then
+    echo "[MCP2P] Compilando bundle de React (Vite)..."
+    (cd "$DIR/frontend" && npm run build)
+fi
+
 echo "[MCP2P] Iniciando aplicación de escritorio..."
 exec "$PYTHON_BIN" src/app/main.py "$@"

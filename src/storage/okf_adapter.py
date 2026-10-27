@@ -209,6 +209,47 @@ graph TD
             "stats": stats
         }
 
+    def get_okf_adrs(self, gov_base_path: str | Path) -> List[Dict[str, Any]]:
+        """Extrae la lista de ADRs de 01_ARQUITECTURA_Y_GOBERNANZA.md de forma estructurada a 0 tokens."""
+        base = Path(gov_base_path)
+        docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
+        file_01 = docs_okf / "01_ARQUITECTURA_Y_GOBERNANZA.md"
+        if not file_01.is_file():
+            return []
+
+        text = file_01.read_text(encoding="utf-8", errors="ignore")
+        pattern = r"###\s*(ADR-\d+):\s*([^\n]+)\n\*\s*\*\*Contexto\*\*:\s*([^\n]+)\n\*\s*\*\*Decisión\*\*:\s*([^\n]+)\n\*\s*\*\*Consecuencias\*\*:\s*([^\n]+)"
+        adrs = []
+        for match in re.finditer(pattern, text):
+            adrs.append({
+                "id": match.group(1).strip(),
+                "title": match.group(2).strip(),
+                "context": match.group(3).strip(),
+                "decision": match.group(4).strip(),
+                "consequences": match.group(5).strip()
+            })
+        return adrs
+
+    def get_okf_skills(self, gov_base_path: str | Path) -> List[Dict[str, Any]]:
+        """Lista las fichas técnicas y habilidades documentadas en docs/okf/backend y docs/okf/frontend."""
+        base = Path(gov_base_path)
+        docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
+        skills = []
+        for area in ("backend", "frontend"):
+            area_dir = docs_okf / area
+            if area_dir.is_dir():
+                for f in sorted(area_dir.glob("*.md")):
+                    content = f.read_text(encoding="utf-8", errors="ignore")
+                    first_line = content.splitlines()[0] if content.splitlines() else f.stem
+                    title = first_line.replace("#", "").replace("Ficha Técnica:", "").strip()
+                    skills.append({
+                        "area": area,
+                        "slug": f.stem,
+                        "title": title or f.stem,
+                        "path": str(f)
+                    })
+        return skills
+
     # ==========================================
     # Registro de ADRs y Features Técnicas
     # ==========================================

@@ -7,6 +7,7 @@ Subsistema Multi-Proyecto con Aislamiento Estricto de Doble Repositorio (app y g
 from __future__ import annotations
 
 import os
+import platform
 import sqlite3
 import subprocess
 import threading
@@ -182,10 +183,25 @@ class DatabaseManager:
                     FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
                 );
 
+                -- 8. Colaboradores de Proyecto y Permisos HITL
+                CREATE TABLE IF NOT EXISTS project_collaborators (
+                    project_uuid TEXT NOT NULL,
+                    node_uuid TEXT NOT NULL,
+                    github_username TEXT DEFAULT '',
+                    public_key TEXT DEFAULT '',
+                    role TEXT CHECK(role IN ('owner', 'collaborator', 'guest')) DEFAULT 'collaborator',
+                    status TEXT CHECK(status IN ('pending_approval', 'approved', 'rejected')) DEFAULT 'pending_approval',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    approved_at DATETIME,
+                    PRIMARY KEY (project_uuid, node_uuid),
+                    FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
+                );
+
                 -- Índices de ultra alta velocidad (<1ms)
                 CREATE INDEX IF NOT EXISTS idx_cards_project_status ON kanban_cards(project_uuid, status);
                 CREATE INDEX IF NOT EXISTS idx_a2a_project ON a2a_messages(project_uuid);
                 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events(project_uuid, sync_status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_collab_project ON project_collaborators(project_uuid, status);
                 """)
 
     def _ensure_default_project(self) -> None:
@@ -272,6 +288,14 @@ class DatabaseManager:
                         now_str
                     )
                 )
+
+        local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+        self.add_or_request_collaborator(
+            project_uuid=p_uuid,
+            node_uuid=local_node,
+            role="owner",
+            status="approved"
+        )
 
         return self.get_project_by_uuid(p_uuid)
 
@@ -542,3 +566,82 @@ class DatabaseManager:
                     "UPDATE outbox_events SET sync_status = ? WHERE event_uuid = ?;",
                     (sync_status, event_uuid)
                 )
+
+    # ==========================
+    # Gestión de Colaboradores HITL
+    # ==========================
+
+    def add_or_request_collaborator(
+        self,
+        project_uuid: str,
+        node_uuid: str,
+        github_username: str = "",
+        public_key: str = "",
+        role: str = "collaborator",
+        status: str = "pending_approval"
+    ) -> Dict[str, Any]:
+        """Registra o actualiza la solicitud de colaboración de un usuario en un proyecto."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        approved_at = now_str if status == "approved" else None
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO project_collaborators (project_uuid, node_uuid, github_username, public_key, role, status, created_at, approved_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_uuid, node_uuid) DO UPDATE SET
+                        github_username = COALESCE(NULLIF(excluded.github_username, ''), project_collaborators.github_username),
+                        public_key = COALESCE(NULLIF(excluded.public_key, ''), project_collaborators.public_key),
+                        role = excluded.role,
+                        status = excluded.status,
+                        approved_at = COALESCE(excluded.approved_at, project_collaborators.approved_at);
+                    """,
+                    (project_uuid, node_uuid, github_username, public_key, role, status, now_str, approved_at)
+                )
+        return self.get_collaborator(project_uuid, node_uuid) or {}
+
+    def get_collaborator(self, project_uuid: str, node_uuid: str) -> Optional[Dict[str, Any]]:
+        """Recupera la información de un colaborador en un proyecto."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM project_collaborators WHERE project_uuid = ? AND node_uuid = ?;",
+                (project_uuid, node_uuid)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_project_collaborators(self, project_uuid: str) -> List[Dict[str, Any]]:
+        """Lista todos los colaboradores y solicitudes pendientes de un proyecto."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours
+                FROM project_collaborators c
+                LEFT JOIN swarm_nodes n ON c.node_uuid = n.node_uuid
+                WHERE c.project_uuid = ?
+                ORDER BY c.created_at ASC;
+                """,
+                (project_uuid,)
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def approve_collaborator(self, project_uuid: str, node_uuid: str) -> bool:
+        """Aprobación explícita (Human-in-the-Loop) de un colaborador por el dueño del proyecto."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE project_collaborators SET status = 'approved', approved_at = ? WHERE project_uuid = ? AND node_uuid = ?;",
+                    (now_str, project_uuid, node_uuid)
+                )
+                return cur.rowcount > 0
+
+    def reject_collaborator(self, project_uuid: str, node_uuid: str) -> bool:
+        """Rechazo explícito de una solicitud de colaborador."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE project_collaborators SET status = 'rejected' WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                )
+                return cur.rowcount > 0
