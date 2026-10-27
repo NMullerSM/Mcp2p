@@ -580,7 +580,13 @@ class ApiBridge:
                 return {"success": False, "error": "Proyecto no encontrado"}
 
             code_repo = proj.get("code_repo_path")
-            git_data = self.github.get_git_branches_and_log(code_repo) if code_repo else {"branches": [], "commits": []}
+            gov_repo = proj.get("gov_repo_path")
+
+            git_app = self.github.get_git_branches_and_log(code_repo) if code_repo else {"branches": [], "commits": []}
+            git_gov = self.github.get_git_branches_and_log(gov_repo) if gov_repo else {"branches": [], "commits": []}
+
+            # Obtener tarjetas para enlaces bidireccionales
+            cards = self.db.get_cards(target_uuid)
 
             # Sesiones dialécticas desde a2a_messages
             with self.db.get_connection() as conn:
@@ -608,6 +614,7 @@ class ApiBridge:
                         "component": payload.get("component", "General"),
                         "intent": payload.get("intent", ""),
                         "status": "IN_DISCUSSION",
+                        "verdict_signal": payload.get("verdict_signal"),
                         "agreed_branch": None,
                         "turns": []
                     }
@@ -627,73 +634,82 @@ class ApiBridge:
                 }
                 sessions_map[session_id]["turns"].append(turn_data)
 
+                if payload.get("verdict_signal"):
+                    sessions_map[session_id]["verdict_signal"] = payload.get("verdict_signal")
+
                 if payload.get("final_decision") == "AGREED":
                     sessions_map[session_id]["status"] = "AGREED"
+                    sessions_map[session_id]["verdict_signal"] = sessions_map[session_id]["verdict_signal"] or "ACCEPT"
                     sessions_map[session_id]["agreed_branch"] = payload.get("agreed_branch") or payload.get("diff_ref")
                 elif payload.get("final_decision") == "REJECTED":
                     sessions_map[session_id]["status"] = "REJECTED"
+                    sessions_map[session_id]["verdict_signal"] = "REJECT"
 
             sessions_list = list(sessions_map.values())
 
             return {
                 "success": True,
                 "project_uuid": target_uuid,
-                "git": git_data,
+                "git": git_app,
+                "git_app": git_app,
+                "git_gov": git_gov,
+                "cards": cards,
                 "sessions": sessions_list,
+                "consensus_sessions": sessions_list,
                 "disputes": [dict(t) for t in tickets]
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def git_fetch_action(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Ejecuta git fetch en el repositorio de código del proyecto."""
+    def git_fetch_action(self, project_uuid: Optional[str] = None, repo_target: str = "app") -> Dict[str, Any]:
+        """Ejecuta git fetch en el repositorio de código o gobernanza del proyecto."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo:
-            return {"success": False, "error": "Repositorio de código no configurado"}
-        return self.github.git_fetch(code_repo)
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Repositorio ({repo_target}) no configurado"}
+        return self.github.git_fetch(repo_path)
 
-    def git_pull_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None) -> Dict[str, Any]:
-        """Ejecuta git pull en el repositorio de código del proyecto."""
+    def git_pull_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None, repo_target: str = "app") -> Dict[str, Any]:
+        """Ejecuta git pull en el repositorio especificado."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo:
-            return {"success": False, "error": "Repositorio de código no configurado"}
-        return self.github.git_pull(code_repo, branch=branch)
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Repositorio ({repo_target}) no configurado"}
+        return self.github.git_pull(repo_path, branch=branch)
 
-    def git_push_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None) -> Dict[str, Any]:
+    def git_push_action(self, project_uuid: Optional[str] = None, branch: Optional[str] = None, repo_target: str = "app") -> Dict[str, Any]:
         """Publica la rama local en el remoto configurado."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo:
-            return {"success": False, "error": "Repositorio de código no configurado"}
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Repositorio ({repo_target}) no configurado"}
         if not branch:
-            b_info = self.github.get_git_branches_and_log(code_repo)
+            b_info = self.github.get_git_branches_and_log(repo_path)
             branch = b_info.get("current_branch", "main")
-        return self.github.git_push_branch(code_repo, branch=branch)
+        return self.github.git_push_branch(repo_path, branch=branch)
 
-    def git_merge_action(self, project_uuid: Optional[str] = None, source_branch: str = "", target_branch: str = "main") -> Dict[str, Any]:
-        """Fusiona una rama de feature a la rama principal."""
+    def git_merge_action(self, project_uuid: Optional[str] = None, source_branch: str = "", target_branch: str = "main", repo_target: str = "app") -> Dict[str, Any]:
+        """Fusiona una rama de feature a la rama destino."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo:
-            return {"success": False, "error": "Repositorio de código no configurado"}
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path:
+            return {"success": False, "error": f"Repositorio ({repo_target}) no configurado"}
         if not source_branch:
             return {"success": False, "error": "Debe especificar la rama origen a fusionar"}
-        return self.github.git_merge(code_repo, source_branch=source_branch, target_branch=target_branch)
+        return self.github.git_merge(repo_path, source_branch=source_branch, target_branch=target_branch)
 
-    def git_create_branch_action(self, project_uuid: Optional[str] = None, branch_name: str = "") -> Dict[str, Any]:
-        """Crea una nueva rama en el repositorio de código."""
+    def git_create_branch_action(self, project_uuid: Optional[str] = None, branch_name: str = "", repo_target: str = "app") -> Dict[str, Any]:
+        """Crea una nueva rama en el repositorio seleccionado."""
         target_uuid = project_uuid or self.active_project_uuid
         proj = self.db.get_project_by_uuid(target_uuid)
-        code_repo = proj.get("code_repo_path") if proj else None
-        if not code_repo or not branch_name.strip():
-            return {"success": False, "error": "Nombre de rama inválido"}
-        return self.github.git_create_branch(code_repo, branch_name.strip())
+        repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
+        if not repo_path or not branch_name.strip():
+            return {"success": False, "error": "Nombre de rama inválido o repositorio inexistente"}
+        return self.github.git_create_branch(repo_path, branch_name.strip())
 
     def set_project_remote_url(self, project_uuid: Optional[str] = None, remote_url: str = "", remote_name: str = "origin") -> Dict[str, Any]:
         """Configura o actualiza la URL remota del repositorio de código del proyecto."""

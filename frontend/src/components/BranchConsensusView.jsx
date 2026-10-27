@@ -17,34 +17,46 @@ import {
   ArrowRight,
   Copy,
   Check,
-  ExternalLink,
   Link,
   X,
-  Info
+  Info,
+  CheckSquare,
+  FileCode,
+  FolderTree,
+  Scale
 } from 'lucide-react';
 
-const LANE_COLORS = [
-  '#6366f1', // Indigo (main)
-  '#10b981', // Emerald
-  '#f59e0b', // Amber
-  '#06b6d4', // Cyan
-  '#ec4899', // Pink
-  '#8b5cf6', // Purple
-  '#14b8a6'  // Teal
+const PALETTE = [
+  '#63b0f4', // Azul claro
+  '#73d13d', // Verde
+  '#ff7a45', // Naranja
+  '#b37feb', // Púrpura
+  '#f759ab', // Rosa
+  '#36cfc9', // Turquesa
+  '#ffc53d', // Amarillo
+  '#597ef7', // Azul real
+  '#9254de', // Violeta
+  '#43e8d8'  // Cian
 ];
 
-export function BranchConsensusView({ project, api }) {
+export function BranchConsensusView({ project, api, initialBranch = '', onOpenCard }) {
+  // Pestaña activa dentro de Control de Cambios: 'graph' (Grafo & Commits) vs 'consensus' (Consenso Dialéctico)
+  const [subTab, setSubTab] = useState('graph');
+
+  // Repositorio objetivo: 'app' (Código de la aplicación) vs 'gov' (Gobernanza OKF & Memoria Huérfana)
+  const [repoTarget, setRepoTarget] = useState('app');
+
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [feedback, setFeedback] = useState(null);
-  const [selectedBranch, setSelectedBranch] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState(initialBranch || '');
   const [selectedCommit, setSelectedCommit] = useState(null);
   const [hoveredCommit, setHoveredCommit] = useState(null);
   const [expandedSessions, setExpandedSessions] = useState({});
   const [copiedHash, setCopiedHash] = useState(null);
 
-  // Modales locales
+  // Modales
   const [isNewBranchModalOpen, setIsNewBranchModalOpen] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState(false);
@@ -57,11 +69,13 @@ export function BranchConsensusView({ project, api }) {
       const res = await api.get_branches_and_consensus(project.project_uuid);
       if (res.success) {
         setData(res);
-        if (res.git?.current_branch) {
-          setSelectedBranch(res.git.current_branch);
+        // Configurar rama inicial si no está seleccionada
+        const currentRepoGit = repoTarget === 'gov' ? (res.git_gov || {}) : (res.git_app || res.git || {});
+        if (!selectedBranch && currentRepoGit.current_branch) {
+          setSelectedBranch(currentRepoGit.current_branch);
         }
-        if (res.git?.origin_url) {
-          setRemoteUrlInput(res.git.origin_url);
+        if (currentRepoGit.origin_url) {
+          setRemoteUrlInput(currentRepoGit.origin_url);
         }
       }
     } catch (e) {
@@ -74,6 +88,23 @@ export function BranchConsensusView({ project, api }) {
   useEffect(() => {
     loadData();
   }, [project, api]);
+
+  // Si cambia el repoTarget, reajustar rama activa
+  useEffect(() => {
+    if (!data) return;
+    const currentRepoGit = repoTarget === 'gov' ? (data.git_gov || {}) : (data.git_app || data.git || {});
+    if (currentRepoGit.current_branch) {
+      setSelectedBranch(currentRepoGit.current_branch);
+    }
+  }, [repoTarget, data]);
+
+  // Si se provee una rama inicial externa
+  useEffect(() => {
+    if (initialBranch) {
+      setSelectedBranch(initialBranch);
+      setSubTab('graph');
+    }
+  }, [initialBranch]);
 
   const copyToClipboard = (text, id) => {
     navigator.clipboard.writeText(text);
@@ -88,15 +119,15 @@ export function BranchConsensusView({ project, api }) {
     }));
   };
 
-  // Acciones Git
+  // Acciones Git vinculadas al repositorio seleccionado (app o gov)
   const handleFetch = async () => {
     if (!api || !project) return;
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.git_fetch_action(project.project_uuid);
+      const res = await api.git_fetch_action(project.project_uuid, repoTarget);
       if (res.success) {
-        setFeedback({ type: 'success', text: 'Fetch completado: referencias remotas actualizadas.' });
+        setFeedback({ type: 'success', text: `Fetch completado para repo ${repoTarget.toUpperCase()}: referencias actualizadas.` });
         loadData();
       } else {
         if (res.requires_remote) {
@@ -116,9 +147,9 @@ export function BranchConsensusView({ project, api }) {
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.git_pull_action(project.project_uuid, selectedBranch);
+      const res = await api.git_pull_action(project.project_uuid, selectedBranch, repoTarget);
       if (res.success) {
-        setFeedback({ type: 'success', text: 'Pull completado exitosamente.' });
+        setFeedback({ type: 'success', text: `Pull completado exitosamente en rama '${selectedBranch}'.` });
         loadData();
       } else {
         if (res.requires_remote) {
@@ -138,7 +169,7 @@ export function BranchConsensusView({ project, api }) {
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.git_push_action(project.project_uuid, selectedBranch);
+      const res = await api.git_push_action(project.project_uuid, selectedBranch, repoTarget);
       if (res.success) {
         setFeedback({ type: 'success', text: `Rama '${selectedBranch}' publicada exitosamente en el repositorio remoto.` });
         loadData();
@@ -167,7 +198,7 @@ export function BranchConsensusView({ project, api }) {
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.git_merge_action(project.project_uuid, selectedBranch, 'main');
+      const res = await api.git_merge_action(project.project_uuid, selectedBranch, 'main', repoTarget);
       if (res.success) {
         setFeedback({ type: 'success', text: `Rama '${selectedBranch}' fusionada en 'main' exitosamente.` });
         loadData();
@@ -187,7 +218,7 @@ export function BranchConsensusView({ project, api }) {
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.git_create_branch_action(project.project_uuid, newBranchName.trim());
+      const res = await api.git_create_branch_action(project.project_uuid, newBranchName.trim(), repoTarget);
       if (res.success) {
         setIsNewBranchModalOpen(false);
         setNewBranchName('');
@@ -203,63 +234,48 @@ export function BranchConsensusView({ project, api }) {
     }
   };
 
-  const handleSetRemoteUrl = async (e) => {
-    e.preventDefault();
-    if (!api || !project || !remoteUrlInput.trim()) return;
-    setActionLoading(true);
-    setFeedback(null);
-    try {
-      const res = await api.set_project_remote_url(project.project_uuid, remoteUrlInput.trim());
-      if (res.success) {
-        setIsRemoteModalOpen(false);
-        setFeedback({ type: 'success', text: `Repositorio remoto origin configurado: ${remoteUrlInput.trim()}` });
-        loadData();
-      } else {
-        setFeedback({ type: 'error', text: res.error || 'Error al configurar remoto' });
-      }
-    } catch (e) {
-      setFeedback({ type: 'error', text: 'Error: ' + e });
-    } finally {
-      setActionLoading(false);
-    }
-  };
+  // Repositorio activo seleccionado
+  const activeGit = useMemo(() => {
+    if (!data) return { branches: [], commits: [] };
+    return repoTarget === 'gov' ? (data.git_gov || {}) : (data.git_app || data.git || {});
+  }, [data, repoTarget]);
 
-  // Cálculo del Grafo SVG Nativo
+  // Lista de sesiones dialécticas corregida (tanto 'sessions' como 'consensus_sessions')
+  const consensusSessions = useMemo(() => {
+    return data?.sessions || data?.consensus_sessions || [];
+  }, [data]);
+
+  // Tarjetas del proyecto para enlaces bidireccionales
+  const projectCards = useMemo(() => {
+    return data?.cards || [];
+  }, [data]);
+
+  // Algoritmo de Trazado SVG inspirado en SourceGit (git-graph-plus)
   const { commitsWithLanes, connections, maxLane } = useMemo(() => {
-    const rawCommits = data?.git?.commits || [];
+    const rawCommits = activeGit.commits || [];
     if (rawCommits.length === 0) {
       return { commitsWithLanes: [], connections: [], maxLane: 0 };
     }
 
-    // Asignación de carriles (swimlanes)
     const commitLanes = {};
-    const commitIndices = {};
     let currentLaneCount = 0;
 
-    // Indexar
-    rawCommits.forEach((c, idx) => {
-      commitIndices[c.hash] = idx;
-    });
-
-    // Asignar carril 0 a main o commit inicial
-    const assignedCommits = rawCommits.map((c, idx) => {
+    const assigned = rawCommits.map((c, idx) => {
       let lane = 0;
       if (commitLanes[c.hash] !== undefined) {
         lane = commitLanes[c.hash];
       } else {
-        // Nueva rama detectada
         lane = currentLaneCount;
         commitLanes[c.hash] = lane;
         currentLaneCount++;
       }
 
-      // Propagar carril al primer padre si no tiene asignado
+      // Propagar carril a los padres
       if (c.parents && c.parents.length > 0) {
         const firstParent = c.parents[0];
         if (commitLanes[firstParent] === undefined) {
           commitLanes[firstParent] = lane;
         }
-        // Padres adicionales (merges) obtienen nuevos carriles si no los tienen
         for (let pIdx = 1; pIdx < c.parents.length; pIdx++) {
           const parentHash = c.parents[pIdx];
           if (commitLanes[parentHash] === undefined) {
@@ -268,21 +284,36 @@ export function BranchConsensusView({ project, api }) {
         }
       }
 
-      const color = LANE_COLORS[lane % LANE_COLORS.length];
+      const color = PALETTE[lane % PALETTE.length];
+
+      // Detección de tarjeta vinculada en mensaje de commit o rama
+      let linkedCardId = null;
+      const match = c.message.match(/TASK-\d+|CARD-\d+/i);
+      if (match) {
+        linkedCardId = match[0].toUpperCase();
+      } else {
+        // Chequear si alguna tarjeta tiene branch_ref igual a las refs del commit
+        const matchingCard = projectCards.find(card => card.branch_ref && c.refs && c.refs.includes(card.branch_ref));
+        if (matchingCard) {
+          linkedCardId = matchingCard.card_id;
+        }
+      }
+
       return {
         ...c,
         index: idx,
         lane,
-        color
+        color,
+        linkedCardId
       };
     });
 
-    // Generar conexiones Bezier entre hijos y padres
+    // Conexiones curvas Bezier
     const conns = [];
-    assignedCommits.forEach((child) => {
+    assigned.forEach((child) => {
       if (!child.parents || child.parents.length === 0) return;
       child.parents.forEach((parentHash, pIndex) => {
-        const parent = assignedCommits.find(c => c.hash === parentHash || parentHash.startsWith(c.hash) || c.hash.startsWith(parentHash));
+        const parent = assigned.find(c => c.hash === parentHash || parentHash.startsWith(c.hash) || c.hash.startsWith(parentHash));
         if (parent) {
           conns.push({
             from: child,
@@ -295,11 +326,11 @@ export function BranchConsensusView({ project, api }) {
     });
 
     return {
-      commitsWithLanes: assignedCommits,
+      commitsWithLanes: assigned,
       connections: conns,
       maxLane: Math.min(Math.max(currentLaneCount, 1), 6)
     };
-  }, [data]);
+  }, [activeGit, projectCards]);
 
   const ROW_HEIGHT = 48;
   const LANE_WIDTH = 22;
@@ -314,207 +345,131 @@ export function BranchConsensusView({ project, api }) {
     );
   }
 
-  const git = data?.git || {};
-  const consensusSessions = data?.consensus_sessions || [];
-  const currentBranch = git.current_branch || 'main';
-  const branchesList = git.branches || [currentBranch];
-  const originUrl = git.origin_url;
+  const branchesList = activeGit.branches || [activeGit.current_branch || 'main'];
+  const originUrl = activeGit.origin_url;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', gap: '16px', overflowY: 'auto', paddingRight: '4px' }}>
-      {/* 1. Barra de Herramientas Git & Estado Remoto */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', gap: '14px', overflowY: 'auto', paddingRight: '4px' }}>
+      
+      {/* 1. SELECTOR SUPERIOR: GRAFO & COMMITS vs CONSENSO DIALÉCTICO */}
       <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         backgroundColor: 'var(--bg-card)',
         border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--radius-lg)',
-        padding: '14px 18px',
-        display: 'flex',
+        padding: '8px 12px',
+        boxShadow: 'var(--shadow-sm)',
         flexWrap: 'wrap',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '12px',
-        boxShadow: 'var(--shadow-sm)'
+        gap: '10px'
       }}>
-        {/* Selector de Rama & Estado */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <GitBranch size={16} color="var(--accent-primary)" />
-            <span style={{ fontSize: '13px', fontWeight: 600 }}>Rama activa:</span>
-            <select
-              value={selectedBranch}
-              onChange={(e) => setSelectedBranch(e.target.value)}
-              style={{
-                backgroundColor: 'var(--bg-app)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--accent-primary)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '12px',
-                fontWeight: 600,
-                padding: '5px 10px',
-                borderRadius: 'var(--radius-sm)',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            >
-              {branchesList.map(b => (
-                <option key={b} value={b}>{b} {b === currentBranch ? '(HEAD)' : ''}</option>
-              ))}
-            </select>
-          </div>
-
+        {/* Switcher de Vistas */}
+        <div style={{
+          display: 'inline-flex',
+          backgroundColor: 'var(--bg-subtle)',
+          padding: '3px',
+          borderRadius: 'var(--radius-md)',
+          gap: '4px'
+        }}>
           <button
-            onClick={() => setIsNewBranchModalOpen(true)}
+            onClick={() => setSubTab('graph')}
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '5px 10px',
-              fontSize: '12px',
-              fontWeight: 500,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px dashed var(--border-subtle)',
-              backgroundColor: 'transparent',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer'
-            }}
-          >
-            <Plus size={13} /> Nueva Rama
-          </button>
-
-          {/* Indicador de Remoto */}
-          {originUrl ? (
-            <div style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              fontSize: '11px',
-              fontFamily: 'var(--font-mono)',
-              padding: '3px 8px',
-              borderRadius: 'var(--radius-sm)',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-muted)'
-            }}>
-              <Link size={12} color="var(--accent-success)" />
-              <span style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {originUrl}
-              </span>
-              <button
-                onClick={() => setIsRemoteModalOpen(true)}
-                title="Editar URL de GitHub origin"
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
-              >
-                ✏️
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setIsRemoteModalOpen(true)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                padding: '4px 8px',
-                fontSize: '11px',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--accent-warning)',
-                backgroundColor: 'rgba(245, 158, 11, 0.08)',
-                color: 'var(--accent-warning)',
-                cursor: 'pointer',
-                fontWeight: 600
-              }}
-            >
-              <AlertTriangle size={12} /> Vincular Remoto GitHub
-            </button>
-          )}
-        </div>
-
-        {/* Botones de Operación Git */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <button
-            onClick={handleFetch}
-            disabled={actionLoading}
-            title="Sincronizar referencias remotas (git fetch)"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 500,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-primary)',
-              cursor: actionLoading ? 'wait' : 'pointer'
-            }}
-          >
-            <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Fetch
-          </button>
-
-          <button
-            onClick={handlePull}
-            disabled={actionLoading}
-            title="Traer cambios del remoto (git pull)"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 500,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-primary)',
-              cursor: actionLoading ? 'wait' : 'pointer'
-            }}
-          >
-            <Download size={13} /> Pull
-          </button>
-
-          <button
-            onClick={handleMerge}
-            disabled={actionLoading || selectedBranch === 'main'}
-            title="Fusionar rama de feature en 'main'"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 500,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(99, 102, 241, 0.12)',
-              color: selectedBranch === 'main' ? 'var(--text-muted)' : 'var(--accent-primary)',
-              cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <GitMerge size={13} /> Fusionar en Main
-          </button>
-
-          <button
-            onClick={handlePush}
-            disabled={actionLoading}
-            title="Publicar rama al repositorio remoto (git push -u origin)"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
               padding: '6px 14px',
               fontSize: '12px',
-              fontWeight: 600,
+              fontWeight: subTab === 'graph' ? 700 : 500,
               borderRadius: 'var(--radius-sm)',
               border: 'none',
-              backgroundColor: 'var(--accent-primary)',
-              color: '#ffffff',
-              cursor: actionLoading ? 'wait' : 'pointer',
-              boxShadow: 'var(--shadow-sm)'
+              backgroundColor: subTab === 'graph' ? 'var(--bg-surface)' : 'transparent',
+              color: subTab === 'graph' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              boxShadow: subTab === 'graph' ? 'var(--shadow-sm)' : 'none',
+              transition: 'var(--transition)'
             }}
           >
-            <Upload size={13} /> Publicar Rama
+            <GitCommit size={14} color={subTab === 'graph' ? 'var(--accent-primary)' : 'currentColor'} />
+            <span>Grafo & Commits</span>
+          </button>
+
+          <button
+            onClick={() => setSubTab('consensus')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: subTab === 'consensus' ? 700 : 500,
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              backgroundColor: subTab === 'consensus' ? 'var(--bg-surface)' : 'transparent',
+              color: subTab === 'consensus' ? 'var(--text-primary)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              boxShadow: subTab === 'consensus' ? 'var(--shadow-sm)' : 'none',
+              transition: 'var(--transition)'
+            }}
+          >
+            <Scale size={14} color={subTab === 'consensus' ? 'var(--accent-success)' : 'currentColor'} />
+            <span>Consenso Dialéctico ({consensusSessions.length})</span>
           </button>
         </div>
+
+        {/* Si estamos en el Grafo, Selector de Doble Repositorio (App vs Gobernanza OKF) */}
+        {subTab === 'graph' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>REPOSITORIO:</span>
+            <div style={{
+              display: 'inline-flex',
+              backgroundColor: 'var(--bg-subtle)',
+              padding: '2px',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)'
+            }}>
+              <button
+                onClick={() => setRepoTarget('app')}
+                title="Ver código fuente de desarrollo y ramas de la app"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  backgroundColor: repoTarget === 'app' ? '#6366f1' : 'transparent',
+                  color: repoTarget === 'app' ? '#ffffff' : 'var(--text-secondary)',
+                  cursor: 'pointer'
+                }}
+              >
+                <FileCode size={12} /> Código de la App (app/)
+              </button>
+
+              <button
+                onClick={() => setRepoTarget('gov')}
+                title="Ver documentación OKF y rama huérfana inmutable"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  backgroundColor: repoTarget === 'gov' ? '#10b981' : 'transparent',
+                  color: repoTarget === 'gov' ? '#ffffff' : 'var(--text-secondary)',
+                  cursor: 'pointer'
+                }}
+              >
+                <FolderTree size={12} /> Gobernanza OKF (Rama Huérfana)
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Banner de Feedback si hay acción */}
@@ -541,403 +496,638 @@ export function BranchConsensusView({ project, api }) {
         </div>
       )}
 
-      {/* 2. Grafo Visual Interactivo de Commits & Ramas */}
-      <div style={{
-        backgroundColor: 'var(--bg-card)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '18px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        boxShadow: 'var(--shadow-sm)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <GitCommit size={18} color="var(--accent-primary)" />
-            <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
-              Grafo Visual de Commits & Ramas
-            </h3>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              ({commitsWithLanes.length} commits registrados)
-            </span>
-          </div>
-
-          {/* Leyenda de Ramas */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11px' }}>
-            {branchesList.slice(0, 4).map((b, bIdx) => (
-              <div key={b} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <span style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: LANE_COLORS[bIdx % LANE_COLORS.length]
-                }} />
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{b}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Visual Graph Viewport */}
-        {commitsWithLanes.length === 0 ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-            No hay commits registrados en este repositorio todavía.
-          </div>
-        ) : (
+      {/* ======================================================== */}
+      {/* SUBTAB 1: GRAFO VISUAL & COMMITS                         */}
+      {/* ======================================================== */}
+      {subTab === 'graph' && (
+        <>
+          {/* Barra de Herramientas Git Contextual */}
           <div style={{
-            position: 'relative',
+            backgroundColor: 'var(--bg-card)',
             border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-md)',
-            backgroundColor: 'var(--bg-app)',
-            overflowX: 'auto',
-            maxHeight: '440px',
-            overflowY: 'auto'
+            borderRadius: 'var(--radius-lg)',
+            padding: '12px 18px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            boxShadow: 'var(--shadow-sm)'
           }}>
-            {/* SVG Connections Layer */}
-            <svg
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: `${SVG_PADDING_LEFT + (maxLane + 1) * LANE_WIDTH + 20}px`,
-                height: `${commitsWithLanes.length * ROW_HEIGHT}px`,
-                pointerEvents: 'none',
-                zIndex: 1
-              }}
-            >
-              <defs>
-                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="3" result="blur" />
-                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                </filter>
-              </defs>
+            {/* Rama Activa y Creador */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <GitBranch size={16} color={repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)'} />
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>Rama activa:</span>
+                <select
+                  value={selectedBranch}
+                  onChange={(e) => setSelectedBranch(e.target.value)}
+                  style={{
+                    backgroundColor: 'var(--bg-app)',
+                    border: '1px solid var(--border-subtle)',
+                    color: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    padding: '5px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {branchesList.map(b => (
+                    <option key={b} value={b}>
+                      {b} {b === activeGit.current_branch ? '(HEAD)' : ''} {b.startsWith('orphan-') ? '[HUÉRFANA]' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              {/* Conexiones Curvas entre Commits */}
-              {connections.map((conn, idx) => {
-                const x1 = SVG_PADDING_LEFT + conn.from.lane * LANE_WIDTH + 8;
-                const y1 = conn.from.index * ROW_HEIGHT + ROW_HEIGHT / 2;
-                const x2 = SVG_PADDING_LEFT + conn.to.lane * LANE_WIDTH + 8;
-                const y2 = conn.to.index * ROW_HEIGHT + ROW_HEIGHT / 2;
-                const midY = (y1 + y2) / 2;
+              <button
+                onClick={() => setIsNewBranchModalOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '5px 10px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px dashed var(--border-subtle)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer'
+                }}
+              >
+                <Plus size={13} /> Nueva Rama
+              </button>
+            </div>
 
-                const pathD = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+            {/* Operaciones Git (Fetch, Pull, Merge, Push) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={handleFetch}
+                disabled={actionLoading}
+                title="Sincronizar referencias remotas (git fetch)"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-primary)',
+                  cursor: actionLoading ? 'wait' : 'pointer'
+                }}
+              >
+                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Fetch
+              </button>
 
-                return (
-                  <path
-                    key={`conn-${idx}`}
-                    d={pathD}
-                    stroke={conn.color}
-                    strokeWidth="2.5"
-                    strokeDasharray={conn.isMerge ? "4 3" : "none"}
-                    fill="none"
-                    opacity={hoveredCommit && (hoveredCommit.hash === conn.from.hash || hoveredCommit.hash === conn.to.hash) ? 1 : 0.75}
-                  />
-                );
-              })}
-            </svg>
+              <button
+                onClick={handlePull}
+                disabled={actionLoading}
+                title="Traer cambios del remoto (git pull)"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-primary)',
+                  cursor: actionLoading ? 'wait' : 'pointer'
+                }}
+              >
+                <Download size={13} /> Pull
+              </button>
 
-            {/* Commits Rows List */}
-            <div style={{ position: 'relative', zIndex: 2 }}>
-              {commitsWithLanes.map((c) => {
-                const isHovered = hoveredCommit?.hash === c.hash;
-                const isSelected = selectedCommit?.hash === c.hash;
-                const nodeX = SVG_PADDING_LEFT + c.lane * LANE_WIDTH + 8;
-                const nodeY = c.index * ROW_HEIGHT + ROW_HEIGHT / 2;
+              <button
+                onClick={handleMerge}
+                disabled={actionLoading || selectedBranch === 'main'}
+                title="Fusionar rama en 'main'"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(99, 102, 241, 0.12)',
+                  color: selectedBranch === 'main' ? 'var(--text-muted)' : 'var(--accent-primary)',
+                  cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
+                }}
+              >
+                <GitMerge size={13} /> Fusionar en Main
+              </button>
+
+              <button
+                onClick={handlePush}
+                disabled={actionLoading}
+                title="Publicar rama al repositorio remoto (git push -u origin)"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                  color: '#ffffff',
+                  cursor: actionLoading ? 'wait' : 'pointer',
+                  boxShadow: 'var(--shadow-sm)'
+                }}
+              >
+                <Upload size={13} /> Publicar Rama
+              </button>
+            </div>
+          </div>
+
+          {/* Grafo de Commits SVG Nativo */}
+          <div style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '18px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '14px',
+            boxShadow: 'var(--shadow-sm)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <GitCommit size={18} color={repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)'} />
+                <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                  {repoTarget === 'app' ? 'Grafo de Commits de la Aplicación' : 'Grafo de Gobernanza & Rama Huérfana'}
+                </h3>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  ({commitsWithLanes.length} commits)
+                </span>
+              </div>
+
+              {/* Leyenda de Ramas */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11px' }}>
+                {branchesList.slice(0, 4).map((b, bIdx) => (
+                  <div key={b} style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <span style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      backgroundColor: PALETTE[bIdx % PALETTE.length]
+                    }} />
+                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{b}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {commitsWithLanes.length === 0 ? (
+              <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                No hay commits registrados en este repositorio todavía.
+              </div>
+            ) : (
+              <div style={{
+                position: 'relative',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'var(--bg-app)',
+                overflowX: 'auto',
+                maxHeight: '460px',
+                overflowY: 'auto'
+              }}>
+                {/* SVG Connections Layer */}
+                <svg
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: `${SVG_PADDING_LEFT + (maxLane + 1) * LANE_WIDTH + 20}px`,
+                    height: `${commitsWithLanes.length * ROW_HEIGHT}px`,
+                    pointerEvents: 'none',
+                    zIndex: 1
+                  }}
+                >
+                  {/* Conexiones Curvas entre Commits (Algoritmo SourceGit) */}
+                  {connections.map((conn, idx) => {
+                    const x1 = SVG_PADDING_LEFT + conn.from.lane * LANE_WIDTH + 8;
+                    const y1 = conn.from.index * ROW_HEIGHT + ROW_HEIGHT / 2;
+                    const x2 = SVG_PADDING_LEFT + conn.to.lane * LANE_WIDTH + 8;
+                    const y2 = conn.to.index * ROW_HEIGHT + ROW_HEIGHT / 2;
+                    const midY = (y1 + y2) / 2;
+
+                    // Curva Bezier cúbica suave
+                    const pathD = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+
+                    return (
+                      <path
+                        key={`conn-${idx}`}
+                        d={pathD}
+                        stroke={conn.color}
+                        strokeWidth="2.5"
+                        strokeDasharray={conn.isMerge ? "4 3" : "none"}
+                        fill="none"
+                        opacity={hoveredCommit && (hoveredCommit.hash === conn.from.hash || hoveredCommit.hash === conn.to.hash) ? 1 : 0.75}
+                      />
+                    );
+                  })}
+                </svg>
+
+                {/* Commits Rows List */}
+                <div style={{ position: 'relative', zIndex: 2 }}>
+                  {commitsWithLanes.map((c) => {
+                    const isHovered = hoveredCommit?.hash === c.hash;
+                    const isSelected = selectedCommit?.hash === c.hash;
+                    const nodeX = SVG_PADDING_LEFT + c.lane * LANE_WIDTH + 8;
+                    const nodeY = c.index * ROW_HEIGHT + ROW_HEIGHT / 2;
+
+                    return (
+                      <div
+                        key={c.hash}
+                        onMouseEnter={() => setHoveredCommit(c)}
+                        onMouseLeave={() => setHoveredCommit(null)}
+                        onClick={() => setSelectedCommit(isSelected ? null : c)}
+                        style={{
+                          height: `${ROW_HEIGHT}px`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          paddingLeft: `${SVG_PADDING_LEFT + (maxLane + 1) * LANE_WIDTH + 14}px`,
+                          paddingRight: '16px',
+                          borderBottom: '1px solid var(--border-subtle)',
+                          backgroundColor: isSelected
+                            ? 'rgba(99, 102, 241, 0.12)'
+                            : isHovered
+                            ? 'var(--bg-subtle)'
+                            : 'transparent',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s'
+                        }}
+                      >
+                        {/* SVG Node Disc */}
+                        <div
+                          style={{
+                            position: 'absolute',
+                            left: `${nodeX - 7}px`,
+                            top: `${nodeY - 7}px`,
+                            width: '14px',
+                            height: '14px',
+                            borderRadius: '50%',
+                            backgroundColor: 'var(--bg-app)',
+                            border: `3px solid ${c.color}`,
+                            boxShadow: (isHovered || c.is_head) ? `0 0 10px ${c.color}` : 'none',
+                            transform: isHovered ? 'scale(1.25)' : 'scale(1)',
+                            transition: 'transform 0.15s, box-shadow 0.15s',
+                            zIndex: 10
+                          }}
+                        />
+
+                        {/* Commit Content Row */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
+                            {/* Branch / Head chips */}
+                            {c.refs && (
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '2px 7px',
+                                borderRadius: '10px',
+                                backgroundColor: c.is_head ? (repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)') : 'var(--bg-subtle)',
+                                color: c.is_head ? '#ffffff' : 'var(--text-primary)',
+                                border: '1px solid var(--border-subtle)',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <GitBranch size={10} />
+                                {c.refs.replace(/[()]/g, '')}
+                              </span>
+                            )}
+
+                            {/* Enlace Bidireccional a Tarjeta Kanban */}
+                            {c.linkedCardId && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenCard && onOpenCard(c.linkedCardId);
+                                }}
+                                title={`Abrir detalles y criterios de la tarea ${c.linkedCardId}`}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontFamily: 'var(--font-mono)',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  padding: '2px 7px',
+                                  borderRadius: '6px',
+                                  border: '1px solid rgba(99, 102, 241, 0.4)',
+                                  backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                  color: 'var(--accent-primary)',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <CheckSquare size={11} /> {c.linkedCardId}
+                              </button>
+                            )}
+
+                            <span style={{
+                              fontSize: '13px',
+                              fontWeight: isSelected ? 600 : 500,
+                              color: 'var(--text-primary)',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }}>
+                              {c.message}
+                            </span>
+                          </div>
+
+                          {/* Right Meta: Autor, Fecha, Hash */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>{c.author}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>
+                              {c.date ? new Date(c.date).toLocaleDateString() : ''}
+                            </span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                copyToClipboard(c.hash, c.hash);
+                              }}
+                              title="Copiar hash del commit"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '10px',
+                                padding: '2px 6px',
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-subtle)',
+                                color: copiedHash === c.hash ? 'var(--accent-success)' : 'var(--text-primary)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              {copiedHash === c.hash ? <Check size={11} /> : <Copy size={11} />}
+                              {c.hash}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Panel de Inspección de Commit Seleccionado */}
+            {selectedCommit && (
+              <div style={{
+                backgroundColor: 'var(--bg-subtle)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '14px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Info size={15} color="var(--accent-primary)" />
+                    <span style={{ fontSize: '13px', fontWeight: 600 }}>Inspección del Commit:</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--accent-primary)' }}>
+                      {selectedCommit.hash}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setSelectedCommit(null)}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <div style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                  {selectedCommit.message}
+                </div>
+                <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span>Autor: <strong>{selectedCommit.author}</strong></span>
+                  <span>Fecha: <strong>{selectedCommit.date}</strong></span>
+                  <span>Padres: <strong>{selectedCommit.parents ? selectedCommit.parents.join(', ') : 'Ninguno'}</strong></span>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ======================================================== */}
+      {/* SUBTAB 2: CONSENSO DIALÉCTICO (3-TURN A2A RFC)           */}
+      {/* ======================================================== */}
+      {subTab === 'consensus' && (
+        <div style={{
+          backgroundColor: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '18px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '14px',
+          boxShadow: 'var(--shadow-sm)'
+        }}>
+          <div>
+            <h3 style={{ fontSize: '16px', fontWeight: 600, margin: '0 0 4px 0' }}>
+              Consenso Dialéctico de Agentes (A2A 3-Turn RFC)
+            </h3>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+              Registro inmutable de deliberaciones y síntesis de los agentes autónomos vinculadas a tarjetas Kanban y a la gobernanza OKF.
+            </p>
+          </div>
+
+          {consensusSessions.length === 0 ? (
+            <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              No hay sesiones de consenso registradas para este proyecto aún.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {consensusSessions.map((session) => {
+                const isExpanded = expandedSessions[session.session_id];
+                const verdict = session.verdict_signal || (session.status === 'AGREED' ? 'ACCEPT' : session.status);
+                const isAccepted = verdict === 'ACCEPT' || verdict === 'AGREED';
+                const isCompromise = verdict === 'COMPROMISE';
 
                 return (
                   <div
-                    key={c.hash}
-                    onMouseEnter={() => setHoveredCommit(c)}
-                    onMouseLeave={() => setHoveredCommit(null)}
-                    onClick={() => setSelectedCommit(isSelected ? null : c)}
+                    key={session.session_id}
                     style={{
-                      height: `${ROW_HEIGHT}px`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      paddingLeft: `${SVG_PADDING_LEFT + (maxLane + 1) * LANE_WIDTH + 14}px`,
-                      paddingRight: '16px',
-                      borderBottom: '1px solid var(--border-subtle)',
-                      backgroundColor: isSelected
-                        ? 'rgba(99, 102, 241, 0.12)'
-                        : isHovered
-                        ? 'var(--bg-subtle)'
-                        : 'transparent',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s'
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-md)',
+                      backgroundColor: 'var(--bg-surface)',
+                      overflow: 'hidden'
                     }}
                   >
-                    {/* SVG Node Disc */}
+                    {/* Encabezado Sesión */}
                     <div
+                      onClick={() => toggleSession(session.session_id)}
                       style={{
-                        position: 'absolute',
-                        left: `${nodeX - 7}px`,
-                        top: `${nodeY - 7}px`,
-                        width: '14px',
-                        height: '14px',
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--bg-app)',
-                        border: `3px solid ${c.color}`,
-                        boxShadow: (isHovered || c.is_head) ? `0 0 10px ${c.color}` : 'none',
-                        transform: isHovered ? 'scale(1.25)' : 'scale(1)',
-                        transition: 'transform 0.15s, box-shadow 0.15s',
-                        zIndex: 10
+                        padding: '14px 18px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        cursor: 'pointer',
+                        backgroundColor: 'var(--bg-subtle)',
+                        flexWrap: 'wrap',
+                        gap: '10px'
                       }}
-                    />
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '13px', fontWeight: 700 }}>
+                          {session.session_id}
+                        </span>
 
-                    {/* Commit Content Row */}
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '14px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        {/* Ref chips (HEAD, Branches) */}
-                        {c.refs && (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            fontWeight: 700,
-                            padding: '2px 7px',
-                            borderRadius: '10px',
-                            backgroundColor: c.is_head ? 'var(--accent-primary)' : 'var(--bg-subtle)',
-                            color: c.is_head ? '#ffffff' : 'var(--accent-primary)',
-                            border: '1px solid var(--border-subtle)',
-                            whiteSpace: 'nowrap'
-                          }}>
-                            <GitBranch size={10} />
-                            {c.refs.replace(/[()]/g, '')}
-                          </span>
+                        {/* Enlace Bidireccional a Tarjeta Kanban */}
+                        {session.card_id && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenCard && onOpenCard(session.card_id);
+                            }}
+                            title="Abrir detalles de la tarjeta vinculada"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              fontFamily: 'var(--font-mono)',
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                              border: '1px solid rgba(99, 102, 241, 0.4)',
+                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                              color: 'var(--accent-primary)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <CheckSquare size={12} /> {session.card_id}
+                          </button>
+                        )}
+
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          • Componente: <strong>{session.component || 'General'}</strong>
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        {/* Enlace a Rama en Grafo */}
+                        {session.agreed_branch && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedBranch(session.agreed_branch);
+                              setSubTab('graph');
+                            }}
+                            title="Ver rama acordada en el Grafo de Commits"
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              padding: '2px 8px',
+                              borderRadius: '6px',
+                              border: '1px solid var(--border-subtle)',
+                              backgroundColor: 'var(--bg-app)',
+                              color: 'var(--accent-primary)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <GitBranch size={11} /> {session.agreed_branch} →
+                          </button>
                         )}
 
                         <span style={{
-                          fontSize: '13px',
-                          fontWeight: isSelected ? 600 : 500,
-                          color: 'var(--text-primary)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          padding: '3px 10px',
+                          borderRadius: '4px',
+                          backgroundColor: isAccepted ? 'rgba(16, 185, 129, 0.15)' : isCompromise ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          color: isAccepted ? 'var(--accent-success)' : isCompromise ? 'var(--accent-warning)' : '#ef4444'
                         }}>
-                          {c.message}
+                          {verdict || 'EN CURSO'}
                         </span>
-                      </div>
-
-                      {/* Right Meta: Hash, Author, Date */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
-                        <span style={{ color: 'var(--text-secondary)' }}>{c.author}</span>
-                        <span style={{ fontFamily: 'var(--font-mono)' }}>
-                          {c.date ? new Date(c.date).toLocaleDateString() : ''}
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            copyToClipboard(c.hash, c.hash);
-                          }}
-                          title="Copiar hash del commit"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            padding: '2px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border-subtle)',
-                            backgroundColor: 'var(--bg-subtle)',
-                            color: copiedHash === c.hash ? 'var(--accent-success)' : 'var(--text-primary)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {copiedHash === c.hash ? <Check size={11} /> : <Copy size={11} />}
-                          {c.hash}
-                        </button>
                       </div>
                     </div>
+
+                    {/* Desglose de los 3 Turnos */}
+                    {isExpanded && (
+                      <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {session.turns.map((turn, tIdx) => (
+                          <div
+                            key={tIdx}
+                            style={{
+                              padding: '12px 14px',
+                              borderRadius: 'var(--radius-md)',
+                              border: '1px solid var(--border-subtle)',
+                              backgroundColor: 'var(--bg-app)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>
+                                Turno {turn.turn || tIdx + 1}: {turn.stage}
+                              </span>
+                              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', fontSize: '11px' }}>
+                                Emitido por: {turn.sender_node}
+                              </span>
+                            </div>
+
+                            {/* Contenido legible del Turno */}
+                            {turn.intent && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                                <strong>Propuesta:</strong> {turn.intent}
+                              </div>
+                            )}
+                            {turn.rationale && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                <strong>Justificación (OKF):</strong> {turn.rationale}
+                              </div>
+                            )}
+                            {turn.critique && (
+                              <div style={{ fontSize: '12px', color: 'var(--accent-warning)' }}>
+                                <strong>Crítica Técnica:</strong> {turn.critique}
+                              </div>
+                            )}
+                            {turn.synthesis_notes && (
+                              <div style={{ fontSize: '12px', color: 'var(--accent-success)' }}>
+                                <strong>Síntesis Final:</strong> {turn.synthesis_notes}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
-          </div>
-        )}
-
-        {/* Panel de Inspección de Commit Seleccionado */}
-        {selectedCommit && (
-          <div style={{
-            backgroundColor: 'var(--bg-subtle)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-md)',
-            padding: '14px 16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Info size={15} color="var(--accent-primary)" />
-                <span style={{ fontSize: '13px', fontWeight: 600 }}>Inspección del Commit:</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--accent-primary)' }}>
-                  {selectedCommit.hash}
-                </span>
-              </div>
-              <button
-                onClick={() => setSelectedCommit(null)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>
-              {selectedCommit.message}
-            </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              <span>Autor: <strong>{selectedCommit.author}</strong></span>
-              <span>Fecha: <strong>{selectedCommit.date}</strong></span>
-              <span>Padres: <strong>{selectedCommit.parents ? selectedCommit.parents.join(', ') : 'Ninguno'}</strong></span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 3. Sección de Consenso Dialéctico (3-Turn A2A RFC) */}
-      <div style={{
-        backgroundColor: 'var(--bg-card)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '18px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        boxShadow: 'var(--shadow-sm)'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <h3 style={{ fontSize: '15px', fontWeight: 600, margin: '0 0 2px 0' }}>
-              Consenso Dialéctico de Agentes (3-Turn A2A RFC)
-            </h3>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
-              Registro inmutable de acuerdos y síntesis de los agentes autónomos para este proyecto.
-            </p>
-          </div>
-          <span style={{
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            backgroundColor: 'var(--bg-subtle)',
-            padding: '2px 8px',
-            borderRadius: '10px',
-            color: 'var(--text-muted)'
-          }}>
-            {consensusSessions.length} sesiones
-          </span>
+          )}
         </div>
-
-        {consensusSessions.length === 0 ? (
-          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-            No se han registrado sesiones de consenso dialéctico aún para este proyecto.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {consensusSessions.map((session) => {
-              const isExpanded = expandedSessions[session.session_id];
-              const verdict = session.verdict_signal;
-              const isAccepted = verdict === 'ACCEPT';
-              const isCompromise = verdict === 'COMPROMISE';
-
-              return (
-                <div
-                  key={session.session_id}
-                  style={{
-                    border: '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-md)',
-                    backgroundColor: 'var(--bg-surface)',
-                    overflow: 'hidden'
-                  }}
-                >
-                  {/* Encabezado Sesión */}
-                  <div
-                    onClick={() => toggleSession(session.session_id)}
-                    style={{
-                      padding: '12px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer',
-                      backgroundColor: 'var(--bg-subtle)'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 700 }}>
-                        {session.session_id}
-                      </span>
-                      {session.card_id && (
-                        <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: 600 }}>
-                          [{session.card_id}]
-                        </span>
-                      )}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        backgroundColor: isAccepted ? 'rgba(16, 185, 129, 0.15)' : isCompromise ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                        color: isAccepted ? 'var(--accent-success)' : isCompromise ? 'var(--accent-warning)' : '#ef4444'
-                      }}>
-                        {verdict || 'EN CURSO'}
-                      </span>
-                      {session.agreed_branch && (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
-                          Rama: {session.agreed_branch}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Cuerpo Sesión (3 Turnos) */}
-                  {isExpanded && (
-                    <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {session.turns.map((turn, tIdx) => (
-                        <div
-                          key={tIdx}
-                          style={{
-                            padding: '10px 12px',
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border-subtle)',
-                            backgroundColor: 'var(--bg-app)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '4px'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
-                            <strong style={{ color: 'var(--accent-primary)' }}>
-                              Turno {tIdx + 1}: {turn.stage}
-                            </strong>
-                            <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                              {turn.sender_node_uuid}
-                            </span>
-                          </div>
-                          <pre style={{
-                            margin: 0,
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '11px',
-                            color: 'var(--text-secondary)',
-                            whiteSpace: 'pre-wrap',
-                            lineHeight: 1.4
-                          }}>
-                            {turn.payload_rfc_yaml}
-                          </pre>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Modal: Nueva Rama */}
       {isNewBranchModalOpen && (
@@ -971,7 +1161,9 @@ export function BranchConsensusView({ project, api }) {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>Crear Nueva Rama Local</h3>
+              <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                Crear Nueva Rama en {repoTarget === 'app' ? 'App' : 'Gobernanza'}
+              </h3>
               <button
                 onClick={() => setIsNewBranchModalOpen(false)}
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
@@ -1035,115 +1227,6 @@ export function BranchConsensusView({ project, api }) {
                   }}
                 >
                   Crear y Activar
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Vincular Repositorio Remoto Origin */}
-      {isRemoteModalOpen && (
-        <div
-          onClick={() => setIsRemoteModalOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            backdropFilter: 'blur(3px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 300,
-            padding: '16px'
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-lg)',
-              padding: '22px',
-              width: '100%',
-              maxWidth: '480px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px',
-              boxShadow: 'var(--shadow-lg)'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Link size={18} color="var(--accent-primary)" />
-                <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>Vincular Repositorio Remoto GitHub</h3>
-              </div>
-              <button
-                onClick={() => setIsRemoteModalOpen(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
-              Ingresa la URL del repositorio en GitHub para este proyecto (ej: <code>https://github.com/usuario/mi-repo.git</code>). Esto configurará el control remoto <code>origin</code> para poder publicar y descargar ramas.
-            </p>
-            <form onSubmit={handleSetRemoteUrl} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>
-                  URL Remota (HTTPS / SSH)
-                </label>
-                <input
-                  autoFocus
-                  required
-                  type="text"
-                  value={remoteUrlInput}
-                  onChange={(e) => setRemoteUrlInput(e.target.value)}
-                  placeholder="https://github.com/usuario/mi-repositorio.git"
-                  style={{
-                    width: '100%',
-                    backgroundColor: 'var(--bg-app)',
-                    border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'var(--font-mono)',
-                    padding: '9px 12px',
-                    borderRadius: 'var(--radius-md)',
-                    fontSize: '12px',
-                    outline: 'none'
-                  }}
-                />
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
-                <button
-                  type="button"
-                  onClick={() => setIsRemoteModalOpen(false)}
-                  style={{
-                    padding: '7px 12px',
-                    fontSize: '12px',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-subtle)',
-                    backgroundColor: 'transparent',
-                    color: 'var(--text-primary)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={actionLoading}
-                  style={{
-                    padding: '7px 16px',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: 'var(--accent-primary)',
-                    color: '#ffffff',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Guardar y Vincular
                 </button>
               </div>
             </form>

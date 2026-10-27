@@ -233,6 +233,7 @@ export default function App() {
           <ProjectWorkspace
             project={activeProject}
             activeTab={activeTab}
+            onTabChange={setActiveTab}
             onBack={() => {
               setActiveProject(null);
               loadProjects();

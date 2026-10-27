@@ -1,15 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
 import { BranchConsensusView } from './BranchConsensusView';
 import { CardDetailModal } from './Modals';
 
-export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, taskTrigger = 0 }) {
+export function ProjectWorkspace({
+  project,
+  activeTab = 'kanban',
+  onTabChange,
+  onBack,
+  api,
+  taskTrigger = 0
+}) {
   const [cards, setCards] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
+  const [targetBranch, setTargetBranch] = useState('');
 
-  const loadCards = async () => {
+  const loadCards = useCallback(async () => {
     if (!api || !project) return;
     try {
       const res = await api.get_kanban_board();
@@ -25,11 +33,11 @@ export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, t
     } catch (e) {
       console.error("Error loading cards:", e);
     }
-  };
+  }, [api, project, selectedCard]);
 
   useEffect(() => {
     loadCards();
-  }, [project, api, taskTrigger]);
+  }, [loadCards, taskTrigger]);
 
   const handleCardMove = async (cardId, targetStatus) => {
     if (!api) return;
@@ -97,6 +105,23 @@ export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, t
     }
   };
 
+  const handleOpenCardById = (cardId) => {
+    const found = cards.find(c => c.card_id === cardId);
+    if (found) {
+      setSelectedCard(found);
+    } else {
+      // Intentar buscar creando un objeto dummy para abrir o consultar
+      setSelectedCard({ card_id: cardId, title: `Tarea ${cardId}`, description: '', status: 'in_progress' });
+    }
+  };
+
+  const handleNavigateToBranch = (branchName) => {
+    setTargetBranch(branchName);
+    if (onTabChange) {
+      onTabChange('changes');
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
       {/* Main Workspace View Content */}
@@ -109,7 +134,12 @@ export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, t
           />
         )}
         {(activeTab === 'changes' || activeTab === 'branches') && (
-          <BranchConsensusView project={project} api={api} />
+          <BranchConsensusView
+            project={project}
+            api={api}
+            initialBranch={targetBranch}
+            onOpenCard={handleOpenCardById}
+          />
         )}
         {activeTab === 'okf' && (
           <OKFGovernanceView project={project} api={api} />
@@ -126,6 +156,7 @@ export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, t
         onClose={() => setSelectedCard(null)}
         onSave={handleSaveCard}
         onAcceptTask={handleAcceptCard}
+        onNavigateToBranch={handleNavigateToBranch}
       />
     </div>
   );

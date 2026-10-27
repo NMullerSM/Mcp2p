@@ -441,7 +441,7 @@ export function DeleteProjectModal({ isOpen, project, onClose, onConfirm }) {
   );
 }
 
-export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask }) {
+export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, onNavigateToBranch }) {
   if (!isOpen || !card) return null;
 
   const [title, setTitle] = useState(card.title || '');
@@ -554,11 +554,36 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask })
 
         {/* Rama Git vinculada */}
         <div>
-          <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <GitBranch size={13} color="var(--accent-primary)" /> Rama Git Asociada
-            </span>
-          </label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <label style={{ fontSize: '12px', fontWeight: 600 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <GitBranch size={13} color="var(--accent-primary)" /> Rama Git Asociada
+              </span>
+            </label>
+            {branchRef && onNavigateToBranch && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onNavigateToBranch(branchRef);
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent-primary)',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  padding: 0
+                }}
+              >
+                Ver en Grafo de Commits →
+              </button>
+            )}
+          </div>
           <input
             type="text"
             value={branchRef}
