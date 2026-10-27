@@ -10,15 +10,24 @@
 <body>
 
   <!-- =========================================================================
-       Header Principal (Ley de Hick: Máximo 3 acciones primarias)
+       Header Principal (Ley de Hick: Acciones Primarias + Selector de Proyecto)
        ========================================================================= -->
   <header class="app-header">
     <div class="brand">
       <span class="logo-badge">MCP2P</span>
-      <h1 class="app-title">Colaboración Agéntica</h1>
+      
+      <!-- Selector de Proyecto (Aislamiento de Doble Repositorio) -->
+      <div class="project-selector-wrapper">
+        <select id="project-selector" class="project-dropdown" title="Seleccionar contexto de proyecto activo">
+          <option value="">Cargando proyectos...</option>
+        </select>
+        <button id="btn-new-project" class="btn btn-sm" title="Crear nuevo proyecto aislado con doble repositorio (app + governance)">
+          + Proyecto
+        </button>
+      </div>
     </div>
 
-    <!-- 3 Acciones Primarias -->
+    <!-- 3 Acciones Primarias de Trabajo -->
     <div class="header-actions">
       <!-- Acción 1: Crear Tarea -->
       <button id="btn-new-task" class="btn btn-primary" title="Crear nueva tarea en Backlog (Ctrl+N)">
@@ -95,12 +104,12 @@
        ========================================================================= -->
   <footer class="app-statusbar">
     <div class="status-left">
-      <span><span class="pulse-indicator"></span> SISTEMA ACTIVO</span>
+      <span><span class="pulse-indicator"></span> ACTIVO</span>
+      <span id="status-project">Proyecto: Cargando...</span>
       <span id="status-node">Nodo: Conectando...</span>
-      <span id="status-wal">SQLite WAL: Inicializando...</span>
     </div>
     <div class="status-right">
-      <span>Ley de Hick + Nielsen</span>
+      <span id="status-wal">SQLite WAL: OK</span>
       <span id="status-os">Linux</span>
     </div>
   </footer>
@@ -116,18 +125,18 @@
 
     <div class="guide-body">
       <div class="guide-section">
-        <h4>1. ¿Cómo funciona el Tablero?</h4>
-        <p>Las tareas nacen en <strong>Por Hacer</strong> a coste de 0 tokens. Cuando un agente o desarrollador la asume, se transiciona a <strong>En Proceso</strong> reservando un candado de lease temporal.</p>
+        <h4>1. Subsistema de Proyectos</h4>
+        <p>Cada proyecto tiene un <code>UUIDv4</code> único y dos repositorios aislados: <code>app/</code> (código ejecutable) y <code>governance/</code> (OKF y rama huérfana). Nunca se mezclan contextos de proyectos distintos.</p>
       </div>
 
       <div class="guide-section">
-        <h4>2. Leases de Concurrencia (Candados)</h4>
+        <h4>2. ¿Cómo funciona el Tablero?</h4>
+        <p>Las tareas nacen en <strong>Por Hacer</strong> a coste de 0 tokens. Al asumirse, pasan a <strong>En Proceso</strong> reservando un candado de lease temporal.</p>
+      </div>
+
+      <div class="guide-section">
+        <h4>3. Leases de Concurrencia</h4>
         <p>Cada tarea en proceso tiene un <code>lease_expires_at</code> (ej. 30 min). Si otro nodo intenta modificarla, el sistema bloquea la colisión atómicamente en SQLite.</p>
-      </div>
-
-      <div class="guide-section">
-        <h4>3. Canal A2A y Gobernanza OKF</h4>
-        <p>Los agentes comunican estados operacionales mediante MessagePack binario a 0 tokens y sintetizan resúmenes de arquitectura en 3 turnos para no inflar contextos.</p>
       </div>
 
       <div class="guide-section">
@@ -179,6 +188,38 @@
       <div class="modal-footer">
         <button id="cancel-modal-btn" class="btn">Cancelar</button>
         <button id="save-task-btn" class="btn btn-primary">Crear Tarea</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       Modal para Creación de Nuevo Proyecto (Doble Repositorio)
+       ========================================================================= -->
+  <div id="new-project-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 style="font-size: 15px; font-weight: 600;">Crear Nuevo Proyecto Aislado</h3>
+      <p style="font-size: 12px; color: var(--text-secondary);">
+        Se generará un UUID único y la estructura de doble repositorio: <code>app/</code> (código) y <code>governance/</code> (OKF y rama huérfana).
+      </p>
+
+      <div class="form-group">
+        <label class="form-label" for="input-project-name">Nombre del Proyecto</label>
+        <input id="input-project-name" class="form-input" type="text" placeholder="Ej: Mi Backend API" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-code-url">URL Remota Repositorio de Código (Opcional)</label>
+        <input id="input-code-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-app.git" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-gov-url">URL Remota Gobernanza OKF (Opcional)</label>
+        <input id="input-gov-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-app-gov.git" />
+      </div>
+
+      <div class="modal-footer">
+        <button id="cancel-project-modal-btn" class="btn">Cancelar</button>
+        <button id="save-project-btn" class="btn btn-primary">Crear Proyecto</button>
       </div>
     </div>
   </div>

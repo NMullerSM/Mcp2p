@@ -107,4 +107,12 @@ class KanbanController {
   }
 }
 
-window.kanbanController = new KanbanController();
+function initKanban() {
+  window.kanbanController = new KanbanController();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initKanban);
+} else {
+  initKanban();
+}

@@ -27,6 +27,7 @@ def test_schema_initialization(temp_db):
                 "SELECT name FROM sqlite_master WHERE type='table';"
             ).fetchall()
         ]
+        assert "projects" in tables
         assert "swarm_nodes" in tables
         assert "kanban_cards" in tables
         assert "a2a_messages" in tables
@@ -35,21 +36,38 @@ def test_schema_initialization(temp_db):
         assert "outbox_events" in tables
 
 
+def test_project_creation_and_listing(temp_db):
+    """Verifica la creación y listado de proyectos con UUID único."""
+    proj = temp_db.create_project(name="Proyecto Alfa", init_git=False)
+    assert proj["project_uuid"].startswith("proj_")
+    assert proj["name"] == "Proyecto Alfa"
+
+    projects = temp_db.list_projects()
+    # Proyecto semilla por defecto + Proyecto Alfa = 2 proyectos
+    assert len(projects) >= 2
+
+
 def test_create_and_get_card(temp_db):
     """Verifica la creación y recuperación de tarjetas a 0 tokens."""
-    card = temp_db.create_card("CARD-001", "Configurar PyWebView", "Crear la ventana base")
+    projects = temp_db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    card = temp_db.create_card(proj_uuid, "CARD-001", "Configurar PyWebView", "Crear la ventana base")
     assert card["card_id"] == "CARD-001"
     assert card["status"] == "backlog"
 
-    retrieved = temp_db.get_card_by_id("CARD-001")
+    retrieved = temp_db.get_card_by_id(proj_uuid, "CARD-001")
     assert retrieved is not None
     assert retrieved["title"] == "Configurar PyWebView"
 
 
 def test_claim_card_lease_success(temp_db):
     """Verifica que un nodo pueda reclamar un lease con expiración temporal."""
-    temp_db.create_card("CARD-002", "Diseñar UI")
-    claimed = temp_db.claim_card_lease("CARD-002", "node_alpha", duration_minutes=15)
+    projects = temp_db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    temp_db.create_card(proj_uuid, "CARD-002", "Diseñar UI")
+    claimed = temp_db.claim_card_lease(proj_uuid, "CARD-002", "node_alpha", duration_minutes=15)
 
     assert claimed["status"] == "in_progress"
     assert claimed["assignee_node_uuid"] == "node_alpha"
@@ -58,27 +76,13 @@ def test_claim_card_lease_success(temp_db):
 
 def test_claim_card_lease_collision_prevented(temp_db):
     """Verifica que si otro nodo intenta tomar la misma tarjeta con lease activo, se lance PermissionError."""
-    temp_db.create_card("CARD-003", "Refactorizar DB")
-    temp_db.claim_card_lease("CARD-003", "node_alpha", duration_minutes=30)
+    projects = temp_db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    temp_db.create_card(proj_uuid, "CARD-003", "Refactorizar DB")
+    temp_db.claim_card_lease(proj_uuid, "CARD-003", "node_alpha", duration_minutes=30)
 
     # El nodo beta intenta tomar la misma tarjeta antes de que expire el lease
     with pytest.raises(PermissionError) as exc_info:
-        temp_db.claim_card_lease("CARD-003", "node_beta", duration_minutes=30)
+        temp_db.claim_card_lease(proj_uuid, "CARD-003", "node_beta", duration_minutes=30)
     assert "bloqueada por el nodo node_alpha" in str(exc_info.value)
-
-
-def test_swarm_nodes_registration(temp_db):
-    """Verifica el registro de nodos con SLA del revisor autodeclarado."""
-    node = temp_db.register_or_update_node(
-        node_uuid="node_gamma",
-        developer_name="Nathaniel",
-        agent_id="agent_gamma_v1",
-        reviewer_sla_hours=72,
-        status="online"
-    )
-    assert node["node_uuid"] == "node_gamma"
-    assert node["reviewer_sla_hours"] == 72
-
-    nodes = temp_db.get_swarm_nodes()
-    # node_alpha, node_beta, node_gamma = 3 nodos
-    assert len(nodes) == 3

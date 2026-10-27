@@ -19,16 +19,28 @@ def bridge():
 
 
 def test_api_bridge_system_info(bridge):
-    """Verifica que el puente retorne la información del sistema."""
+    """Verifica que el puente retorne la información del sistema y del proyecto activo."""
     info = bridge.get_system_info()
     assert info["success"] is True
     assert "os" in info
     assert info["wal_mode"] is True
+    assert info["active_project"] is not None
+
+
+def test_api_bridge_project_lifecycle(bridge):
+    """Verifica la creación y selección de proyectos."""
+    create_res = bridge.create_project(name="Microservicio Auth")
+    assert create_res["success"] is True
+    assert create_res["project"]["name"] == "Microservicio Auth"
+
+    projects_res = bridge.list_projects()
+    assert projects_res["success"] is True
+    assert len(projects_res["projects"]) >= 2
 
 
 def test_api_bridge_kanban_flow(bridge):
     """Verifica creación, consulta y actualización de tarjetas a través del puente."""
-    # 1. Crear tarjeta
+    # 1. Crear tarjeta en proyecto activo
     create_res = bridge.create_kanban_card("CARD-100", "Probar Bridge", "Prueba de integración")
     assert create_res["success"] is True
     assert create_res["card"]["card_id"] == "CARD-100"

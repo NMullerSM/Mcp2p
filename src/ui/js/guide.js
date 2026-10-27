@@ -5,51 +5,70 @@
 
 class UserGuide {
   constructor() {
+    this.initElements();
+    this.initListeners();
+  }
+
+  initElements() {
     this.drawer = document.getElementById("guide-drawer");
     this.closeBtn = document.getElementById("close-guide-btn");
     this.toggleBtn = document.getElementById("toggle-guide-btn");
-    this.initListeners();
   }
 
   initListeners() {
     if (this.toggleBtn) {
-      this.toggleBtn.addEventListener("click", () => this.toggle());
+      this.toggleBtn.onclick = (e) => {
+        e.preventDefault();
+        this.toggle();
+      };
     }
     if (this.closeBtn) {
-      this.closeBtn.addEventListener("click", () => this.close());
+      this.closeBtn.onclick = (e) => {
+        e.preventDefault();
+        this.close();
+      };
     }
 
-    // Atajos de Teclado Globales
+    // Atajos de Teclado Globales (F1 / ESC)
     window.addEventListener("keydown", (e) => {
-      // F1: Abrir / Cerrar Guía
       if (e.key === "F1") {
         e.preventDefault();
         this.toggle();
-      }
-      // ESC: Cerrar Drawer o Modales
-      if (e.key === "Escape") {
+      } else if (e.key === "Escape") {
         this.close();
       }
     });
   }
 
   toggle() {
+    if (!this.drawer) this.initElements();
     if (this.drawer) {
       this.drawer.classList.toggle("open");
     }
   }
 
   open() {
+    if (!this.drawer) this.initElements();
     if (this.drawer) {
       this.drawer.classList.add("open");
     }
   }
 
   close() {
+    if (!this.drawer) this.initElements();
     if (this.drawer) {
       this.drawer.classList.remove("open");
     }
   }
 }
 
-window.userGuide = new UserGuide();
+// Inicialización segura sin importar el momento de carga
+function initGuide() {
+  window.userGuide = new UserGuide();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initGuide);
+} else {
+  initGuide();
+}

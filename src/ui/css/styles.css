@@ -37,7 +37,36 @@ body {
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.project-selector-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-dropdown {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+  max-width: 260px;
+}
+
+.project-dropdown:focus {
+  border-color: var(--border-focus);
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .logo-badge {
