@@ -60,10 +60,10 @@ flowchart TD
 * **Contexto**: Evitar que dos agentes tomen la misma tarea en la red P2P.
 * **Decisión**: Al pasar una tarjeta a `in_progress`, se asigna un `lease_expires_at` (ej. 30 min). Intentos concurrentes de otros nodos son rechazados con `PermissionError`.
 
-### ADR-004: Subsistema de Proyectos y Aislamiento Estricto de Doble Repositorio
-* **Contexto**: Evitar que el tablero Kanban sea un espacio global compartido que mezcle tareas, APIs y gobernanza de proyectos distintos.
-* **Decisión**: Cada proyecto es un tenant local con `UUIDv4`, que provisiona dos directorios físicos independientes (`app/` para código y `governance/` para OKF y su rama huérfana de memoria). Toda tabla relacional (`kanban_cards`, `a2a_messages`, `dispute_tickets`) exige `project_uuid`.
-* **Consecuencias**: Cero contaminación cruzada entre repositorios; los agentes operan exclusivamente en el contexto del proyecto activo.
+### ADR-004: Pantalla Principal Hub de Proyectos y Aislamiento de Doble Repositorio
+* **Contexto**: Iniciar directamente en un tablero Kanban genérico creaba ambigüedad sobre a qué proyecto pertenecían las tareas y no permitía gestionar múltiples repositorios.
+* **Decisión**: La vista inicial de MCP2P es el **Hub de Proyectos**. Muestra la grilla de proyectos con sus nombres, `UUIDv4`, rutas de `app/` y `governance/` y la opción de crear nuevos. Al hacer doble clic en un proyecto, se abre su espacio de trabajo aislado (Kanban, OKF y agentes dedicados).
+* **Consecuencias**: Modelo mental claro (Proyecto primero, Kanban después); cero contaminación cruzada de contextos entre diferentes APIs y repositorios.
 
 ---
 

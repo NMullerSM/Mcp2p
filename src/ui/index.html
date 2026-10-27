@@ -3,43 +3,34 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MCP2P — Plataforma Agéntica Local-First</title>
+  <title>MCP2P — Hub de Proyectos & Colaboración Agéntica</title>
   <link rel="stylesheet" href="css/themes.css">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 
   <!-- =========================================================================
-       Header Principal (Ley de Hick: Acciones Primarias + Selector de Proyecto)
+       Header Principal (Ley de Hick: Máximo 3 acciones primarias)
        ========================================================================= -->
   <header class="app-header">
     <div class="brand">
       <span class="logo-badge">MCP2P</span>
-      
-      <!-- Selector de Proyecto (Aislamiento de Doble Repositorio) -->
-      <div class="project-selector-wrapper">
-        <select id="project-selector" class="project-dropdown" title="Seleccionar contexto de proyecto activo">
-          <option value="">Cargando proyectos...</option>
-        </select>
-        <button id="btn-new-project" class="btn btn-sm" title="Crear nuevo proyecto aislado con doble repositorio (app + governance)">
-          + Proyecto
-        </button>
-      </div>
+      <h1 class="app-title">Enjambre Agéntico</h1>
     </div>
 
-    <!-- 3 Acciones Primarias de Trabajo -->
+    <!-- 3 Acciones Primarias -->
     <div class="header-actions">
-      <!-- Acción 1: Crear Tarea -->
-      <button id="btn-new-task" class="btn btn-primary" title="Crear nueva tarea en Backlog (Ctrl+N)">
+      <!-- Acción Condicional: Nueva Tarea (Solo visible dentro de un proyecto) -->
+      <button id="btn-new-task" class="btn btn-primary" style="display: none;" title="Crear nueva tarea en el Kanban del proyecto (Ctrl+N)">
         <span>+</span> Nueva Tarea
       </button>
 
-      <!-- Acción 2: Alternar Tema Claro / Oscuro -->
+      <!-- Acción Alternar Tema Claro / Oscuro -->
       <button id="theme-toggle-btn" class="btn theme-toggle-btn" title="Alternar tema Claro / Oscuro (Ctrl+D)">
         ☀️
       </button>
 
-      <!-- Acción 3: Guía de Usuario (Heurística 10 de Nielsen) -->
+      <!-- Acción Guía de Usuario (Heurística 10 de Nielsen) -->
       <button id="toggle-guide-btn" class="btn" title="Abrir Guía de Usuario (F1)">
         <span>?</span> Guía (F1)
       </button>
@@ -47,56 +38,98 @@
   </header>
 
   <!-- =========================================================================
-       Tablero Kanban Principal (4 Columnas)
+       Contenedor Principal de Vistas
        ========================================================================= -->
   <main class="app-main">
-    <!-- Columna 1: Backlog -->
-    <section class="kanban-column">
-      <div class="column-header">
-        <div class="column-title-group">
-          <span class="column-dot dot-backlog"></span>
-          <span class="column-title">Por Hacer</span>
+
+    <!-- =======================================================================
+         VISTA 1: Hub de Proyectos (Pantalla de Inicio Activa por Defecto)
+         ======================================================================= -->
+    <section id="view-projects" class="view-section active">
+      <div class="hub-header">
+        <div class="hub-title-group">
+          <h2>Tus Proyectos & Espacios de Trabajo</h2>
+          <p class="hub-subtitle">Cada proyecto opera con doble repositorio aislado: código (app) y gobernanza (OKF).</p>
         </div>
-        <span id="count-backlog" class="card-counter">0</span>
+        <button id="btn-new-project-hub" class="btn btn-primary" title="Crear nuevo proyecto aislado (Ctrl+P)">
+          <span>+</span> Nuevo Proyecto
+        </button>
       </div>
-      <div id="col-backlog" class="card-list"></div>
+
+      <!-- Grilla Dinámica de Tarjetas de Proyectos -->
+      <div id="projects-grid" class="projects-grid"></div>
     </section>
 
-    <!-- Columna 2: En Proceso (Leases Activos) -->
-    <section class="kanban-column">
-      <div class="column-header">
-        <div class="column-title-group">
-          <span class="column-dot dot-progress"></span>
-          <span class="column-title">En Proceso</span>
+    <!-- =======================================================================
+         VISTA 2: Tablero Kanban del Proyecto Seleccionado
+         ======================================================================= -->
+    <section id="view-kanban" class="view-section">
+      <!-- Barra Superior de Navegación del Proyecto -->
+      <div class="project-breadcrumb-bar">
+        <div class="breadcrumb-left">
+          <button id="btn-back-projects" class="btn btn-secondary btn-sm" title="Volver al Hub de Proyectos">
+            ← Todos los Proyectos
+          </button>
+          <span id="active-project-title" class="active-project-tag">Proyecto</span>
+          <span id="active-project-uuid" class="project-uuid-badge">proj_uuid</span>
         </div>
-        <span id="count-progress" class="card-counter">0</span>
+        <div style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono)">
+          Contexto aislado: Kanban + OKF + A2A
+        </div>
       </div>
-      <div id="col-progress" class="card-list"></div>
+
+      <!-- Tablero Kanban de 4 Columnas -->
+      <div class="kanban-board-container">
+        <!-- Columna 1: Backlog -->
+        <div class="kanban-column">
+          <div class="column-header">
+            <div class="column-title-group">
+              <span class="column-dot dot-backlog"></span>
+              <span class="column-title">Por Hacer</span>
+            </div>
+            <span id="count-backlog" class="card-counter">0</span>
+          </div>
+          <div id="col-backlog" class="card-list"></div>
+        </div>
+
+        <!-- Columna 2: En Proceso (Leases Activos) -->
+        <div class="kanban-column">
+          <div class="column-header">
+            <div class="column-title-group">
+              <span class="column-dot dot-progress"></span>
+              <span class="column-title">En Proceso</span>
+            </div>
+            <span id="count-progress" class="card-counter">0</span>
+          </div>
+          <div id="col-progress" class="card-list"></div>
+        </div>
+
+        <!-- Columna 3: En Revisión (Ramas / PRs) -->
+        <div class="kanban-column">
+          <div class="column-header">
+            <div class="column-title-group">
+              <span class="column-dot dot-review"></span>
+              <span class="column-title">En Revisión</span>
+            </div>
+            <span id="count-review" class="card-counter">0</span>
+          </div>
+          <div id="col-review" class="card-list"></div>
+        </div>
+
+        <!-- Columna 4: Consolidado (OKF Consolidado) -->
+        <div class="kanban-column">
+          <div class="column-header">
+            <div class="column-title-group">
+              <span class="column-dot dot-consolidated"></span>
+              <span class="column-title">Consolidado</span>
+            </div>
+            <span id="count-consolidated" class="card-counter">0</span>
+          </div>
+          <div id="col-consolidated" class="card-list"></div>
+        </div>
+      </div>
     </section>
 
-    <!-- Columna 3: En Revisión (Ramas / PRs) -->
-    <section class="kanban-column">
-      <div class="column-header">
-        <div class="column-title-group">
-          <span class="column-dot dot-review"></span>
-          <span class="column-title">En Revisión</span>
-        </div>
-        <span id="count-review" class="card-counter">0</span>
-      </div>
-      <div id="col-review" class="card-list"></div>
-    </section>
-
-    <!-- Columna 4: Consolidado (OKF Consolidado) -->
-    <section class="kanban-column">
-      <div class="column-header">
-        <div class="column-title-group">
-          <span class="column-dot dot-consolidated"></span>
-          <span class="column-title">Consolidado</span>
-        </div>
-        <span id="count-consolidated" class="card-counter">0</span>
-      </div>
-      <div id="col-consolidated" class="card-list"></div>
-    </section>
   </main>
 
   <!-- =========================================================================
@@ -104,8 +137,8 @@
        ========================================================================= -->
   <footer class="app-statusbar">
     <div class="status-left">
-      <span><span class="pulse-indicator"></span> ACTIVO</span>
-      <span id="status-project">Proyecto: Cargando...</span>
+      <span><span class="pulse-indicator"></span> SISTEMA ACTIVO</span>
+      <span id="status-project">Hub de Proyectos</span>
       <span id="status-node">Nodo: Conectando...</span>
     </div>
     <div class="status-right">
@@ -120,31 +153,35 @@
   <aside id="guide-drawer" class="guide-drawer" aria-label="Guía de Usuario Integrada">
     <div class="guide-header">
       <h3 style="font-size: 15px; font-weight: 600;">Manual de Usuario & Ergonomía</h3>
-      <button id="close-guide-btn" class="btn" style="padding: 4px 8px;">✕</button>
+      <button id="close-guide-btn" class="btn btn-sm">✕</button>
     </div>
 
     <div class="guide-body">
       <div class="guide-section">
-        <h4>1. Subsistema de Proyectos</h4>
-        <p>Cada proyecto tiene un <code>UUIDv4</code> único y dos repositorios aislados: <code>app/</code> (código ejecutable) y <code>governance/</code> (OKF y rama huérfana). Nunca se mezclan contextos de proyectos distintos.</p>
+        <h4>1. Pantalla Principal: Hub de Proyectos</h4>
+        <p>En la pantalla de inicio visualizas todos tus proyectos con su <code>UUID</code> identificador único. Haz doble clic en una tarjeta o presiona <strong>Abrir Proyecto</strong> para acceder a su espacio de trabajo.</p>
       </div>
 
       <div class="guide-section">
-        <h4>2. ¿Cómo funciona el Tablero?</h4>
-        <p>Las tareas nacen en <strong>Por Hacer</strong> a coste de 0 tokens. Al asumirse, pasan a <strong>En Proceso</strong> reservando un candado de lease temporal.</p>
+        <h4>2. Aislamiento Estricto de Doble Repositorio</h4>
+        <p>Cada proyecto tiene dos repositorios: <code>app/</code> (código y API) y <code>governance/</code> (OKF y rama huérfana). El contexto de un proyecto jamás se cruza con el de otro.</p>
       </div>
 
       <div class="guide-section">
-        <h4>3. Leases de Concurrencia</h4>
-        <p>Cada tarea en proceso tiene un <code>lease_expires_at</code> (ej. 30 min). Si otro nodo intenta modificarla, el sistema bloquea la colisión atómicamente en SQLite.</p>
+        <h4>3. Leases de Tareas en Kanban</h4>
+        <p>Al tomar una tarea en proceso, se reserva un candado de lease temporal (ej. 30 min) para evitar colisiones con otros agentes en el enjambre.</p>
       </div>
 
       <div class="guide-section">
         <h4>Atajos de Teclado Globales</h4>
         <table class="shortcut-table">
           <tr>
+            <td><kbd>Ctrl</kbd> + <kbd>P</kbd></td>
+            <td>Crear Nuevo Proyecto en Hub</td>
+          </tr>
+          <tr>
             <td><kbd>Ctrl</kbd> + <kbd>N</kbd></td>
-            <td>Crear nueva tarea en Kanban</td>
+            <td>Nueva Tarea (dentro del proyecto)</td>
           </tr>
           <tr>
             <td><kbd>Ctrl</kbd> + <kbd>D</kbd></td>
@@ -156,7 +193,7 @@
           </tr>
           <tr>
             <td><kbd>ESC</kbd></td>
-            <td>Cerrar panel o ventana modal activa</td>
+            <td>Cerrar ventana modal o volver al Hub</td>
           </tr>
         </table>
       </div>
@@ -164,11 +201,43 @@
   </aside>
 
   <!-- =========================================================================
-       Modal para Creación de Nueva Tarea
+       Modal para Creación de Nuevo Proyecto (Doble Repositorio)
+       ========================================================================= -->
+  <div id="new-project-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 style="font-size: 16px; font-weight: 700;">Crear Nuevo Proyecto Aislado</h3>
+      <p style="font-size: 12px; color: var(--text-secondary);">
+        Se generará un <code>UUIDv4</code> único y los dos repositorios independientes: <code>app/</code> (código) y <code>governance/</code> (OKF con rama huérfana).
+      </p>
+
+      <div class="form-group">
+        <label class="form-label" for="input-project-name">Nombre del Proyecto *</label>
+        <input id="input-project-name" class="form-input" type="text" placeholder="Ej: Servicio de Pagos" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-code-url">URL Remota Repositorio de Código (Opcional)</label>
+        <input id="input-code-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-servicio.git" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-gov-url">URL Remota Gobernanza OKF (Opcional)</label>
+        <input id="input-gov-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-servicio-gov.git" />
+      </div>
+
+      <div class="modal-footer">
+        <button id="cancel-project-modal-btn" class="btn">Cancelar</button>
+        <button id="save-project-btn" class="btn btn-primary">Crear Proyecto</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       Modal para Creación de Nueva Tarea (Dentro del Proyecto)
        ========================================================================= -->
   <div id="new-task-modal" class="modal-overlay">
     <div class="modal-box">
-      <h3 style="font-size: 15px; font-weight: 600;">Nueva Tarea Kanban</h3>
+      <h3 style="font-size: 16px; font-weight: 700;">Nueva Tarea Kanban</h3>
 
       <div class="form-group">
         <label class="form-label" for="input-task-id">Identificador Único</label>
@@ -177,7 +246,7 @@
 
       <div class="form-group">
         <label class="form-label" for="input-task-title">Título de la Tarea</label>
-        <input id="input-task-title" class="form-input" type="text" placeholder="Ej: Implementar Autenticación" />
+        <input id="input-task-title" class="form-input" type="text" placeholder="Ej: Implementar Autenticación JWT" />
       </div>
 
       <div class="form-group">
@@ -186,40 +255,8 @@
       </div>
 
       <div class="modal-footer">
-        <button id="cancel-modal-btn" class="btn">Cancelar</button>
+        <button id="cancel-task-modal-btn" class="btn">Cancelar</button>
         <button id="save-task-btn" class="btn btn-primary">Crear Tarea</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- =========================================================================
-       Modal para Creación de Nuevo Proyecto (Doble Repositorio)
-       ========================================================================= -->
-  <div id="new-project-modal" class="modal-overlay">
-    <div class="modal-box">
-      <h3 style="font-size: 15px; font-weight: 600;">Crear Nuevo Proyecto Aislado</h3>
-      <p style="font-size: 12px; color: var(--text-secondary);">
-        Se generará un UUID único y la estructura de doble repositorio: <code>app/</code> (código) y <code>governance/</code> (OKF y rama huérfana).
-      </p>
-
-      <div class="form-group">
-        <label class="form-label" for="input-project-name">Nombre del Proyecto</label>
-        <input id="input-project-name" class="form-input" type="text" placeholder="Ej: Mi Backend API" />
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="input-code-url">URL Remota Repositorio de Código (Opcional)</label>
-        <input id="input-code-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-app.git" />
-      </div>
-
-      <div class="form-group">
-        <label class="form-label" for="input-gov-url">URL Remota Gobernanza OKF (Opcional)</label>
-        <input id="input-gov-url" class="form-input" type="text" placeholder="https://github.com/usuario/mi-app-gov.git" />
-      </div>
-
-      <div class="modal-footer">
-        <button id="cancel-project-modal-btn" class="btn">Cancelar</button>
-        <button id="save-project-btn" class="btn btn-primary">Crear Proyecto</button>
       </div>
     </div>
   </div>

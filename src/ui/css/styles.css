@@ -17,21 +17,21 @@ body {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
-  user-select: none;
 }
 
 /* ==========================================================================
    Header & Barra Superior (Ley de Hick: Máximo 3 acciones primarias)
    ========================================================================== */
 .app-header {
-  height: 56px;
+  height: 58px;
   background-color: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 20px;
   flex-shrink: 0;
+  z-index: 10;
 }
 
 .brand {
@@ -40,41 +40,12 @@ body {
   gap: 12px;
 }
 
-.project-selector-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.project-dropdown {
-  background-color: var(--bg-app);
-  color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: 5px 10px;
-  font-size: 12px;
-  font-family: var(--font-ui);
-  font-weight: 500;
-  outline: none;
-  cursor: pointer;
-  max-width: 260px;
-}
-
-.project-dropdown:focus {
-  border-color: var(--border-focus);
-}
-
-.btn-sm {
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
 .logo-badge {
   background: var(--accent-primary);
   color: #fff;
   font-weight: 700;
   font-size: 11px;
-  padding: 3px 8px;
+  padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   letter-spacing: 0.5px;
@@ -97,7 +68,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 7px 14px;
   font-size: 13px;
   font-weight: 500;
   border-radius: var(--radius-md);
@@ -110,6 +81,7 @@ body {
 
 .btn:hover {
   background: var(--bg-card-hover);
+  border-color: var(--border-focus);
 }
 
 .btn-primary {
@@ -120,25 +92,235 @@ body {
 
 .btn-primary:hover {
   background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
 }
 
 .theme-toggle-btn {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-md);
+  font-size: 16px;
 }
 
 /* ==========================================================================
-   Contenedor Principal y Tablero Kanban
+   Contenedor Principal y Vistas (Hub de Proyectos vs Tablero Kanban)
    ========================================================================== */
 .app-main {
   flex: 1;
+  position: relative;
+  overflow: hidden;
   display: flex;
-  padding: 16px;
+  flex-direction: column;
+}
+
+.view-section {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.view-section.active {
+  display: flex;
+}
+
+/* ==========================================================================
+   Vista 1: Hub de Proyectos (Pantalla Principal)
+   ========================================================================== */
+#view-projects {
+  padding: 24px 32px;
+  overflow-y: auto;
+}
+
+.hub-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.hub-title-group h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.hub-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 20px;
+  padding-bottom: 30px;
+}
+
+/* Tarjeta de Proyecto */
+.project-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: var(--transition);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.project-card:hover {
+  background-color: var(--bg-card-hover);
+  border-color: var(--border-focus);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.project-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.project-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.project-uuid-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-primary);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.repo-align-box {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.repo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-badge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.badge-app {
+  background: rgba(79, 117, 255, 0.15);
+  color: var(--accent-primary);
+}
+
+.badge-gov {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-success);
+}
+
+.project-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.project-stats {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+/* Tarjeta rápida de Nuevo Proyecto */
+.new-project-card {
+  border: 2px dashed var(--border-subtle);
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.new-project-card:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.plus-icon {
+  font-size: 28px;
+  font-weight: 300;
+}
+
+/* ==========================================================================
+   Vista 2: Tablero Kanban del Proyecto
+   ========================================================================== */
+#view-kanban {
+  flex-direction: column;
+}
+
+.project-breadcrumb-bar {
+  height: 44px;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+
+.breadcrumb-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.active-project-tag {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.kanban-board-container {
+  flex: 1;
+  display: flex;
+  padding: 16px 20px;
   gap: 16px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -146,8 +328,8 @@ body {
 
 .kanban-column {
   flex: 1;
-  min-width: 270px;
-  max-width: 360px;
+  min-width: 280px;
+  max-width: 380px;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
@@ -378,7 +560,7 @@ body {
 }
 
 .shortcut-table td {
-  padding: 4px 0;
+  padding: 5px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -391,7 +573,7 @@ kbd {
 }
 
 /* ==========================================================================
-   Modal Minimalista para Creación de Tarjetas
+   Modales (Nueva Tarea / Nuevo Proyecto)
    ========================================================================== */
 .modal-overlay {
   position: fixed;
@@ -412,12 +594,13 @@ kbd {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  width: 440px;
-  padding: 20px;
+  width: 480px;
+  max-width: 90vw;
+  padding: 24px;
   box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .form-group {
@@ -436,7 +619,7 @@ kbd {
   background: var(--bg-app);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-md);
   font-family: var(--font-ui);
   font-size: 13px;
