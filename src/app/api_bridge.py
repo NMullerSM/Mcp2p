@@ -695,6 +695,61 @@ class ApiBridge:
             return {"success": False, "error": "Nombre de rama inválido"}
         return self.github.git_create_branch(code_repo, branch_name.strip())
 
+    def set_project_remote_url(self, project_uuid: Optional[str] = None, remote_url: str = "", remote_name: str = "origin") -> Dict[str, Any]:
+        """Configura o actualiza la URL remota del repositorio de código del proyecto."""
+        target_uuid = project_uuid or self.active_project_uuid
+        proj = self.db.get_project_by_uuid(target_uuid)
+        code_repo = proj.get("code_repo_path") if proj else None
+        if not code_repo:
+            return {"success": False, "error": "Repositorio de código no configurado"}
+        return self.github.set_remote_url(code_repo, url=remote_url, remote=remote_name)
+
+    def get_mcp_and_agents_status(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene el estado de la pasarela MCP local y los agentes conectados al enjambre."""
+        target_uuid = project_uuid or self.active_project_uuid
+        local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+
+        # 1. Asegurar registro del agente local principal
+        try:
+            self.db.register_or_update_node(
+                node_uuid=local_node,
+                developer_name="Desarrollador Local (Tú)",
+                agent_id="agent_local_developer",
+                reviewer_sla_hours=24,
+                status="online"
+            )
+        except Exception:
+            pass
+
+        nodes = self.db.get_swarm_nodes()
+        # Herramientas del servidor MCP expuestas
+        mcp_tools = [
+            {"name": "list_projects", "description": "Lista proyectos y doble repositorio"},
+            {"name": "get_kanban_board", "description": "Consulta tarjetas a coste 0 tokens"},
+            {"name": "claim_kanban_task", "description": "Adquisición de tarea con lease exclusivo"},
+            {"name": "create_kanban_task", "description": "Crea tareas en backlog con criterios de aceptación"},
+            {"name": "release_kanban_task", "description": "Libera tarea o mueve a revisión con rama"},
+            {"name": "send_coordination_rfc", "description": "Canal A2A dialéctico de 3 turnos"},
+            {"name": "get_coordination_session", "description": "Historial de síntesis dialéctica"},
+            {"name": "inspect_okf_governance", "description": "Auditoría de integridad OKF y memoria huérfana"},
+            {"name": "register_agent_node", "description": "Heartbeat y registro de agente enjambre"},
+            {"name": "get_project_context", "description": "Aislamiento de rutas y contexto del proyecto"}
+        ]
+
+        return {
+            "success": True,
+            "mcp_server": {
+                "server_name": "mcp2p-server",
+                "active_node_uuid": local_node,
+                "protocol_version": "2024-11-05",
+                "transport": "stdio / sse",
+                "tools_count": len(mcp_tools),
+                "tools": mcp_tools,
+                "status": "online"
+            },
+            "connected_agents": nodes
+        }
+
     # ==========================
     # Árbol y Visor OKF en Crudo
     # ==========================

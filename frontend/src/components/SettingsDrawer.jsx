@@ -877,40 +877,164 @@ export function SettingsDrawer({
             </div>
           )}
 
-          {/* TAB 4: Manual y Atajos */}
+          {/* TAB 4: Manual y Guía del Sistema */}
           {activeTab === 'manual' && (
-            <div>
-              <h4 style={{ fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Atajos de Teclado Globales</h4>
-              <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                Diseñado bajo las Heurísticas de Nielsen y distribución ergonómica para máxima velocidad.
-              </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div>
+                <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>
+                  Manual de Operación & Arquitectura de MCP2P
+                </h4>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+                  Guía técnica completa para entender y operar los módulos de colaboración local-first, enjambre agéntico y gobernanza P2P.
+                </p>
+              </div>
 
-              <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-                <tbody>
-                  {[
-                    ['Ctrl + P', 'Crear Nuevo Proyecto en Hub'],
-                    ['Ctrl + N', 'Nueva Tarea Kanban (dentro del proyecto)'],
-                    ['Ctrl + D', 'Alternar Tema Claro / Oscuro'],
-                    ['F1', 'Abrir / Cerrar esta Guía de Configuración'],
-                    ['ESC', 'Cerrar cualquier ventana modal o drawer']
-                  ].map(([key, desc]) => (
-                    <tr key={key} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={{ padding: '8px 0', fontFamily: 'var(--font-mono)' }}>
-                        <span style={{
-                          backgroundColor: 'var(--bg-subtle)',
-                          border: '1px solid var(--border-subtle)',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          fontSize: '11px'
-                        }}>
-                          {key}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 0', color: 'var(--text-secondary)' }}>{desc}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {/* 1. Atajos de Teclado */}
+              <div style={{
+                backgroundColor: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '14px 16px'
+              }}>
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px 0', color: 'var(--accent-primary)' }}>
+                  ⌨️ Atajos de Teclado Globales
+                </h5>
+                <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    {[
+                      ['Ctrl + P', 'Crear Nuevo Proyecto en Hub de Proyectos'],
+                      ['Ctrl + N', 'Nueva Tarea Kanban (dentro del proyecto activo)'],
+                      ['Ctrl + D', 'Alternar Tema Claro / Oscuro'],
+                      ['F1', 'Abrir / Cerrar este Panel de Configuración y Manual'],
+                      ['ESC', 'Cerrar cualquier ventana modal o drawer lateral']
+                    ].map(([key, desc]) => (
+                      <tr key={key} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ padding: '7px 0', fontFamily: 'var(--font-mono)' }}>
+                          <span style={{
+                            backgroundColor: 'var(--bg-subtle)',
+                            border: '1px solid var(--border-subtle)',
+                            padding: '2px 7px',
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            fontWeight: 600
+                          }}>
+                            {key}
+                          </span>
+                        </td>
+                        <td style={{ padding: '7px 0', color: 'var(--text-secondary)' }}>{desc}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 2. Módulos y Conceptos */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>
+                  📚 Para qué sirve cada módulo
+                </h5>
+
+                {/* Hub de Proyectos */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    1. Hub de Proyectos (Workspace Hub)
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Es la pantalla de inicio de MCP2P. Cada proyecto opera con su propio identificador <code>UUIDv4</code> y aislamiento físico estricto de doble repositorio: <code>app/</code> (código fuente) y <code>governance/</code> (documentación OKF y rama de memoria huérfana). Ningún contexto ni tarea se mezcla entre proyectos.
+                  </div>
+                </div>
+
+                {/* Tablero Kanban & Leases */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    2. Tablero Kanban & Criterios de Aceptación (HITL)
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Permite organizar tareas en 4 columnas (Por Hacer, En Proceso, En Revisión, Fusionado).
+                    <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                      <li><strong>Leases de 30 minutos</strong>: Cuando un agente o tú mueven una tarea a 'En Proceso', se genera un candado atómico que previene que dos agentes trabajen en lo mismo a la vez.</li>
+                      <li><strong>Criterios de Aceptación</strong>: Puedes abrir cualquier tarjeta haciendo clic en ella para definir condiciones de éxito y pulsar <em>"Aceptar y Consolidar (HITL)"</em> para validar el resultado.</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Control de Cambios & Grafo Git */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    3. Control de Cambios & Grafo Visual de Git
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Muestra el árbol de ramas y commits dibujado de forma interactiva con carriles de colores (swimlanes), conexiones curvas Bezier y etiquetas de rama. Permite:
+                    <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                      <li><strong>Fetch / Pull</strong>: Descargar y sincronizar cambios del repositorio remoto de GitHub.</li>
+                      <li><strong>Publicar Rama</strong>: Empujar tu rama local hacia GitHub (requiere vincular la URL del repositorio remoto).</li>
+                      <li><strong>Fusionar en Main</strong>: Integrar ramas de feature a main de forma segura.</li>
+                      <li><strong>Vincular Remoto</strong>: Configurar la URL de tu repositorio GitHub origin directamente desde el botón en la barra.</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Consenso Dialéctico 3-Turn A2A */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    4. Consenso Dialéctico (3-Turn A2A RFC)
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Mecanismo autónomo donde los agentes coordinan decisiones técnicas en exactamente 3 turnos:
+                    <strong> 1. Tesis (Propuesta)</strong> → <strong>2. Antítesis (Contrapropuesta o Jurado)</strong> → <strong>3. Síntesis (Resolución: ACCEPT / COMPROMISE / REJECT)</strong>. Evita debates infinitos y reduce el gasto de tokens a casi cero.
+                  </div>
+                </div>
+
+                {/* Colaboradores & Agentes MCP */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    5. Colaboradores P2P & Pasarela MCP
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Permite enlazar nodos de otros desarrolladores sin intermediarios mediante links criptográficos P2P. Además, expone las 10 herramientas del servidor local <code>mcp2p-server</code> sobre transporte stdio/SSE para que agentes de Gemini, Claude o Cursor interactúen en tiempo real con el proyecto.
+                  </div>
+                </div>
+
+                {/* Visor OKF */}
+                <div style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px'
+                }}>
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+                    6. Visor OKF & Archivos en Crudo
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                    Ubicado en la primera pestaña de este drawer lateral. Te permite explorar el árbol de archivos de gobernanza (<code>docs/okf/</code>), leer especificaciones de arquitectura y revisar los registros de decisión de arquitectura (ADRs) sin recargar la interfaz principal.
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 

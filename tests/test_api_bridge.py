@@ -199,3 +199,33 @@ def test_api_bridge_branches_and_consensus_and_okf_tree(bridge):
     assert update_res["card"]["status"] == "in_review"
 
 
+def test_api_bridge_remote_url_and_mcp_agents_status(bridge):
+    """Verifica configuración de remoto GitHub y consulta de estado MCP / agentes."""
+    p_res = bridge.create_project(name="Proyecto Remoto y MCP")
+    p_uuid = p_res["project"]["project_uuid"]
+
+    # 1. Push sin remoto debe indicar requires_remote amigablemente
+    push_res = bridge.git_push_action(p_uuid, branch="main")
+    assert push_res["success"] is False
+    assert push_res.get("requires_remote") is True
+
+    # 2. Configurar remoto origin
+    remote_res = bridge.set_project_remote_url(p_uuid, "https://github.com/testuser/testrepo.git")
+    assert remote_res["success"] is True
+    assert remote_res["url"] == "https://github.com/testuser/testrepo.git"
+
+    # 3. Comprobar que get_branches_and_consensus reporta origin_url
+    bc = bridge.get_branches_and_consensus(p_uuid)
+    assert bc["success"] is True
+    assert bc["git"]["origin_url"] == "https://github.com/testuser/testrepo.git"
+
+    # 4. Comprobar pasarela MCP y agentes conectados
+    mcp_res = bridge.get_mcp_and_agents_status(p_uuid)
+    assert mcp_res["success"] is True
+    assert mcp_res["mcp_server"]["server_name"] == "mcp2p-server"
+    assert mcp_res["mcp_server"]["tools_count"] == 10
+    assert len(mcp_res["connected_agents"]) >= 1
+    assert any(ag["agent_id"] == "agent_local_developer" for ag in mcp_res["connected_agents"])
+
+
+

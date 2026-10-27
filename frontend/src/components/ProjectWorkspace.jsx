@@ -108,7 +108,7 @@ export function ProjectWorkspace({ project, activeTab = 'kanban', onBack, api, t
             onSelectCard={(card) => setSelectedCard(card)}
           />
         )}
-        {activeTab === 'branches' && (
+        {(activeTab === 'changes' || activeTab === 'branches') && (
           <BranchConsensusView project={project} api={api} />
         )}
         {activeTab === 'okf' && (

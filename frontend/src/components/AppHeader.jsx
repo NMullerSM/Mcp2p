@@ -29,13 +29,17 @@ export function AppHeader({
       whiteSpace: 'nowrap'
     }}>
       {/* 1. SECCIÓN IZQUIERDA: Marca, Breadcrumbs e Identificador de Proyecto */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, height: '100%' }}>
         <span style={{
           background: 'var(--accent-primary)',
           color: '#ffffff',
           fontWeight: 900,
-          fontSize: '14px',
-          padding: '4px 10px',
+          fontSize: '13px',
+          height: '28px',
+          padding: '0 10px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          lineHeight: 1,
           borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--font-mono)',
           letterSpacing: '0.6px',
@@ -44,10 +48,10 @@ export function AppHeader({
           MCP2P
         </span>
 
-        <span style={{ color: 'var(--border-subtle)', fontWeight: 300 }}>|</span>
+        <span style={{ color: 'var(--border-subtle)', fontWeight: 300, display: 'inline-flex', alignItems: 'center' }}>|</span>
 
         {activeProject ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '100%' }}>
             <button
               onClick={onBackToProjects}
               title="Volver al Hub de Proyectos"
@@ -55,7 +59,9 @@ export function AppHeader({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '4px',
-                padding: '4px 8px',
+                height: '28px',
+                padding: '0 8px',
+                lineHeight: 1,
                 fontSize: '12px',
                 fontWeight: 600,
                 borderRadius: 'var(--radius-sm)',
@@ -72,10 +78,14 @@ export function AppHeader({
               fontSize: '13px',
               fontWeight: 700,
               color: 'var(--text-primary)',
-              maxWidth: 'clamp(100px, 15vw, 200px)',
+              maxWidth: 'clamp(100px, 15vw, 240px)',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
-              textOverflow: 'ellipsis'
+              textOverflow: 'ellipsis',
+              display: 'inline-flex',
+              alignItems: 'center',
+              lineHeight: 1,
+              height: '28px'
             }}>
               {activeProject.name}
             </span>
@@ -84,7 +94,11 @@ export function AppHeader({
               fontSize: '10px',
               backgroundColor: 'var(--bg-subtle)',
               color: 'var(--accent-primary)',
-              padding: '2px 6px',
+              padding: '0 6px',
+              height: '22px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              lineHeight: 1,
               borderRadius: 'var(--radius-sm)',
               fontWeight: 600
             }}>
@@ -92,9 +106,9 @@ export function AppHeader({
             </span>
           </div>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Hub de Proyectos
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '100%' }}>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', height: '28px' }}>
+              Proyectos
             </span>
             <span style={{
               fontSize: '11px',
@@ -125,8 +139,8 @@ export function AppHeader({
           }}>
             {[
               { id: 'kanban', label: 'Tablero Kanban', icon: Kanban },
-              { id: 'branches', label: 'Ramas & Git', icon: GitBranch },
-              { id: 'collaborators', label: 'Colaboradores P2P', icon: Users }
+              { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+              { id: 'collaborators', label: 'Colaboradores & Agentes', icon: Users }
             ].map(tab => {
               const Icon = tab.icon;
               const isSelected = activeTab === tab.id;
@@ -157,11 +171,7 @@ export function AppHeader({
               );
             })}
           </div>
-        ) : (
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            Enjambre P2P Descentralizado • Zero-Tokens • Gobernanza OKF
-          </div>
-        )}
+        ) : null}
       </div>
 
       {/* 3. SECCIÓN DERECHA: Acciones, Estado GitHub, Tema y Tuerca de Configuración */}

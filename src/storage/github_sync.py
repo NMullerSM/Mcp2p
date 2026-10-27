@@ -257,6 +257,7 @@ class GitHubSyncManager:
             # 4. Remotos configurados
             rem_p = subprocess.run(["git", "remote", "-v"], cwd=path, capture_output=True, text=True, timeout=5)
             remotes = rem_p.stdout.strip().splitlines() if rem_p.returncode == 0 else []
+            origin_url = self.get_remote_url(path, "origin")
 
             return {
                 "success": True,
@@ -264,14 +265,58 @@ class GitHubSyncManager:
                 "branches": branches,
                 "commits": commits,
                 "has_remotes": len(remotes) > 0,
-                "remotes": remotes
+                "remotes": remotes,
+                "origin_url": origin_url
             }
         except Exception as e:
             return {"success": False, "error": f"Error inspeccionando Git: {str(e)}", "branches": [], "commits": []}
 
+    def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool:
+        """Comprueba si existe un control remoto configurado en el repositorio."""
+        path = Path(repo_path)
+        try:
+            res = subprocess.run(["git", "remote"], cwd=path, capture_output=True, text=True, timeout=5)
+            return remote in res.stdout.split()
+        except Exception:
+            return False
+
+    def get_remote_url(self, repo_path: str | Path, remote: str = "origin") -> Optional[str]:
+        """Obtiene la URL configurada para un control remoto."""
+        path = Path(repo_path)
+        try:
+            res = subprocess.run(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+            return None
+        except Exception:
+            return None
+
+    def set_remote_url(self, repo_path: str | Path, url: str, remote: str = "origin") -> Dict[str, Any]:
+        """Configura o actualiza la URL remota en el repositorio."""
+        path = Path(repo_path)
+        url = url.strip()
+        if not url:
+            return {"success": False, "error": "La URL remota no puede estar vacía."}
+        try:
+            if self.has_remote(path, remote):
+                proc = subprocess.run(["git", "remote", "set-url", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
+            else:
+                proc = subprocess.run(["git", "remote", "add", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
+            if proc.returncode == 0:
+                return {"success": True, "remote": remote, "url": url}
+            return {"success": False, "error": proc.stderr or proc.stdout}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def git_fetch(self, repo_path: str | Path, remote: str = "origin") -> Dict[str, Any]:
         """Ejecuta git fetch para sincronizar referencias con el remoto."""
         path = Path(repo_path)
+        if not self.has_remote(path, remote):
+            return {
+                "success": False,
+                "requires_remote": True,
+                "error": f"Repositorio remoto '{remote}' no configurado. Para sincronizar o publicar, vincula primero la URL remota de GitHub."
+            }
         try:
             proc = subprocess.run(["git", "fetch", remote], cwd=path, capture_output=True, text=True, timeout=15)
             if proc.returncode == 0:
@@ -283,6 +328,12 @@ class GitHubSyncManager:
     def git_pull(self, repo_path: str | Path, remote: str = "origin", branch: Optional[str] = None) -> Dict[str, Any]:
         """Ejecuta git pull para traer los últimos cambios."""
         path = Path(repo_path)
+        if not self.has_remote(path, remote):
+            return {
+                "success": False,
+                "requires_remote": True,
+                "error": f"Repositorio remoto '{remote}' no configurado. Vincula la URL remota de GitHub antes de hacer pull."
+            }
         cmd = ["git", "pull", remote]
         if branch:
             cmd.append(branch)
@@ -297,11 +348,24 @@ class GitHubSyncManager:
     def git_push_branch(self, repo_path: str | Path, branch: str, remote: str = "origin") -> Dict[str, Any]:
         """Publica o empuja una rama local hacia el repositorio remoto."""
         path = Path(repo_path)
+        if not self.has_remote(path, remote):
+            return {
+                "success": False,
+                "requires_remote": True,
+                "error": f"Repositorio remoto '{remote}' no configurado. Por favor, vincula la URL del repositorio remoto de GitHub antes de publicar ramas."
+            }
         try:
             proc = subprocess.run(["git", "push", "-u", remote, branch], cwd=path, capture_output=True, text=True, timeout=25)
             if proc.returncode == 0:
                 return {"success": True, "output": proc.stdout}
-            return {"success": False, "error": proc.stderr or proc.stdout}
+            
+            raw_err = proc.stderr or proc.stdout
+            # Manejo amigable de errores comunes de autenticación o existencia de repo
+            if "Could not read from remote repository" in raw_err or "does not appear to be a git repository" in raw_err or "Repository not found" in raw_err:
+                friendly = "El repositorio remoto no existe en GitHub o no tienes permisos de acceso. Por favor, asegúrate de haber creado el repositorio en tu cuenta de GitHub y que tu token de acceso tenga permisos de escritura ('repo')."
+                return {"success": False, "error": friendly, "raw_error": raw_err}
+
+            return {"success": False, "error": raw_err}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
