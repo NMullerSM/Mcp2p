@@ -113,3 +113,51 @@ def test_api_bridge_p2p_invite_and_join_flow(bridge):
     # Confirmar que ya no existe
     proj_check = bridge.db.get_project_by_uuid(orig_uuid)
     assert proj_check is None
+
+
+def test_api_bridge_github_pat_storage(bridge, monkeypatch):
+    """Verifica el flujo dual de GitHub (PAT y gh CLI fallback)."""
+    # 1. Sin PAT configurado y simulando sin gh cli
+    bridge.github.gh_bin = None
+    status = bridge.get_github_status()
+    assert status["success"] is True
+
+    # 2. Guardar PAT simulando respuesta exitosa de GitHub API
+    from unittest.mock import MagicMock
+    import io
+    import urllib.request
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.read.return_value = b'{"login": "octodev", "name": "Octo Developer"}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=8: mock_resp)
+
+    save_res = bridge.save_github_pat("ghp_test1234567890abcdef")
+    assert save_res["success"] is True
+    assert save_res["username"] == "octodev"
+
+    # Verificar que el status reporta PAT
+    status_pat = bridge.get_github_status()
+    assert status_pat["success"] is True
+    assert status_pat["github"]["authenticated"] is True
+    assert status_pat["github"]["provider"] == "pat"
+    assert status_pat["github"]["username"] == "octodev"
+
+    # 3. Eliminar PAT
+    clear_res = bridge.clear_github_pat()
+    assert clear_res["success"] is True
+    status_cleared = bridge.get_github_status()
+    assert status_cleared["github"]["provider"] != "pat"
+
+
+def test_api_bridge_okf_repair(bridge):
+    """Verifica que repair_project_okf restaure la estructura conforme."""
+    p_res = bridge.create_project(name="Proyecto Auto Repair")
+    p_uuid = p_res["project"]["project_uuid"]
+
+    repair_res = bridge.repair_project_okf(p_uuid)
+    assert repair_res["success"] is True
+    assert repair_res["report"]["valid"] is True
+

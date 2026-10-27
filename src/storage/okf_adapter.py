@@ -107,6 +107,19 @@ Repositorio de gobernanza y especificaciones vivas para **{project_name}**.
 * **US-01**: Como agente colaborador, quiero acceder al contexto técnico sin inferencia innecesaria.
 """
             file_01.write_text(content_01, encoding="utf-8")
+        else:
+            text_01 = file_01.read_text(encoding="utf-8", errors="ignore")
+            missing_headers = [h for h in self.schema.get("rules", {}).get("okf_01_headers", []) if h.lower() not in text_01.lower()]
+            if missing_headers:
+                extra = ""
+                for h in missing_headers:
+                    if "architecture decision" in h.lower():
+                        extra += "\n\n## Architecture Decision Records (ADRs)\n\n### ADR-001: Estructura OKF\n* **Contexto**: Gobernanza viva.\n* **Decisión**: Separación app y governance.\n* **Consecuencias**: Cero contaminación de tokens.\n"
+                    elif "historias de usuario" in h.lower():
+                        extra += "\n\n## Historias de Usuario Principales\n* **US-01**: Colaboración determinista multi-agente.\n"
+                    elif "# okf-01" in h.lower():
+                        extra = f"# OKF-01: Arquitectura y Principios\n\n" + extra
+                file_01.write_text(text_01 + extra, encoding="utf-8")
 
         # 3. Plantilla 02_MAPA_DE_CODIGO_Y_FEATURES.md
         file_02 = docs_okf / "02_MAPA_DE_CODIGO_Y_FEATURES.md"
@@ -134,8 +147,25 @@ graph TD
 | **Gobernanza Base** | `docs/okf/` | `01_ARQUITECTURA_Y_GOBERNANZA.md` |
 """
             file_02.write_text(content_02, encoding="utf-8")
+        else:
+            text_02 = file_02.read_text(encoding="utf-8", errors="ignore")
+            missing_02 = [h for h in self.schema.get("rules", {}).get("okf_02_headers", []) if h.lower() not in text_02.lower()]
+            if missing_02:
+                extra_02 = "\n\n## Mapa de Features\n\n| Feature | Directorio | Ficha Técnica |\n| :--- | :--- | :--- |\n| **Gobernanza Base** | `docs/okf/` | `01_ARQUITECTURA_Y_GOBERNANZA.md` |\n"
+                file_02.write_text(text_02 + extra_02, encoding="utf-8")
 
         return docs_okf
+
+    def ensure_okf_structure(
+        self,
+        gov_base_path: str | Path,
+        project_name: str = "Proyecto",
+        project_uuid: str = ""
+    ) -> Path:
+        """
+        Asegura que la estructura OKF exista en gov_base_path; si falta algún componente, lo inicializa o repara automáticamente.
+        """
+        return self.initialize_project_okf(gov_base_path, project_name, project_uuid)
 
     # ==========================================
     # Validación e Inspección OKF

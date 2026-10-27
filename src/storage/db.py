@@ -197,6 +197,13 @@ class DatabaseManager:
                     FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
                 );
 
+                -- 9. Configuraciones Locales de la Aplicación (Key-Value)
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+
                 -- Índices de ultra alta velocidad (<1ms)
                 CREATE INDEX IF NOT EXISTS idx_cards_project_status ON kanban_cards(project_uuid, status);
                 CREATE INDEX IF NOT EXISTS idx_a2a_project ON a2a_messages(project_uuid);
@@ -644,4 +651,38 @@ class DatabaseManager:
                     "UPDATE project_collaborators SET status = 'rejected' WHERE project_uuid = ? AND node_uuid = ?;",
                     (project_uuid, node_uuid)
                 )
+                return cur.rowcount > 0
+
+    # ==========================
+    # Configuraciones Locales (App Settings)
+    # ==========================
+
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Obtiene una configuración local por clave."""
+        with self.get_connection() as conn:
+            cur = conn.execute("SELECT value FROM app_settings WHERE key = ?;", (key,))
+            row = cur.fetchone()
+            return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Guarda o actualiza una configuración local."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO app_settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (key, value, now_str)
+                )
+
+    def delete_setting(self, key: str) -> bool:
+        """Elimina una configuración local."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute("DELETE FROM app_settings WHERE key = ?;", (key,))
                 return cur.rowcount > 0

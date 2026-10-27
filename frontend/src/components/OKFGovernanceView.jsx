@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Cpu, CheckCircle2, AlertTriangle, FileCode } from 'lucide-react';
+import { BookOpen, Cpu, CheckCircle2, AlertTriangle, FileCode, Wrench } from 'lucide-react';
 
 export function OKFGovernanceView({ project, api }) {
   const [subTab, setSubTab] = useState('adrs');
   const [okfData, setOkfData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadData = () => {
     if (!api || !project) return;
     setLoading(true);
     api.get_okf_overview(project.project_uuid).then(res => {
@@ -15,9 +15,30 @@ export function OKFGovernanceView({ project, api }) {
       }
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, [project, api]);
 
-  if (loading) {
+  const handleRepairOKF = async () => {
+    if (!api || !project) return;
+    try {
+      setLoading(true);
+      const res = await api.repair_project_okf(project.project_uuid);
+      if (res.success) {
+        loadData();
+      } else {
+        alert("Error al reparar OKF: " + res.error);
+        setLoading(false);
+      }
+    } catch (e) {
+      alert("Error: " + e);
+      setLoading(false);
+    }
+  };
+
+  if (loading && !okfData) {
     return <div style={{ padding: '24px', color: 'var(--text-secondary)' }}>Cargando gobernanza OKF...</div>;
   }
 
@@ -210,15 +231,37 @@ export function OKFGovernanceView({ project, api }) {
             flexDirection: 'column',
             gap: '14px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {validation.valid ? (
-                <CheckCircle2 size={18} color="var(--accent-success)" />
-              ) : (
-                <AlertTriangle size={18} color="var(--accent-warning)" />
-              )}
-              <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
-                {validation.valid ? 'Especificación OKF Válida y Conforme' : 'Advertencias de Conformidad OKF'}
-              </h4>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {validation.valid ? (
+                  <CheckCircle2 size={18} color="var(--accent-success)" />
+                ) : (
+                  <AlertTriangle size={18} color="var(--accent-warning)" />
+                )}
+                <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                  {validation.valid ? 'Especificación OKF Válida y Conforme' : 'Advertencias de Conformidad OKF'}
+                </h4>
+              </div>
+
+              <button
+                onClick={handleRepairOKF}
+                title="Sincronizar e inicializar cualquier archivo o directorio OKF faltante"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-primary)',
+                  cursor: 'pointer'
+                }}
+              >
+                <Wrench size={13} /> Reparar / Sincronizar OKF
+              </button>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>

@@ -29,7 +29,7 @@ class ApiBridge:
         self.bus = A2ABus(db=self.db)
         self.okf = OKFAdapter()
         self.crypto = NodeCryptoManager()
-        self.github = GitHubSyncManager()
+        self.github = GitHubSyncManager(db_manager=self.db)
         self._ensure_local_node()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
@@ -245,6 +245,9 @@ class ApiBridge:
                 return {"success": False, "error": "Proyecto no encontrado"}
 
             gov_path = proj.get("gov_repo_path")
+            if gov_path:
+                self.okf.ensure_okf_structure(gov_path, proj.get("name", "Proyecto"), target_uuid)
+
             adrs = self.okf.get_okf_adrs(gov_path)
             skills = self.okf.get_okf_skills(gov_path)
             validation = self.okf.validate_okf_integrity(gov_path)
@@ -256,6 +259,28 @@ class ApiBridge:
                 "skills": skills,
                 "validation": validation
             }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def repair_project_okf(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Repara o inicializa la estructura OKF faltante del proyecto especificado o activo."""
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = proj.get("gov_repo_path")
+            if not gov_path:
+                return {"success": False, "error": "Ruta de gobernanza no configurada"}
+
+            self.okf.ensure_okf_structure(gov_path, proj.get("name", "Proyecto"), target_uuid)
+            report = self.okf.validate_okf_integrity(gov_path)
+            return {"success": True, "report": report, "message": "Estructura OKF reparada y sincronizada"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -316,6 +341,20 @@ class ApiBridge:
         try:
             status = self.github.get_auth_status()
             return {"success": True, "github": status}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def save_github_pat(self, token: str) -> Dict[str, Any]:
+        """Valida y guarda un Personal Access Token (PAT) de GitHub."""
+        try:
+            return self.github.save_pat_token(token)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def clear_github_pat(self) -> Dict[str, Any]:
+        """Elimina el Personal Access Token (PAT) guardado."""
+        try:
+            return self.github.clear_pat_token()
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -449,6 +488,7 @@ class ApiBridge:
             gov_path = proj.get("gov_repo_path")
             if not gov_path:
                 return {"success": False, "error": "Ruta de gobernanza no configurada"}
+            self.okf.ensure_okf_structure(gov_path, proj.get("name", "Proyecto"), self.active_project_uuid)
             report = self.okf.validate_okf_integrity(gov_path)
             return {"success": True, "report": report}
         except Exception as e:

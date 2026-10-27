@@ -9,6 +9,12 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+# Asegurar que la raíz del proyecto esté en sys.path
+_root = Path(__file__).resolve().parent.parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 from src.app.api_bridge import ApiBridge
 
 

@@ -24,9 +24,12 @@ export default function App() {
 
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
+  const [activeTab, setActiveTab] = useState('kanban');
+  const [githubStatus, setGithubStatus] = useState(null);
 
   // Modals & Drawers state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('p2p');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
@@ -57,11 +60,25 @@ export default function App() {
     }
   }, [api]);
 
+  // Cargar estado de GitHub
+  const loadGithubStatus = useCallback(async () => {
+    if (!api) return;
+    try {
+      const res = await api.get_github_status();
+      if (res.success) {
+        setGithubStatus(res.github);
+      }
+    } catch (e) {
+      console.error("Error al cargar estado de GitHub:", e);
+    }
+  }, [api]);
+
   useEffect(() => {
     if (isReady && api) {
       loadProjects();
+      loadGithubStatus();
     }
-  }, [isReady, api, loadProjects]);
+  }, [isReady, api, loadProjects, loadGithubStatus]);
 
   // Manejo de atajos de teclado globales
   useEffect(() => {
@@ -110,6 +127,7 @@ export default function App() {
       await api.select_project(proj.project_uuid);
     }
     setActiveProject(proj);
+    setActiveTab('kanban');
   };
 
   const handleCreateProject = async (name, codeUrl, govUrl) => {
@@ -120,6 +138,7 @@ export default function App() {
         setIsNewProjectOpen(false);
         await loadProjects();
         setActiveProject(res.project);
+        setActiveTab('kanban');
       } else {
         alert("Error al crear proyecto: " + res.error);
       }
@@ -136,6 +155,7 @@ export default function App() {
         setIsJoinP2POpen(false);
         await loadProjects();
         setActiveProject(res.project);
+        setActiveTab('kanban');
         alert(res.message || "¡Conectado exitosamente!");
       } else {
         alert("Error al unirse: " + res.error);
@@ -174,6 +194,11 @@ export default function App() {
     }
   };
 
+  const handleOpenSettings = (tab = 'p2p') => {
+    setSettingsTab(tab);
+    setIsSettingsOpen(true);
+  };
+
   return (
     <div style={{
       display: 'flex',
@@ -183,13 +208,21 @@ export default function App() {
       color: 'var(--text-primary)',
       overflow: 'hidden'
     }}>
-      {/* Header */}
+      {/* Parma-Style Distributed Header */}
       <AppHeader
         theme={theme}
         onToggleTheme={toggleTheme}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         activeProject={activeProject}
+        onBackToProjects={() => {
+          setActiveProject(null);
+          loadProjects();
+        }}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         onNewTask={() => setIsNewTaskOpen(true)}
+        githubStatus={githubStatus}
+        projectsCount={projects.length}
       />
 
       {/* Main View Area */}
@@ -197,6 +230,7 @@ export default function App() {
         {activeProject ? (
           <ProjectWorkspace
             project={activeProject}
+            activeTab={activeTab}
             onBack={() => {
               setActiveProject(null);
               loadProjects();
@@ -224,6 +258,8 @@ export default function App() {
         api={api}
         activeProject={activeProject}
         projectsList={projects}
+        initialTab={settingsTab}
+        onGithubStatusChange={setGithubStatus}
       />
 
       {/* Modales */}
