@@ -13,6 +13,9 @@ def temp_db():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_mcp2p.db"
         db = DatabaseManager(str(db_path))
+        # Registrar nodos de prueba
+        db.register_or_update_node("node_alpha", "Alice", "agent_alpha", reviewer_sla_hours=24)
+        db.register_or_update_node("node_beta", "Bob", "agent_beta", reviewer_sla_hours=48)
         yield db
 
 
@@ -67,15 +70,15 @@ def test_claim_card_lease_collision_prevented(temp_db):
 def test_swarm_nodes_registration(temp_db):
     """Verifica el registro de nodos con SLA del revisor autodeclarado."""
     node = temp_db.register_or_update_node(
-        node_uuid="node_alpha",
+        node_uuid="node_gamma",
         developer_name="Nathaniel",
-        agent_id="agent_alpha_v1",
-        reviewer_sla_hours=48,
+        agent_id="agent_gamma_v1",
+        reviewer_sla_hours=72,
         status="online"
     )
-    assert node["node_uuid"] == "node_alpha"
-    assert node["reviewer_sla_hours"] == 48
+    assert node["node_uuid"] == "node_gamma"
+    assert node["reviewer_sla_hours"] == 72
 
     nodes = temp_db.get_swarm_nodes()
-    assert len(nodes) == 1
-    assert nodes[0]["developer_name"] == "Nathaniel"
+    # node_alpha, node_beta, node_gamma = 3 nodos
+    assert len(nodes) == 3

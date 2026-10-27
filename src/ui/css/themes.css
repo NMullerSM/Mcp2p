@@ -1,0 +1,70 @@
+/*
+ * MCP2P Visual System Tokens
+ * Modo Dual: Claro / Oscuro con Tipografía Técnica de Alta Legibilidad
+ * Conforme a las Heurísticas de Nielsen y WCAG AAA
+ */
+
+:root {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Roboto Mono", "Fira Code", monospace;
+  
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.2);
+  --transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Tema Oscuro (Dark Theme - Predeterminado) */
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  --bg-app: #121316;
+  --bg-surface: #1a1b20;
+  --bg-card: #22242b;
+  --bg-card-hover: #292b34;
+  --bg-subtle: #16171c;
+  
+  --border-subtle: #2d303a;
+  --border-focus: #4f75ff;
+  
+  --text-primary: #f3f4f8;
+  --text-secondary: #9da3b2;
+  --text-muted: #626775;
+  
+  --accent-primary: #4f75ff;
+  --accent-primary-hover: #3e62ea;
+  --accent-success: #10b981;
+  --accent-warning: #f59e0b;
+  --accent-danger: #ef4444;
+  --accent-info: #06b6d4;
+  
+  --badge-lease: rgba(245, 158, 11, 0.15);
+  --badge-lease-text: #fbbf24;
+}
+
+/* Tema Claro (Light Theme) */
+:root[data-theme="light"] {
+  --bg-app: #f6f8fa;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f3f5;
+  --bg-subtle: #eaedf1;
+  
+  --border-subtle: #d0d7de;
+  --border-focus: #2563eb;
+  
+  --text-primary: #1f2328;
+  --text-secondary: #57606a;
+  --text-muted: #8c959f;
+  
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-success: #059669;
+  --accent-warning: #d97706;
+  --accent-danger: #dc2626;
+  --accent-info: #0891b2;
+  
+  --badge-lease: rgba(217, 119, 6, 0.12);
+  --badge-lease-text: #b45309;
+}

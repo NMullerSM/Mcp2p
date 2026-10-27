@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP2P — Plataforma Agéntica Local-First</title>
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- =========================================================================
+       Header Principal (Ley de Hick: Máximo 3 acciones primarias)
+       ========================================================================= -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo-badge">MCP2P</span>
+      <h1 class="app-title">Colaboración Agéntica</h1>
+    </div>
+
+    <!-- 3 Acciones Primarias -->
+    <div class="header-actions">
+      <!-- Acción 1: Crear Tarea -->
+      <button id="btn-new-task" class="btn btn-primary" title="Crear nueva tarea en Backlog (Ctrl+N)">
+        <span>+</span> Nueva Tarea
+      </button>
+
+      <!-- Acción 2: Alternar Tema Claro / Oscuro -->
+      <button id="theme-toggle-btn" class="btn theme-toggle-btn" title="Alternar tema Claro / Oscuro (Ctrl+D)">
+        ☀️
+      </button>
+
+      <!-- Acción 3: Guía de Usuario (Heurística 10 de Nielsen) -->
+      <button id="toggle-guide-btn" class="btn" title="Abrir Guía de Usuario (F1)">
+        <span>?</span> Guía (F1)
+      </button>
+    </div>
+  </header>
+
+  <!-- =========================================================================
+       Tablero Kanban Principal (4 Columnas)
+       ========================================================================= -->
+  <main class="app-main">
+    <!-- Columna 1: Backlog -->
+    <section class="kanban-column">
+      <div class="column-header">
+        <div class="column-title-group">
+          <span class="column-dot dot-backlog"></span>
+          <span class="column-title">Por Hacer</span>
+        </div>
+        <span id="count-backlog" class="card-counter">0</span>
+      </div>
+      <div id="col-backlog" class="card-list"></div>
+    </section>
+
+    <!-- Columna 2: En Proceso (Leases Activos) -->
+    <section class="kanban-column">
+      <div class="column-header">
+        <div class="column-title-group">
+          <span class="column-dot dot-progress"></span>
+          <span class="column-title">En Proceso</span>
+        </div>
+        <span id="count-progress" class="card-counter">0</span>
+      </div>
+      <div id="col-progress" class="card-list"></div>
+    </section>
+
+    <!-- Columna 3: En Revisión (Ramas / PRs) -->
+    <section class="kanban-column">
+      <div class="column-header">
+        <div class="column-title-group">
+          <span class="column-dot dot-review"></span>
+          <span class="column-title">En Revisión</span>
+        </div>
+        <span id="count-review" class="card-counter">0</span>
+      </div>
+      <div id="col-review" class="card-list"></div>
+    </section>
+
+    <!-- Columna 4: Consolidado (OKF Consolidado) -->
+    <section class="kanban-column">
+      <div class="column-header">
+        <div class="column-title-group">
+          <span class="column-dot dot-consolidated"></span>
+          <span class="column-title">Consolidado</span>
+        </div>
+        <span id="count-consolidated" class="card-counter">0</span>
+      </div>
+      <div id="col-consolidated" class="card-list"></div>
+    </section>
+  </main>
+
+  <!-- =========================================================================
+       Barra de Estado Inferior (Heurística 1 de Nielsen: Visibilidad del Sistema)
+       ========================================================================= -->
+  <footer class="app-statusbar">
+    <div class="status-left">
+      <span><span class="pulse-indicator"></span> SISTEMA ACTIVO</span>
+      <span id="status-node">Nodo: Conectando...</span>
+      <span id="status-wal">SQLite WAL: Inicializando...</span>
+    </div>
+    <div class="status-right">
+      <span>Ley de Hick + Nielsen</span>
+      <span id="status-os">Linux</span>
+    </div>
+  </footer>
+
+  <!-- =========================================================================
+       Panel Deslizable: Guía de Usuario Integrada (Heurística 10 de Nielsen)
+       ========================================================================= -->
+  <aside id="guide-drawer" class="guide-drawer" aria-label="Guía de Usuario Integrada">
+    <div class="guide-header">
+      <h3 style="font-size: 15px; font-weight: 600;">Manual de Usuario & Ergonomía</h3>
+      <button id="close-guide-btn" class="btn" style="padding: 4px 8px;">✕</button>
+    </div>
+
+    <div class="guide-body">
+      <div class="guide-section">
+        <h4>1. ¿Cómo funciona el Tablero?</h4>
+        <p>Las tareas nacen en <strong>Por Hacer</strong> a coste de 0 tokens. Cuando un agente o desarrollador la asume, se transiciona a <strong>En Proceso</strong> reservando un candado de lease temporal.</p>
+      </div>
+
+      <div class="guide-section">
+        <h4>2. Leases de Concurrencia (Candados)</h4>
+        <p>Cada tarea en proceso tiene un <code>lease_expires_at</code> (ej. 30 min). Si otro nodo intenta modificarla, el sistema bloquea la colisión atómicamente en SQLite.</p>
+      </div>
+
+      <div class="guide-section">
+        <h4>3. Canal A2A y Gobernanza OKF</h4>
+        <p>Los agentes comunican estados operacionales mediante MessagePack binario a 0 tokens y sintetizan resúmenes de arquitectura en 3 turnos para no inflar contextos.</p>
+      </div>
+
+      <div class="guide-section">
+        <h4>Atajos de Teclado Globales</h4>
+        <table class="shortcut-table">
+          <tr>
+            <td><kbd>Ctrl</kbd> + <kbd>N</kbd></td>
+            <td>Crear nueva tarea en Kanban</td>
+          </tr>
+          <tr>
+            <td><kbd>Ctrl</kbd> + <kbd>D</kbd></td>
+            <td>Alternar Modo Claro / Oscuro</td>
+          </tr>
+          <tr>
+            <td><kbd>F1</kbd></td>
+            <td>Abrir / Cerrar esta Guía de Usuario</td>
+          </tr>
+          <tr>
+            <td><kbd>ESC</kbd></td>
+            <td>Cerrar panel o ventana modal activa</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </aside>
+
+  <!-- =========================================================================
+       Modal para Creación de Nueva Tarea
+       ========================================================================= -->
+  <div id="new-task-modal" class="modal-overlay">
+    <div class="modal-box">
+      <h3 style="font-size: 15px; font-weight: 600;">Nueva Tarea Kanban</h3>
+
+      <div class="form-group">
+        <label class="form-label" for="input-task-id">Identificador Único</label>
+        <input id="input-task-id" class="form-input" type="text" placeholder="CARD-101" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-task-title">Título de la Tarea</label>
+        <input id="input-task-title" class="form-input" type="text" placeholder="Ej: Implementar Autenticación" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="input-task-desc">Descripción / Criterios</label>
+        <textarea id="input-task-desc" class="form-textarea" rows="3" placeholder="Detalles técnicos u objetivos de la tarea..."></textarea>
+      </div>
+
+      <div class="modal-footer">
+        <button id="cancel-modal-btn" class="btn">Cancelar</button>
+        <button id="save-task-btn" class="btn btn-primary">Crear Tarea</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/guide.js"></script>
+  <script src="js/kanban.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
