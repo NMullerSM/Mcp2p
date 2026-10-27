@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mcp2p": {
+      "command": "./.venv/bin/python",
+      "args": ["-m", "src.mcp.server"],
+      "env": {
+        "PYTHONPATH": "."
+      }
+    }
+  }
+}

@@ -65,6 +65,11 @@ flowchart TD
 * **Decisión**: La vista inicial de MCP2P es el **Hub de Proyectos**. Muestra la grilla de proyectos con sus nombres, `UUIDv4`, rutas de `app/` y `governance/` y la opción de crear nuevos. Al hacer doble clic en un proyecto, se abre su espacio de trabajo aislado (Kanban, OKF y agentes dedicados).
 * **Consecuencias**: Modelo mental claro (Proyecto primero, Kanban después); cero contaminación cruzada de contextos entre diferentes APIs y repositorios.
 
+### ADR-005: Servidor Local MCP y Leases Agénticos a Cero Tokens
+* **Contexto**: Los agentes autónomos (Claude Code, Cursor, Antigravity IDE) necesitan interactuar con el sistema, crear tareas y coordinar trabajo sin consumir tokens innecesarios ni colisionar entre sí.
+* **Decisión**: Implementación de un servidor MCP nativo (`mcp` SDK 2.x) ejecutándose sobre `stdio` exponiendo 7 herramientas deterministas conectadas a la base de datos SQLite WAL.
+* **Consecuencias**: Cualquier IDE o agente conectado vía `mcp.json` puede listar proyectos, manipular tarjetas, solicitar leases atómicos y registrar su SLA de revisión de forma determinista y estandarizada.
+
 ---
 
 ## 4. Historias de Usuario Principales
@@ -72,3 +77,4 @@ flowchart TD
 * **US-01 (Tablero Kanban sin Consumo de Tokens)**: Como desarrollador, quiero ver el estado de mis tareas y las de mi enjambre sin que se consuma un solo token de inferencia.
 * **US-02 (Guía de Usuario Integrada F1)**: Como nuevo desarrollador, quiero presionar `F1` y consultar la guía contextual sobre leases y atajos sin salir del tablero.
 * **US-03 (Protección por SLA del Revisor)**: Como colaborador con disponibilidad limitada, quiero definir mi propio SLA de 3 días para que mi compañero pueda avanzar en ramas paralelas sin romper mi ritmo.
+* **US-04 (Coordinación Agéntica vía MCP)**: Como agente de IA conectado vía Model Context Protocol, quiero consultar y reclamar tareas del backlog de un proyecto de forma atómica para evitar duplicar esfuerzos con otros agentes o humanos.
