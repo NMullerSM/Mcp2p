@@ -99,10 +99,11 @@ class NodeCryptoManager:
         return base64.urlsafe_b64encode(json_bytes).decode("ascii")
 
     @classmethod
-    def decode_and_verify_invite_token(cls, token_b64: str) -> Tuple[bool, Dict[str, Any], str]:
+    def decode_and_verify_invite_token(cls, token_b64: str, allow_unsigned: bool = False) -> Tuple[bool, Dict[str, Any], str]:
         """
-        Decodifica y verifica criptográficamente un token de invitación.
+        Decodifica y verifica criptográficamente un token de invitación Ed25519.
         Retorna: (is_valid, data_dict, error_message).
+        Por defecto, exige firma criptográfica válida y rechaza tokens sin firmar.
         """
         try:
             padded = token_b64 + "=" * (-len(token_b64) % 4)
@@ -114,8 +115,9 @@ class NodeCryptoManager:
             sig = package.get("sig", "")
 
             if not sender_pubkey or not sig:
-                # Token heredado sin firma
-                return True, data or package, ""
+                if allow_unsigned:
+                    return True, data or package, ""
+                return False, {}, "Token rechazado: Carece de firma criptográfica Ed25519 y clave pública del emisor."
 
             is_valid = cls.verify_signature(data, sig, sender_pubkey)
             if not is_valid:

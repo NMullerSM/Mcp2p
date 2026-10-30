@@ -1,0 +1,8 @@
+# Registro de Nodos Confiables del Enjambre
+version: "1.0"
+nodes:
+  - node_uuid: "node_pop-os"
+    developer_name: "nathanielwrk"
+    role: "owner"
+    public_key: ""
+    reviewer_sla_hours: 72

@@ -1,14 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OKF Mini Governance Specification",
-  "version": "1.0.0",
+  "title": "OKF v2 Full Governance Specification",
+  "version": "2.0.0",
   "required_files": [
     "01_ARQUITECTURA_Y_GOBERNANZA.md",
-    "02_MAPA_DE_CODIGO_Y_FEATURES.md"
+    "02_MAPA_DE_CODIGO_Y_FEATURES.md",
+    "conventions/git_and_worktrees.md",
+    "conventions/trusted_nodes.yaml",
+    "skills/registry.yaml",
+    "mcps/mcp_manifest.yaml"
   ],
   "required_directories": [
     "backend",
-    "frontend"
+    "frontend",
+    "architecture/decisions",
+    "architecture/adrs",
+    "architecture/discarded",
+    "design/heuristics",
+    "design/design_system",
+    "requirements/functional",
+    "requirements/non_functional",
+    "kanban/cards",
+    "kanban/discarded",
+    "conventions",
+    "skills",
+    "mcps"
   ],
   "rules": {
     "okf_01_headers": ["# OKF-01", "Architecture Decision Records", "Historias de Usuario"],

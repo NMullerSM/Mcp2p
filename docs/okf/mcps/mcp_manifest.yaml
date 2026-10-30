@@ -1,0 +1,16 @@
+# Manifiesto de Herramientas MCP2P
+version: "2.0"
+server_name: "mcp2p-server"
+tools:
+  - name: "get_task_full_context"
+    description: "Protocolo de lectura previa: tarjeta YAML, ADRs, diseño y diff de rama."
+  - name: "manage_task_worktree"
+    description: "Crea o limpia el worktree aislado de la tarea en app/.worktrees/{card_id}."
+  - name: "run_okf_micro_script"
+    description: "Ejecución de micro-scripts sobre el OKF (scaffold, move, link, discard)."
+  - name: "propose_or_apply_task_distribution"
+    description: "Negociación y reparto de tareas del backlog entre nodos."
+  - name: "inspect_pr_and_recommend"
+    description: "Cruce de PR contra OKF y emisión de recomendación sin firma."
+  - name: "submit_agent_jury_evaluation"
+    description: "Evaluación Borda de 5 dimensiones para el Tribunal de Honor."

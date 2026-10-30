@@ -1,0 +1,9 @@
+# Catálogo de Skills Compartidas del Proyecto OKF
+version: "1.0"
+skills:
+  - name: "skill-kanban-guard"
+    path: "skills/skill-kanban-guard"
+    description: "Gestión determinista de tareas y verificación de leases."
+  - name: "skill-ast-collision-checker"
+    path: "skills/skill-ast-collision-checker"
+    description: "Verificación estática de firmas y detección de colisiones de código."

@@ -63,7 +63,7 @@ class DatabaseManager:
         """Inicializa todas las tablas del enjambre P2P y proyectos."""
         with self._write_lock, self.get_connection() as conn:
             with conn:
-                # Comprobar y migrar tablas existentes si falta project_uuid o acceptance_criteria
+                # Comprobar y migrar tablas existentes si falta project_uuid o acceptance_criteria o related_ids_json o discarded
                 cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='kanban_cards';")
                 if cur.fetchone():
                     cols = [row["name"] for row in conn.execute("PRAGMA table_info(kanban_cards);").fetchall()]
@@ -75,8 +75,38 @@ class DatabaseManager:
                         DROP TABLE IF EXISTS dispute_tickets;
                         DROP TABLE IF EXISTS outbox_events;
                         """)
-                    elif "acceptance_criteria" not in cols:
-                        conn.execute("ALTER TABLE kanban_cards ADD COLUMN acceptance_criteria TEXT DEFAULT '';")
+                    else:
+                        if "acceptance_criteria" not in cols:
+                            conn.execute("ALTER TABLE kanban_cards ADD COLUMN acceptance_criteria TEXT DEFAULT '';")
+                        if "related_ids_json" not in cols:
+                            conn.execute("ALTER TABLE kanban_cards ADD COLUMN related_ids_json TEXT DEFAULT '[]';")
+                        sql_schema = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='kanban_cards';").fetchone()[0]
+                        if "'discarded'" not in sql_schema:
+                            conn.executescript("""
+                            CREATE TABLE IF NOT EXISTS kanban_cards_dg_tmp (
+                                card_id TEXT NOT NULL,
+                                project_uuid TEXT NOT NULL,
+                                title TEXT NOT NULL,
+                                description TEXT DEFAULT '',
+                                acceptance_criteria TEXT DEFAULT '',
+                                status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded')) NOT NULL DEFAULT 'backlog',
+                                assignee_node_uuid TEXT,
+                                lease_expires_at DATETIME,
+                                branch_ref TEXT,
+                                commit_refs_json TEXT DEFAULT '[]',
+                                content_hash TEXT DEFAULT '',
+                                related_ids_json TEXT DEFAULT '[]',
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                PRIMARY KEY (card_id, project_uuid),
+                                FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE,
+                                FOREIGN KEY (assignee_node_uuid) REFERENCES swarm_nodes(node_uuid)
+                            );
+                            INSERT INTO kanban_cards_dg_tmp (card_id, project_uuid, title, description, acceptance_criteria, status, assignee_node_uuid, lease_expires_at, branch_ref, commit_refs_json, content_hash, related_ids_json, created_at, updated_at)
+                            SELECT card_id, project_uuid, title, description, COALESCE(acceptance_criteria, ''), status, assignee_node_uuid, lease_expires_at, branch_ref, commit_refs_json, content_hash, COALESCE(related_ids_json, '[]'), created_at, updated_at FROM kanban_cards;
+                            DROP TABLE kanban_cards;
+                            ALTER TABLE kanban_cards_dg_tmp RENAME TO kanban_cards;
+                            """)
 
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
@@ -112,12 +142,13 @@ class DatabaseManager:
                     title TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     acceptance_criteria TEXT DEFAULT '',
-                    status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated')) NOT NULL DEFAULT 'backlog',
+                    status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded')) NOT NULL DEFAULT 'backlog',
                     assignee_node_uuid TEXT,
                     lease_expires_at DATETIME,
                     branch_ref TEXT,
                     commit_refs_json TEXT DEFAULT '[]',
                     content_hash TEXT DEFAULT '',
+                    related_ids_json TEXT DEFAULT '[]',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (card_id, project_uuid),
@@ -265,25 +296,52 @@ class DatabaseManager:
         okf_adapter.initialize_project_okf(gov_dir, name, p_uuid)
 
         if init_git:
+            # Configurar flags de subprocess para evitar CMD flashing en Windows
+            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+
             # 1. Inicializar repo de código si no existe .git
             if not (app_dir / ".git").exists():
-                subprocess.run(["git", "init", "-b", "main"], cwd=str(app_dir), capture_output=True)
+                subprocess.run(["git", "init", "-b", "main"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
+                subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
                 readme = app_dir / "README.md"
                 if not readme.exists():
                     readme.write_text(f"# {name}\n\nEspacio de desarrollo local-first gestionado por MCP2P.\nUUID: `{p_uuid}`\n", encoding="utf-8")
-                subprocess.run(["git", "add", "."], cwd=str(app_dir), capture_output=True)
-                subprocess.run(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], cwd=str(app_dir), capture_output=True)
+                subprocess.run(["git", "add", "."], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
+                subprocess.run(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
 
-            # 2. Inicializar repo de gobernanza con rama huérfana
+            # 2. Inicializar repo de gobernanza con rama huérfana aislada
             if not (gov_dir / ".git").exists():
-                subprocess.run(["git", "init", "-b", "main"], cwd=str(gov_dir), capture_output=True)
-                orphan_branch = f"orphan-conversa-memory-{p_uuid}"
-                subprocess.run(["git", "checkout", "--orphan", orphan_branch], cwd=str(gov_dir), capture_output=True)
-                # Crear archivo marcador de nodo
+                subprocess.run(["git", "init", "-b", "main"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
+                subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
+                
+                # Commit inicial de OKF en main
                 marker = gov_dir / ".okf_project.json"
                 marker.write_text(f'{{"project_uuid": "{p_uuid}", "name": "{name}"}}\n', encoding="utf-8")
-                subprocess.run(["git", "add", "."], cwd=str(gov_dir), capture_output=True)
-                subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance orphan branch for {p_uuid}"], cwd=str(gov_dir), capture_output=True)
+                subprocess.run(["git", "add", "."], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
+                subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance master branch for {p_uuid}"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
+
+                # Desacoplar la rama huérfana en un worktree dentro de .git para no ensuciar main
+                orphan_branch = f"orphan-conversa-memory-{p_uuid}"
+                orphan_wt_path = gov_dir / ".git" / "orphan_worktree"
+                subprocess.run(
+                    ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(orphan_wt_path)],
+                    cwd=str(gov_dir),
+                    capture_output=True,
+                    creationflags=creationflags
+                )
+                if orphan_wt_path.exists():
+                    conversa_readme = orphan_wt_path / "README_CONVERSA.md"
+                    conversa_readme.write_text(
+                        f"# Memoria Conversacional Desacoplada\n\nProyecto: {name} ({p_uuid})\nRama: {orphan_branch}\n",
+                        encoding="utf-8"
+                    )
+                    subprocess.run(["git", "add", "."], cwd=str(orphan_wt_path), capture_output=True, creationflags=creationflags)
+                    subprocess.run(
+                        ["git", "commit", "-m", f"init(orphan): initialize conversation memory branch for {p_uuid}"],
+                        cwd=str(orphan_wt_path),
+                        capture_output=True,
+                        creationflags=creationflags
+                    )
 
             # 3. Instalar hooks de Git para sincronización en tiempo real
             for d in (app_dir, gov_dir):
@@ -291,7 +349,10 @@ class DatabaseManager:
                 if hooks_dir.is_dir():
                     post_commit = hooks_dir / "post-commit"
                     post_commit.write_text("#!/bin/sh\ntouch .git_pulse 2>/dev/null || true\n", encoding="utf-8")
-                    post_commit.chmod(0o755)
+                    try:
+                        post_commit.chmod(0o755)
+                    except Exception:
+                        pass
 
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -424,6 +485,65 @@ class DatabaseManager:
     # Métodos de Tarjetas Kanban
     # ==========================
 
+    def _sync_card_to_okf_yaml(self, project_uuid: str, card_data: Dict[str, Any]) -> None:
+        """Sincroniza atómicamente la tarjeta modificada al archivo YAML en governance/kanban/cards/."""
+        try:
+            proj = self.get_project_by_uuid(project_uuid)
+            if not proj or not proj.get("gov_repo_path"):
+                return
+            gov_dir = Path(proj["gov_repo_path"])
+            if not gov_dir.exists():
+                return
+            from src.storage.okf_adapter import OKFAdapter
+            okf = OKFAdapter()
+            okf.write_card_yaml(gov_dir, card_data)
+        except Exception as exc:
+            logger.warning(f"Error sincronizando tarjeta {card_data.get('card_id')} a YAML OKF: {exc}")
+
+    def upsert_card_from_okf(
+        self,
+        project_uuid: str,
+        card_id: str,
+        title: str,
+        status: str,
+        description: str = "",
+        acceptance_criteria: str = "",
+        assignee_node_uuid: Optional[str] = None,
+        lease_expires_at: Optional[str] = None,
+        branch_ref: Optional[str] = None,
+        related_ids_json: str = "[]",
+        updated_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Inserta o actualiza una tarjeta directamente desde un archivo YAML del OKF (sin re-emitir escritura a YAML)."""
+        now = updated_at or datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO kanban_cards (
+                        card_id, project_uuid, title, description, acceptance_criteria,
+                        status, assignee_node_uuid, lease_expires_at, branch_ref,
+                        related_ids_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(project_uuid, card_id) DO UPDATE SET
+                        title = excluded.title,
+                        description = excluded.description,
+                        acceptance_criteria = excluded.acceptance_criteria,
+                        status = excluded.status,
+                        assignee_node_uuid = excluded.assignee_node_uuid,
+                        lease_expires_at = excluded.lease_expires_at,
+                        branch_ref = excluded.branch_ref,
+                        related_ids_json = excluded.related_ids_json,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (
+                        card_id, project_uuid, title, description, acceptance_criteria,
+                        status, assignee_node_uuid, lease_expires_at, branch_ref,
+                        related_ids_json, now, now
+                    )
+                )
+        return self.get_card_by_id(project_uuid, card_id) or {}
+
     def get_cards(self, project_uuid: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Recupera tarjetas Kanban para un proyecto específico."""
         with self.get_connection() as conn:
@@ -447,7 +567,7 @@ class DatabaseManager:
         description: str = "",
         acceptance_criteria: str = ""
     ) -> Dict[str, Any]:
-        """Crea una nueva tarjeta en el backlog asociada a un proyecto."""
+        """Crea una nueva tarjeta en el backlog asociada a un proyecto y sincroniza a YAML."""
         now = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -458,7 +578,9 @@ class DatabaseManager:
                     """,
                     (card_id, project_uuid, title, description, acceptance_criteria, now, now)
                 )
-        return self.get_card_by_id(project_uuid, card_id) or {}
+        card = self.get_card_by_id(project_uuid, card_id) or {}
+        self._sync_card_to_okf_yaml(project_uuid, card)
+        return card
 
     def update_card_details(
         self,
@@ -470,7 +592,7 @@ class DatabaseManager:
         status: Optional[str] = None,
         branch_ref: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza los detalles completos de una tarjeta (título, descripción, criterios de aceptación, estado y rama)."""
+        """Actualiza los detalles completos de una tarjeta y sincroniza a YAML."""
         card = self.get_card_by_id(project_uuid, card_id)
         if not card:
             raise ValueError(f"Tarjeta no encontrada: {card_id}")
@@ -492,7 +614,9 @@ class DatabaseManager:
                     """,
                     (new_title, new_desc, new_crit, new_status, new_branch, now_str, project_uuid, card_id)
                 )
-        return self.get_card_by_id(project_uuid, card_id) or {}
+        updated = self.get_card_by_id(project_uuid, card_id) or {}
+        self._sync_card_to_okf_yaml(project_uuid, updated)
+        return updated
 
     def get_card_by_id(self, project_uuid: str, card_id: str) -> Optional[Dict[str, Any]]:
         """Obtiene una tarjeta por su ID y proyecto."""
@@ -505,7 +629,7 @@ class DatabaseManager:
             return dict(row) if row else None
 
     def claim_card_lease(self, project_uuid: str, card_id: str, node_uuid: str, duration_minutes: int = 30) -> Dict[str, Any]:
-        """Adquiere una tarjeta atómicamente asignando un lease con expiración temporal."""
+        """Adquiere una tarjeta atómicamente asignando un lease con expiración temporal y sincroniza a YAML."""
         now = datetime.now(timezone.utc)
         expires_at = datetime.fromtimestamp(now.timestamp() + (duration_minutes * 60), tz=timezone.utc).isoformat()
         now_str = now.isoformat()
@@ -543,7 +667,9 @@ class DatabaseManager:
                     (node_uuid, expires_at, now_str, project_uuid, card_id)
                 )
 
-        return self.get_card_by_id(project_uuid, card_id) or {}
+        updated = self.get_card_by_id(project_uuid, card_id) or {}
+        self._sync_card_to_okf_yaml(project_uuid, updated)
+        return updated
 
     def update_card_status(
         self,
@@ -552,7 +678,7 @@ class DatabaseManager:
         new_status: str,
         branch_ref: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza el estado de una tarjeta en un proyecto."""
+        """Actualiza el estado de una tarjeta en un proyecto y sincroniza a YAML."""
         now_str = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -583,7 +709,9 @@ class DatabaseManager:
                         """,
                         (new_status, now_str, project_uuid, card_id)
                     )
-        return self.get_card_by_id(project_uuid, card_id) or {}
+        updated = self.get_card_by_id(project_uuid, card_id) or {}
+        self._sync_card_to_okf_yaml(project_uuid, updated)
+        return updated
 
     # ==========================
     # Métodos de Nodos del Enjambre

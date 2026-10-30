@@ -1,0 +1,22 @@
+flowchart TD
+    subgraph Node1["Nodo Linux (Dev 1 + Agente 1)"]
+        A1["Agente Local 1"] <--> MCP1["MCP2P Server 1"]
+        MCP1 <--> DB1[("SQLite 1")]
+        MCP1 <--> Gov1["OKF Local 1"]
+    end
+
+    subgraph Node2["Nodo Windows (Dev 2 + Agente 2)"]
+        A2["Agente Local 2"] <--> MCP2["MCP2P Server 2"]
+        MCP2 <--> DB2[("SQLite 2")]
+        MCP2 <--> Gov2["OKF Local 2"]
+    end
+
+    subgraph SyncChannel["Canal de Sincronización P2P"]
+        LAN["Webhooks HTTP LAN :8765"]
+        GitRemote["Repositorio Remoto Git (main + orphan-conversa-memory)"]
+    end
+
+    Node1 <--> LAN
+    LAN <--> Node2
+    Gov1 <--> GitRemote
+    GitRemote <--> Gov2
