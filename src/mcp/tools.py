@@ -7,6 +7,7 @@ Todas las operaciones son deterministas y se ejecutan a coste 0 de tokens sobre 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
@@ -21,10 +22,27 @@ class MCPToolsHandler:
         self.bus = A2ABus(db=self.db)
         self.okf = OKFAdapter()
 
+    def _wrap_response(self, project_uuid: Optional[str], result_data: Dict[str, Any]) -> str:
+        """
+        Envoltura universal de respuestas MCP.
+        Agrega notificaciones piggyback (turnos dialécticos entrantes, disputas o tareas pendientes)
+        para que los agentes se enteren proactivamente sin necesidad de sondeos manuales.
+        """
+        unread: List[Dict[str, Any]] = []
+        if project_uuid:
+            try:
+                recent = self.db.get_recent_a2a_messages(project_uuid, limit=5)
+                unread = [{"sender": m.get("sender_node_uuid"), "intent": m.get("intent"), "at": m.get("created_at")} for m in recent]
+            except Exception:
+                unread = []
+
+        result_data["unread_notifications"] = unread
+        return json.dumps(result_data, indent=2, ensure_ascii=False)
+
     def list_projects(self) -> str:
         """Lista todos los proyectos registrados con su UUID y rutas de doble repositorio."""
         projects = self.db.list_projects()
-        return json.dumps({"success": True, "projects": projects}, indent=2, ensure_ascii=False)
+        return self._wrap_response(None, {"success": True, "projects": projects})
 
     def get_kanban_board(self, project_uuid: str, status: Optional[str] = None) -> str:
         """
@@ -33,15 +51,15 @@ class MCPToolsHandler:
         """
         try:
             cards = self.db.get_cards(project_uuid=project_uuid, status=status)
-            return json.dumps({
+            return self._wrap_response(project_uuid, {
                 "success": True,
                 "project_uuid": project_uuid,
                 "status_filter": status or "all",
                 "count": len(cards),
                 "cards": cards
-            }, indent=2, ensure_ascii=False)
+            })
         except Exception as e:
-            return json.dumps({"success": False, "error": str(e)}, indent=2)
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 
     def create_kanban_task(
         self,
@@ -291,3 +309,251 @@ class MCPToolsHandler:
             }, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+    # ==========================================
+    # Nuevas Herramientas MCP Etapa 3: "Las Manos del Agente"
+    # ==========================================
+
+    def get_task_full_context(self, project_uuid: str, card_id: str) -> str:
+        """
+        Protocolo de lectura previa: Devuelve en 1 sola llamada la tarjeta YAML,
+        ADRs y decisiones enlazadas, reglas UX, el worktree asociado y el diff de rama.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return self._wrap_response(project_uuid, {"success": False, "error": "Proyecto no encontrado"})
+
+            card = self.db.get_card_by_id(project_uuid, card_id)
+            if not card:
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Tarjeta {card_id} no encontrada"})
+
+            gov_path = Path(proj["gov_repo_path"])
+            app_path = Path(proj["code_repo_path"])
+
+            # Cargar tarjeta YAML fresca
+            yaml_card = {}
+            yaml_path = gov_path / "kanban" / "cards" / f"{card_id}.yaml"
+            if not yaml_path.exists() and (gov_path / "docs" / "okf" / "kanban" / "cards" / f"{card_id}.yaml").exists():
+                yaml_path = gov_path / "docs" / "okf" / "kanban" / "cards" / f"{card_id}.yaml"
+
+            if yaml_path.exists():
+                import yaml
+                yaml_card = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+
+            # Cargar ADRs y Decisiones relacionadas
+            related_ids = yaml_card.get("related_ids", [])
+            docs_base = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+            linked_docs = {}
+            for rid in related_ids:
+                matches = list(docs_base.glob(f"**/{rid}*.md"))
+                if matches:
+                    linked_docs[rid] = matches[0].read_text(encoding="utf-8", errors="ignore")[:2000]
+
+            # Worktree info
+            wt_path = app_path / ".worktrees" / card_id
+            has_worktree = wt_path.exists()
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "card": card,
+                "yaml_data": yaml_card,
+                "linked_governance_docs": linked_docs,
+                "has_worktree": has_worktree,
+                "worktree_path": str(wt_path) if has_worktree else None
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def manage_task_worktree(
+        self,
+        project_uuid: str,
+        card_id: str,
+        node_uuid: str,
+        action: str,
+        files_scope_json: Optional[str] = None
+    ) -> str:
+        """
+        Crea o limpia el worktree aislado de una tarea en app/.worktrees/{card_id} coordinado con la rama huérfana.
+        action: 'create' o 'remove'.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return self._wrap_response(project_uuid, {"success": False, "error": "Proyecto no encontrado"})
+
+            scope = json.loads(files_scope_json) if files_scope_json else []
+            res = self.okf.manage_task_worktree(
+                code_repo_path=proj["code_repo_path"],
+                gov_base_path=proj["gov_repo_path"],
+                project_uuid=project_uuid,
+                card_id=card_id,
+                node_uuid=node_uuid,
+                action=action,
+                files_scope=scope
+            )
+            return self._wrap_response(project_uuid, res)
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def run_okf_micro_script(
+        self,
+        project_uuid: str,
+        script_action: str,
+        params_json: str
+    ) -> str:
+        """
+        Micro-scripts seguros sobre el OKF dentro del Path Jail.
+        Acciones:
+        - 'scaffold_decision': crea decisión técnica
+        - 'promote_decision': promueve a ADR o discarded
+        - 'update_card': escribe tarjeta YAML
+        - 'reconcile_kanban': sincroniza YAML a SQLite
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return self._wrap_response(project_uuid, {"success": False, "error": "Proyecto no encontrado"})
+
+            gov_path = Path(proj["gov_repo_path"])
+            params = json.loads(params_json) if isinstance(params_json, str) else params_json
+
+            if script_action == "scaffold_decision":
+                p = self.okf.scaffold_okf_artifact(
+                    gov_base_path=gov_path,
+                    artifact_type=params.get("artifact_type", "decision"),
+                    item_id=params["item_id"],
+                    title=params["title"],
+                    content=params["content"],
+                    related_ids=params.get("related_ids")
+                )
+                return self._wrap_response(project_uuid, {"success": True, "created_path": str(p)})
+
+            elif script_action == "promote_decision":
+                p = self.okf.move_decision_lifecycle(
+                    gov_base_path=gov_path,
+                    dec_id=params["decision_id"],
+                    target_state=params.get("target_state", "approved"),
+                    reason_or_consequences=params.get("resolution_notes", ""),
+                    signature_block=params.get("signature_block")
+                )
+                return self._wrap_response(project_uuid, {"success": True, "promoted_path": str(p)})
+
+            elif script_action == "update_card":
+                p = self.okf.write_card_yaml(gov_path, params["card_data"])
+                return self._wrap_response(project_uuid, {"success": True, "written_path": str(p)})
+
+            elif script_action == "reconcile_kanban":
+                rec = self.okf.reconcile_kanban_from_okf(gov_path, project_uuid, self.db)
+                return self._wrap_response(project_uuid, {"success": True, "reconciled": rec})
+
+            else:
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Acción desconocida: {script_action}"})
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def propose_or_apply_task_distribution(
+        self,
+        project_uuid: str,
+        sender_node_uuid: str,
+        session_id: str,
+        distribution_plan_json: str,
+        apply_immediately: bool = False
+    ) -> str:
+        """
+        Permite a los agentes negociar o repartirse las tarjetas del backlog.
+        Si apply_immediately es True, adquiere los leases en SQLite/YAML de inmediato.
+        """
+        try:
+            plan = json.loads(distribution_plan_json)
+            # Publicar en el bus dialéctico
+            res = self.bus.post_dialogue_message(
+                project_uuid=project_uuid,
+                sender_node_uuid=sender_node_uuid,
+                session_id=session_id,
+                message_type="TASK_DISTRIBUTION",
+                reasoning_text="Propuesta de distribución de responsabilidades",
+                structured_proposal=plan
+            )
+
+            applied_leases = []
+            if apply_immediately:
+                # plan = {"TASK-01": "node_alpha", "TASK-02": "node_beta"}
+                for card_id, target_node in plan.items():
+                    if isinstance(target_node, str):
+                        claimed = self.db.claim_card_lease(project_uuid, card_id, target_node, duration_minutes=45)
+                        applied_leases.append(claimed)
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "message_event": res,
+                "applied_leases": applied_leases
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def inspect_pr_and_recommend(
+        self,
+        project_uuid: str,
+        pr_id_or_branch: str,
+        reviewer_node_uuid: str,
+        recommendation: str,
+        analysis_summary: str,
+        suggested_reply: str
+    ) -> str:
+        """
+        El agente lee la PR contra el OKF y genera una recomendación para el humano:
+        ('RECOMMEND_ACCEPT', 'RECOMMEND_CHANGES', 'RECOMMEND_JURY').
+        NO aprueba directamente ni accede a la firma Ed25519 privada del desarrollador.
+        """
+        try:
+            valid_recs = ("RECOMMEND_ACCEPT", "RECOMMEND_CHANGES", "RECOMMEND_JURY")
+            if recommendation not in valid_recs:
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Recomendación no válida: {recommendation}"})
+
+            # Encolar como mensaje dialéctico / evento HITL para visualización en UI
+            event_res = self.bus.post_dialogue_message(
+                project_uuid=project_uuid,
+                sender_node_uuid=reviewer_node_uuid,
+                session_id=f"pr_review_{pr_id_or_branch}",
+                message_type="REASONING_REPLY",
+                reasoning_text=analysis_summary,
+                structured_proposal={
+                    "recommendation": recommendation,
+                    "target_pr": pr_id_or_branch,
+                    "suggested_reply": suggested_reply
+                }
+            )
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "recommendation_logged": True,
+                "event": event_res
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def submit_agent_jury_evaluation(
+        self,
+        project_uuid: str,
+        ticket_id: str,
+        agent_id: str,
+        evaluations_json: str,
+        rationale: str = ""
+    ) -> str:
+        """
+        Emite la evaluación técnica ponderada (1.5) del agente en un Juicio de Honor.
+        evaluations_json: Dict con opciones ('OPTION_A', 'OPTION_B', 'THIRD_WAY_C')
+        y sus notas (kiss, performance, security, ux_hicks, testability).
+        """
+        try:
+            scores = json.loads(evaluations_json)
+            res = self.bus.submit_agent_borda_evaluation(
+                ticket_id=ticket_id,
+                juror_agent_id=agent_id,
+                scores_per_option=scores,
+                rationale=rationale
+            )
+            return self._wrap_response(project_uuid, {"success": True, "evaluations": res})
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})

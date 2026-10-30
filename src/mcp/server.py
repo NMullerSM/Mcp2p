@@ -161,6 +161,112 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
         """
         return handler.inspect_okf_governance(project_uuid=project_uuid)
 
+    # 11. Herramienta: Contexto Integral de Tarea (Protocolo de lectura previa)
+    @server.tool()
+    def get_task_full_context(project_uuid: str, card_id: str) -> str:
+        """
+        Obtiene en una sola llamada la tarjeta YAML, ADRs enlazados, reglas de diseño y worktree asociado.
+        """
+        return handler.get_task_full_context(project_uuid=project_uuid, card_id=card_id)
+
+    # 12. Herramienta: Administrar Worktree por Tarea
+    @server.tool()
+    def manage_task_worktree(
+        project_uuid: str,
+        card_id: str,
+        node_uuid: str,
+        action: str,
+        files_scope_json: Optional[str] = None
+    ) -> str:
+        """
+        Crea o remueve el worktree aislado de una tarea en app/.worktrees/{card_id} verificando colisiones de scope.
+        """
+        return handler.manage_task_worktree(
+            project_uuid=project_uuid,
+            card_id=card_id,
+            node_uuid=node_uuid,
+            action=action,
+            files_scope_json=files_scope_json
+        )
+
+    # 13. Herramienta: Micro-scripts del OKF
+    @server.tool()
+    def run_okf_micro_script(
+        project_uuid: str,
+        script_action: str,
+        params_json: str
+    ) -> str:
+        """
+        Ejecuta micro-scripts sobre la gobernanza OKF (scaffold_decision, promote_decision, update_card, reconcile_kanban).
+        """
+        return handler.run_okf_micro_script(
+            project_uuid=project_uuid,
+            script_action=script_action,
+            params_json=params_json
+        )
+
+    # 14. Herramienta: Proponer o Aplicar Reparto de Tareas
+    @server.tool()
+    def propose_or_apply_task_distribution(
+        project_uuid: str,
+        sender_node_uuid: str,
+        session_id: str,
+        distribution_plan_json: str,
+        apply_immediately: bool = False
+    ) -> str:
+        """
+        Permite a los agentes coordinar la distribución de tareas del backlog y reclamar leases sin pisarse.
+        """
+        return handler.propose_or_apply_task_distribution(
+            project_uuid=project_uuid,
+            sender_node_uuid=sender_node_uuid,
+            session_id=session_id,
+            distribution_plan_json=distribution_plan_json,
+            apply_immediately=apply_immediately
+        )
+
+    # 15. Herramienta: Inspeccionar PR y Recomendar al Humano (HITL Guardrail)
+    @server.tool()
+    def inspect_pr_and_recommend(
+        project_uuid: str,
+        pr_id_or_branch: str,
+        reviewer_node_uuid: str,
+        recommendation: str,
+        analysis_summary: str,
+        suggested_reply: str
+    ) -> str:
+        """
+        Analiza una Pull Request contra el OKF y deja lista su recomendación en la bandeja del humano sin auto-firmar.
+        """
+        return handler.inspect_pr_and_recommend(
+            project_uuid=project_uuid,
+            pr_id_or_branch=pr_id_or_branch,
+            reviewer_node_uuid=reviewer_node_uuid,
+            recommendation=recommendation,
+            analysis_summary=analysis_summary,
+            suggested_reply=suggested_reply
+        )
+
+    # 16. Herramienta: Emitir Evaluación de Agente en Juicio de Honor (1.5)
+    @server.tool()
+    def submit_agent_jury_evaluation(
+        project_uuid: str,
+        ticket_id: str,
+        agent_id: str,
+        evaluations_json: str,
+        rationale: str = ""
+    ) -> str:
+        """
+        Emite la evaluación técnica ponderada de un agente en un ticket de juicio de honor (peso 1.5).
+        """
+        return handler.submit_agent_jury_evaluation(
+            project_uuid=project_uuid,
+            ticket_id=ticket_id,
+            agent_id=agent_id,
+            evaluations_json=evaluations_json,
+            rationale=rationale
+        )
+
     return server
 
 

@@ -161,7 +161,7 @@ class DatabaseManager:
                     message_uuid TEXT PRIMARY KEY,
                     project_uuid TEXT NOT NULL,
                     sender_node_uuid TEXT NOT NULL,
-                    intent TEXT CHECK(intent IN ('INFORMATIVE', 'COORDINATION', 'SEMANTIC_COLLISION', 'SUMMARY_SYNTHESIS')) NOT NULL,
+                    intent TEXT CHECK(intent IN ('INFORMATIVE', 'COORDINATION', 'SEMANTIC_COLLISION', 'SUMMARY_SYNTHESIS', 'DIALOGUE', 'CHECKPOINT_COMPACT')) NOT NULL,
                     card_id TEXT,
                     payload_rfc_yaml TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -201,6 +201,19 @@ class DatabaseManager:
                     score_testability REAL NOT NULL CHECK(score_testability BETWEEN 0 AND 100),
                     weighted_total REAL NOT NULL,
                     rationale_summary TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (ticket_id) REFERENCES dispute_tickets(ticket_id) ON DELETE CASCADE
+                );
+
+                -- 6b. Votos Humanos de Juicio de Honor (Peso 2.0 frente a 1.5 de Agentes)
+                CREATE TABLE IF NOT EXISTS human_jury_votes (
+                    vote_uuid TEXT PRIMARY KEY,
+                    ticket_id TEXT NOT NULL,
+                    node_uuid TEXT NOT NULL,
+                    developer_name TEXT NOT NULL,
+                    voted_option TEXT CHECK(voted_option IN ('OPTION_A', 'OPTION_B', 'THIRD_WAY_C')) NOT NULL,
+                    weight REAL DEFAULT 2.0,
+                    signature_ed25519 TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (ticket_id) REFERENCES dispute_tickets(ticket_id) ON DELETE CASCADE
                 );
@@ -954,4 +967,138 @@ class DatabaseManager:
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 cur = conn.execute("DELETE FROM app_settings WHERE key = ?;", (key,))
+                return cur.rowcount > 0
+
+    # ==========================
+    # Juicio de Honor y Votación Ponderada (2.0 Humano / 1.5 Agente)
+    # ==========================
+
+    def create_dispute_ticket(
+        self,
+        ticket_id: str,
+        project_uuid: str,
+        title: str,
+        collision_reason: str,
+        contender_a_node: str,
+        contender_b_node: str,
+        proposal_a_ref: str,
+        proposal_b_ref: str,
+        card_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Crea un nuevo ticket de arbitraje técnico."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO dispute_tickets (
+                        ticket_id, project_uuid, card_id, title, collision_reason,
+                        contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
+                        status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?);
+                    """,
+                    (ticket_id, project_uuid, card_id, title, collision_reason,
+                     contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref, now_str)
+                )
+        return self.get_dispute_ticket(ticket_id) or {}
+
+    def get_dispute_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera los detalles de un ticket de disputa."""
+        with self.get_connection() as conn:
+            cur = conn.execute("SELECT * FROM dispute_tickets WHERE ticket_id = ?;", (ticket_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def add_jury_borda_score(
+        self,
+        vote_uuid: str,
+        ticket_id: str,
+        juror_id: str,
+        evaluated_option: str,
+        score_kiss: float,
+        score_performance: float,
+        score_security: float,
+        score_ux_hicks: float,
+        score_testability: float,
+        rationale_summary: str = ""
+    ) -> Dict[str, Any]:
+        """Registra la evaluación Borda de un agente con ponderación por dimensiones."""
+        weighted_total = (
+            score_kiss * 0.25 +
+            score_performance * 0.25 +
+            score_security * 0.20 +
+            score_ux_hicks * 0.15 +
+            score_testability * 0.15
+        )
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO jury_borda_scores (
+                        vote_uuid, ticket_id, juror_id, evaluated_option,
+                        score_kiss, score_performance, score_security,
+                        score_ux_hicks, score_testability, weighted_total,
+                        rationale_summary, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (
+                        vote_uuid, ticket_id, juror_id, evaluated_option,
+                        score_kiss, score_performance, score_security,
+                        score_ux_hicks, score_testability, weighted_total,
+                        rationale_summary, now_str
+                    )
+                )
+        return {"vote_uuid": vote_uuid, "weighted_total": weighted_total}
+
+    def add_human_jury_vote(
+        self,
+        vote_uuid: str,
+        ticket_id: str,
+        node_uuid: str,
+        developer_name: str,
+        voted_option: str,
+        signature_ed25519: str
+    ) -> Dict[str, Any]:
+        """Registra el voto humano directo de un desarrollador (Peso fijo 2.0)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO human_jury_votes (
+                        vote_uuid, ticket_id, node_uuid, developer_name,
+                        voted_option, weight, signature_ed25519, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 2.0, ?, ?);
+                    """,
+                    (vote_uuid, ticket_id, node_uuid, developer_name, voted_option, signature_ed25519, now_str)
+                )
+        return {"vote_uuid": vote_uuid, "weight": 2.0, "voted_option": voted_option}
+
+    def get_jury_votes_summary(self, ticket_id: str) -> Dict[str, Any]:
+        """Recupera los votos humanos y de agentes emitidos para un ticket."""
+        with self.get_connection() as conn:
+            agent_cur = conn.execute("SELECT * FROM jury_borda_scores WHERE ticket_id = ?;", (ticket_id,))
+            agent_scores = [dict(r) for r in agent_cur.fetchall()]
+            human_cur = conn.execute("SELECT * FROM human_jury_votes WHERE ticket_id = ?;", (ticket_id,))
+            human_votes = [dict(r) for r in human_cur.fetchall()]
+            return {"agent_scores": agent_scores, "human_votes": human_votes}
+
+    def resolve_dispute_ticket(
+        self,
+        ticket_id: str,
+        winning_option: str,
+        final_adr_path: Optional[str] = None
+    ) -> bool:
+        """Actualiza el ticket a ratificado y registra el ganador final."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    """
+                    UPDATE dispute_tickets
+                    SET status = 'ratified', winning_quadrant = ?, final_adr_path = ?
+                    WHERE ticket_id = ?;
+                    """,
+                    (winning_option, final_adr_path, ticket_id)
+                )
                 return cur.rowcount > 0
