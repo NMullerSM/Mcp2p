@@ -34,12 +34,12 @@ def get_ui_target() -> str:
     # 1. Comprobar build compilado de React (Vite)
     react_dist = root_dir / "frontend" / "dist" / "index.html"
     if react_dist.exists():
-        return f"file://{react_dist}"
+        return react_dist.as_uri()
 
     # 2. Fallback a la UI clásica en src/ui
     vanilla_ui = current_dir.parent / "ui" / "index.html"
     if vanilla_ui.exists():
-        return f"file://{vanilla_ui}"
+        return vanilla_ui.as_uri()
 
     raise FileNotFoundError("No se encontró ningún archivo de interfaz válido (frontend/dist ni src/ui).")
 
