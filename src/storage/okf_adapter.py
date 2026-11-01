@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import subprocess
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -214,6 +215,64 @@ graph TD
         Asegura que la estructura OKF exista en gov_base_path; si falta algún componente, lo inicializa o repara automáticamente.
         """
         return self.initialize_project_okf(gov_base_path, project_name, project_uuid)
+
+    def add_trusted_node_pubkey(
+        self,
+        gov_base_path: str | Path,
+        node_uuid: str,
+        public_key: str,
+        username: str = "",
+        role: str = "collaborator"
+    ) -> bool:
+        """Registra o actualiza la clave pública y rol de un nodo de confianza en conventions/trusted_nodes.yaml."""
+        docs_okf = Path(gov_base_path) / "docs" / "okf"
+        trusted_nodes_path = docs_okf / "conventions" / "trusted_nodes.yaml"
+        trusted_nodes_path.parent.mkdir(parents=True, exist_ok=True)
+
+        data = {"version": "1.0", "nodes": []}
+        if trusted_nodes_path.exists():
+            try:
+                loaded = yaml.safe_load(trusted_nodes_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and "nodes" in loaded:
+                    data = loaded
+            except Exception:
+                pass
+
+        # Buscar si ya existe el nodo
+        found = False
+        for node in data.get("nodes", []):
+            if node.get("node_uuid") == node_uuid:
+                node["public_key"] = public_key
+                node["role"] = role
+                if username:
+                    node["username"] = username
+                found = True
+                break
+
+        if not found:
+            data.setdefault("nodes", []).append({
+                "node_uuid": node_uuid,
+                "role": role,
+                "public_key": public_key,
+                "username": username
+            })
+
+        trusted_nodes_path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+        return True
+
+    def get_trusted_nodes_map(self, gov_base_path: str | Path) -> Dict[str, Dict[str, Any]]:
+        """Retorna un diccionario mapeando node_uuid a su información (public_key, role, username)."""
+        docs_okf = Path(gov_base_path) / "docs" / "okf"
+        trusted_nodes_path = docs_okf / "conventions" / "trusted_nodes.yaml"
+        if not trusted_nodes_path.exists():
+            return {}
+        try:
+            loaded = yaml.safe_load(trusted_nodes_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and "nodes" in loaded:
+                return {n.get("node_uuid"): n for n in loaded["nodes"] if n.get("node_uuid")}
+        except Exception:
+            pass
+        return {}
 
     # ==========================================
     # Validación e Inspección OKF
@@ -509,13 +568,18 @@ graph TD
         self,
         gov_base_path: str | Path,
         project_uuid: str,
-        db_manager: Any
+        db_manager: Optional[Any] = None
     ) -> Dict[str, int]:
         """
         Reconcilia todos los archivos YAML del Kanban en OKF hacia la base de datos SQLite.
         Actúa como hidratador determinista a 0 tokens.
         """
-        import yaml
+        if db_manager is None:
+            from src.storage.db import DatabaseManager
+            db = DatabaseManager.get_instance()
+        else:
+            db = db_manager
+
         base = Path(gov_base_path)
         docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
         kanban_dir = docs_okf / "kanban"

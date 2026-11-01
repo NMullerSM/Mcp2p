@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import re
+import subprocess
 import sys
 import urllib.parse
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
 from src.p2p.crypto import NodeCryptoManager
 from src.storage.github_sync import GitHubSyncManager
+
+logger = logging.getLogger("mcp2p.api_bridge")
 
 
 class ApiBridge:
@@ -40,11 +43,18 @@ class ApiBridge:
     def _ensure_local_node(self) -> None:
         default_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
         default_user = os.environ.get("USER", os.environ.get("USERNAME", "developer"))
+        # Si hay usuario de GitHub autenticado vía PAT, priorizarlo como identidad
+        try:
+            gh_user = self.db.get_setting("github_pat_username")
+            if gh_user:
+                default_user = gh_user
+        except Exception:
+            pass
         self.db.register_or_update_node(
             node_uuid=default_node,
             developer_name=default_user,
             agent_id=f"agent_{default_user}",
-            reviewer_sla_hours=72,
+            reviewer_sla_hours=24,
             status="online"
         )
 
@@ -65,18 +75,30 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_project(self, name: str, code_repo_url: str = "", gov_repo_url: str = "", auto_publish: bool = False) -> Dict[str, Any]:
+    def create_project(
+        self,
+        name: str,
+        code_repo_url: str = "",
+        gov_repo_url: str = "",
+        auto_publish: bool = False,
+        reviewer_sla_hours: int = 24
+    ) -> Dict[str, Any]:
         """Crea un nuevo proyecto con doble repositorio y rama huérfana, con opción de publicación autónoma a GitHub."""
         try:
             if not name.strip():
                 return {"success": False, "error": "El nombre del proyecto es obligatorio"}
-            proj = self.db.create_project(name=name.strip(), code_repo_url=code_repo_url, gov_repo_url=gov_repo_url)
+            proj = self.db.create_project(
+                name=name.strip(),
+                code_repo_url=code_repo_url,
+                gov_repo_url=gov_repo_url,
+                reviewer_sla_hours=reviewer_sla_hours
+            )
             self.active_project_uuid = proj["project_uuid"]
 
             # Auto-publicación si se solicita y hay credenciales de GitHub disponibles
             if auto_publish:
                 try:
-                    self.publish_project_to_github(proj["project_uuid"], repo_target="app")
+                    self.publish_project_to_github(proj["project_uuid"], repo_target="both")
                 except Exception as ce:
                     logger.warning(f"Auto-publish to GitHub omitted: {ce}")
 
@@ -147,7 +169,11 @@ class ApiBridge:
             return {"success": False, "error": str(e)}
 
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
-        """Se une a un proyecto P2P a partir de un enlace o token firmado criptográficamente."""
+        """
+        Se une a un proyecto P2P a partir de un enlace o token firmado criptográficamente.
+        Si incluye URLs de GitHub, clona ambos repositorios (código y gobernanza),
+        desacopla la rama huérfana de memoria e importa el estado de gobernanza OKF.
+        """
         try:
             raw = invite_str.strip()
             token = raw
@@ -174,13 +200,99 @@ class ApiBridge:
                 self.active_project_uuid = p_uuid
                 return {"success": True, "project": existing, "message": "Proyecto ya registrado. Se activó el contexto."}
 
-            # Crear proyecto con el UUID compartido
-            proj = self.db.create_project(
-                name=p_name,
-                code_repo_url=payload.get("code_repo_url", ""),
-                gov_repo_url=payload.get("gov_repo_url", ""),
-                project_uuid=p_uuid
-            )
+            code_url = payload.get("code_repo_url", "").strip()
+            gov_url = payload.get("gov_repo_url", "").strip()
+
+            clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
+            short_id = p_uuid.replace("proj_", "")[:8]
+            base_dir = self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
+            app_dir = base_dir / f"app_{clean_name}"
+            gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
+
+            # Si hay repos remotos, clonar de forma segura sin inicializar vacíos
+            if gov_url or code_url:
+                # 1. Intentar aceptar invitaciones pendientes automáticamente en GitHub
+                try:
+                    self.github.accept_pending_invitations()
+                except Exception as acc_e:
+                    logger.debug(f"Auto-accept invitations omitido: {acc_e}")
+
+                # 2. Clonar repositorio de gobernanza OKF
+                if gov_url and not (gov_dir / ".git").exists():
+                    res_gov = self.github.git_clone(gov_url, gov_dir)
+                    if res_gov.get("status") == "pending_access":
+                        return {
+                            "success": False,
+                            "status": "pending_access",
+                            "error": "Acceso denegado a los repositorios de GitHub. Acepta la invitación de repositorio o verifica tus credenciales PAT.",
+                            "project_uuid": p_uuid,
+                            "sender_github": payload.get("sender_github")
+                        }
+                    if not res_gov.get("success"):
+                        return {"success": False, "error": f"Fallo al clonar repositorio de gobernanza: {res_gov.get('error')}"}
+
+                # 3. Clonar repositorio de código
+                if code_url and not (app_dir / ".git").exists():
+                    res_app = self.github.git_clone(code_url, app_dir)
+                    if res_app.get("status") == "pending_access":
+                        return {
+                            "success": False,
+                            "status": "pending_access",
+                            "error": "Acceso denegado a los repositorios de GitHub. Acepta la invitación de repositorio o verifica tus credenciales PAT.",
+                            "project_uuid": p_uuid,
+                            "sender_github": payload.get("sender_github")
+                        }
+                    if not res_app.get("success"):
+                        return {"success": False, "error": f"Fallo al clonar repositorio de código: {res_app.get('error')}"}
+
+                # 4. Asegurar rama huérfana desacoplada en gobernanza
+                if gov_dir.exists() and (gov_dir / ".git").exists():
+                    try:
+                        self.ensure_orphan_worktree(gov_dir, p_uuid)
+                    except Exception as oe:
+                        logger.warning(f"No se pudo inicializar orphan worktree tras clonar: {oe}")
+
+                    # 5. Reconciliar OKF en base de datos local
+                    try:
+                        self.okf.reconcile_kanban_from_okf(gov_dir, p_uuid, self.db)
+                    except Exception as re_e:
+                        logger.warning(f"Error al reconciliar OKF tras clonar: {re_e}")
+
+                # 6. Registrar proyecto en base de datos local
+                now_str = datetime.now(timezone.utc).isoformat()
+                p_sla = int(payload.get("reviewer_sla_hours") or 24)
+                with self.db._write_lock, self.db.get_connection() as conn:
+                    with conn:
+                        conn.execute(
+                            """
+                            INSERT INTO projects (
+                                project_uuid, name, base_path, code_repo_path, gov_repo_path,
+                                code_repo_url, gov_repo_url, default_sla_hours, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                            """,
+                            (
+                                p_uuid,
+                                p_name,
+                                str(base_dir),
+                                str(app_dir),
+                                str(gov_dir),
+                                code_url,
+                                gov_url,
+                                p_sla,
+                                now_str,
+                                now_str
+                            )
+                        )
+                proj = self.db.get_project_by_uuid(p_uuid)
+            else:
+                # Modo local / sin repositorios remotos
+                proj = self.db.create_project(
+                    name=p_name,
+                    code_repo_url=code_url,
+                    gov_repo_url=gov_url,
+                    project_uuid=p_uuid
+                )
+
             self.active_project_uuid = p_uuid
 
             # Si viene un nodo emisor, registrarlo
@@ -190,20 +302,41 @@ class ApiBridge:
                     node_uuid=sender_node,
                     developer_name=payload.get("sender_github") or f"Peer {sender_node[:8]}",
                     agent_id=f"agent_{sender_node[:8]}",
-                    reviewer_sla_hours=72,
+                    reviewer_sla_hours=24,
                     status="online"
                 )
-                # Registrar al emisor como colaborador aprobado
                 self.db.add_or_request_collaborator(
                     project_uuid=p_uuid,
                     node_uuid=sender_node,
                     github_username=payload.get("sender_github", ""),
                     public_key=payload.get("sender_pubkey", ""),
-                    role="collaborator",
+                    role="owner",
                     status="approved"
                 )
 
-            return {"success": True, "project": proj, "message": "Conectado al proyecto P2P exitosamente"}
+            # Registrar también al nodo local como colaborador
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            gh_status = self.github.get_auth_status()
+            self.db.add_or_request_collaborator(
+                project_uuid=p_uuid,
+                node_uuid=local_node,
+                github_username=gh_status.get("username", ""),
+                public_key=self.crypto.public_key_base64,
+                role="collaborator",
+                status="approved"
+            )
+
+            # Disparar sincronización inicial de tres niveles
+            try:
+                self.sync_three_tiers(p_uuid)
+            except Exception as se:
+                logger.debug(f"Sync three tiers inicial pospuesta: {se}")
+
+            return {
+                "success": True,
+                "project": proj,
+                "message": "Conectado al proyecto P2P exitosamente y repositorios clonados"
+            }
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
 
@@ -224,10 +357,60 @@ class ApiBridge:
             return {"success": False, "error": str(e)}
 
     def approve_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
-        """Aprobación explícita (Human-in-the-Loop) de un colaborador por el dueño del proyecto."""
+        """
+        Aprobación explícita (Human-in-the-Loop) de un colaborador por el dueño del proyecto.
+        Actualiza la BD, agrega la clave a conventions/trusted_nodes.yaml, invita la cuenta
+        en GitHub para ambos repositorios y realiza push de gobernanza.
+        """
         try:
             res = self.db.approve_collaborator(project_uuid, node_uuid)
-            return {"success": res}
+            if not res:
+                return {"success": False, "error": "No se pudo actualizar el colaborador en la base de datos"}
+
+            collabs = self.db.get_project_collaborators(project_uuid)
+            collab = next((c for c in collabs if c.get("node_uuid") == node_uuid), None)
+            proj = self.db.get_project_by_uuid(project_uuid)
+            invitations_sent = []
+
+            if collab and proj:
+                pub_key = collab.get("public_key")
+                gh_user = collab.get("github_username")
+                gov_path = Path(proj.get("gov_repo_path", ""))
+
+                # 1. Registrar clave pública en conventions/trusted_nodes.yaml
+                if pub_key and gov_path.exists():
+                    try:
+                        self.okf.add_trusted_node_pubkey(gov_path, node_uuid, pub_key, gh_user or "peer")
+                    except Exception as okf_e:
+                        logger.warning(f"No se pudo escribir en trusted_nodes.yaml: {okf_e}")
+
+                # 2. Invitar usuario a los repositorios de GitHub
+                if gh_user:
+                    for repo_field in ("code_repo_url", "gov_repo_url"):
+                        raw_url = proj.get(repo_field, "")
+                        m = re.search(r"github\.com[/:]([^/]+)/([^/.]+)", raw_url)
+                        if m:
+                            owner, repo_name = m.group(1), m.group(2)
+                            inv_res = self.github.add_repo_collaborator(owner, repo_name, gh_user)
+                            invitations_sent.append({"repo": f"{owner}/{repo_name}", "result": inv_res})
+
+                # 3. Commit y push en repo de gobernanza
+                if gov_path.exists() and (gov_path / ".git").exists():
+                    try:
+                        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                        subprocess.run(["git", "add", "."], cwd=gov_path, capture_output=True, creationflags=creationflags)
+                        subprocess.run(
+                            ["git", "commit", "-m", f"chore(gov): authorize peer {node_uuid[:8]} (@{gh_user or 'node'}) in trusted_nodes.yaml"],
+                            cwd=gov_path,
+                            capture_output=True,
+                            creationflags=creationflags
+                        )
+                        if self.github.has_remote(gov_path, "origin"):
+                            self.github.git_push_branch(gov_path, branch="main", remote="origin")
+                    except Exception as push_err:
+                        logger.debug(f"Push de trusted_nodes omitido: {push_err}")
+
+            return {"success": True, "invitations": invitations_sent}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -236,6 +419,14 @@ class ApiBridge:
         try:
             res = self.db.reject_collaborator(project_uuid, node_uuid)
             return {"success": res}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def update_project_sla(self, project_uuid: str, sla_hours: int) -> Dict[str, Any]:
+        """Actualiza el período de revisión SLA por defecto del proyecto."""
+        try:
+            res = self.db.update_project_sla(project_uuid, sla_hours)
+            return {"success": res, "sla_hours": sla_hours}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -738,16 +929,84 @@ class ApiBridge:
             return {"success": False, "error": f"Repositorio {repo_target} no configurado"}
         return self.github.set_remote_url(repo_path, url=remote_url, remote=remote_name)
 
+    def ensure_orphan_worktree(self, gov_repo_path: str | Path, project_uuid: str) -> Path:
+        """
+        Garantiza la existencia y montaje del worktree aislado para la rama huérfana de memoria
+        conversacional y telemetría (.git/orphan_worktree).
+        """
+        gov_path = Path(gov_repo_path).resolve()
+        wt_path = gov_path / ".git" / "orphan_worktree"
+        orphan_branch = f"orphan-conversa-memory-{project_uuid}"
+
+        if wt_path.exists() and (wt_path / ".git").exists():
+            return wt_path
+
+        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+
+        # 1. Comprobar si la rama huérfana ya existe localmente
+        ref_check = subprocess.run(
+            ["git", "show-ref", "--verify", f"refs/heads/{orphan_branch}"],
+            cwd=str(gov_path),
+            capture_output=True,
+            creationflags=creationflags
+        )
+
+        # 2. Si no existe localmente, intentar traerla de origin si hay remoto
+        if ref_check.returncode != 0 and self.github.has_remote(gov_path, "origin"):
+            self.github.git_fetch(gov_path, "origin")
+            fetch_orphan = subprocess.run(
+                ["git", "fetch", "origin", f"{orphan_branch}:{orphan_branch}"],
+                cwd=str(gov_path),
+                capture_output=True,
+                creationflags=creationflags
+            )
+            if fetch_orphan.returncode == 0:
+                ref_check.returncode = 0
+
+        # 3. Montar el worktree
+        if ref_check.returncode == 0:
+            subprocess.run(
+                ["git", "worktree", "add", str(wt_path), orphan_branch],
+                cwd=str(gov_path),
+                capture_output=True,
+                creationflags=creationflags
+            )
+        else:
+            # Crear rama huérfana desde cero desacoplada
+            subprocess.run(
+                ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(wt_path)],
+                cwd=str(gov_path),
+                capture_output=True,
+                creationflags=creationflags
+            )
+            if wt_path.exists():
+                readme = wt_path / "README_CONVERSA.md"
+                if not readme.exists():
+                    readme.write_text(
+                        f"# Memoria Conversacional Desacoplada\n\nUUID: `{project_uuid}`\nRama: `{orphan_branch}`\n",
+                        encoding="utf-8"
+                    )
+                subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
+                subprocess.run(
+                    ["git", "commit", "-m", f"init(orphan): initialize decoupled conversational memory for {project_uuid}"],
+                    cwd=str(wt_path),
+                    capture_output=True,
+                    creationflags=creationflags
+                )
+
+        return wt_path
+
     def publish_project_to_github(
         self,
         project_uuid: Optional[str] = None,
-        repo_target: str = "app",
+        repo_target: str = "both",
         repo_name: Optional[str] = None,
         is_private: bool = True
     ) -> Dict[str, Any]:
         """
-        Crea automáticamente el repositorio en GitHub vía API y publica la rama activa
-        de forma autónoma sin intervención humana.
+        Crea automáticamente los repositorios en GitHub vía API y publica las ramas activas
+        y la memoria huérfana de forma autónoma.
+        Soporta repo_target="both", "app" o "gov".
         """
         target_uuid = project_uuid or self.active_project_uuid
         if not target_uuid:
@@ -758,11 +1017,61 @@ class ApiBridge:
         if not proj:
             return {"success": False, "error": "Proyecto no encontrado"}
 
+        clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in proj.get("name", "proyecto").lower())
+
+        if repo_target == "both":
+            app_path = proj.get("code_repo_path")
+            app_name = f"mcp2p-{clean_name}"
+            app_res = self.github.auto_create_and_publish_repo(
+                repo_path=app_path,
+                repo_name=app_name,
+                description=f"Repositorio de código local-first para {proj.get('name')}",
+                private=is_private
+            )
+
+            gov_path = proj.get("gov_repo_path")
+            gov_name = f"mcp2p-{clean_name}-okf"
+            gov_res = self.github.auto_create_and_publish_repo(
+                repo_path=gov_path,
+                repo_name=gov_name,
+                description=f"Repositorio de gobernanza OKF para {proj.get('name')}",
+                private=is_private
+            )
+
+            orphan_res = {"success": False, "error": "No ejecutado"}
+            if gov_path and Path(gov_path).exists():
+                try:
+                    wt_path = self.ensure_orphan_worktree(gov_path, target_uuid)
+                    orphan_branch = f"orphan-conversa-memory-{target_uuid}"
+                    orphan_res = self.github.git_push_branch(
+                        gov_path,
+                        branch=orphan_branch,
+                        remote="origin"
+                    )
+                except Exception as oe:
+                    orphan_res = {"success": False, "error": str(oe)}
+
+            with self.db._write_lock, self.db.get_connection() as conn:
+                with conn:
+                    if app_res.get("success") and app_res.get("repo_url"):
+                        conn.execute("UPDATE projects SET code_repo_url = ? WHERE project_uuid = ?;", (app_res["repo_url"], target_uuid))
+                    if gov_res.get("success") and gov_res.get("repo_url"):
+                        conn.execute("UPDATE projects SET gov_repo_url = ? WHERE project_uuid = ?;", (gov_res["repo_url"], target_uuid))
+
+            overall_success = app_res.get("success", False) and gov_res.get("success", False)
+            return {
+                "success": overall_success,
+                "app": app_res,
+                "gov": gov_res,
+                "orphan": orphan_res,
+                "repo_url": app_res.get("repo_url") or gov_res.get("repo_url"),
+                "branch": app_res.get("branch", "main"),
+                "message": "Repositorios de código, gobernanza y memoria conversacional publicados con éxito" if overall_success else "Publicación parcial completada"
+            }
+
         repo_path = proj.get("gov_repo_path") if repo_target == "gov" else proj.get("code_repo_path")
         if not repo_path:
             return {"success": False, "error": f"Ruta del repositorio ({repo_target}) no configurada"}
-
-        clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in proj.get("name", "proyecto").lower())
 
         if not repo_name:
             if repo_target == "gov":
@@ -781,15 +1090,185 @@ class ApiBridge:
         )
 
         if res.get("success") and res.get("repo_url"):
-            # Actualizar URL remota en la base de datos
             with self.db._write_lock, self.db.get_connection() as conn:
                 with conn:
                     if repo_target == "gov":
                         conn.execute("UPDATE projects SET gov_repo_url = ? WHERE project_uuid = ?;", (res["repo_url"], target_uuid))
+                        try:
+                            self.ensure_orphan_worktree(repo_path, target_uuid)
+                            orphan_branch = f"orphan-conversa-memory-{target_uuid}"
+                            self.github.git_push_branch(repo_path, branch=orphan_branch, remote="origin")
+                        except Exception:
+                            pass
                     else:
                         conn.execute("UPDATE projects SET code_repo_url = ? WHERE project_uuid = ?;", (res["repo_url"], target_uuid))
 
         return res
+
+    def sync_three_tiers(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Sincronización determinista de tres niveles (Three Tiers) para colaboración P2P autónoma:
+        1. Huérfana (A2A & Diálogos): Vuelca outbox local a JSONL por nodo, sincroniza rama y lee eventos remotos.
+        2. OKF (Gobernanza): Pull --rebase de gov/main y reconciliación de Kanban/conventions a SQLite.
+        3. App (Código): Fetch de app/origin, validación de worktrees y PRs.
+        """
+        target_uuid = project_uuid or self.active_project_uuid
+        if not target_uuid:
+            self._ensure_active_project()
+            target_uuid = self.active_project_uuid
+
+        proj = self.db.get_project_by_uuid(target_uuid)
+        if not proj:
+            return {"success": False, "error": "Proyecto no encontrado para sincronización"}
+
+        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+        gov_path = Path(proj.get("gov_repo_path", "")).resolve()
+        app_path = Path(proj.get("code_repo_path", "")).resolve()
+
+        # ==========================================
+        # Nivel 1: Memoria Huérfana y Eventos A2A
+        # ==========================================
+        tier1_res = {"flushed": 0, "imported": 0, "status": "ok"}
+        try:
+            wt_path = self.ensure_orphan_worktree(gov_path, target_uuid)
+            orphan_branch = f"orphan-conversa-memory-{target_uuid}"
+
+            # 1.1 Volcar eventos pendientes de outbox_events a archivo append-only por nodo
+            pending_events = self.db.get_pending_outbox_events(target_uuid, limit=500)
+            if pending_events:
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                events_dir = wt_path / "nodes" / local_node / "events"
+                events_dir.mkdir(parents=True, exist_ok=True)
+                events_file = events_dir / f"{today}.jsonl"
+
+                with events_file.open("a", encoding="utf-8") as f:
+                    for ev in pending_events:
+                        evt_uuid = ev["event_uuid"]
+                        intent = "INFORMATIVE"
+                        card_id = None
+                        with self.db.get_connection() as conn:
+                            msg_row = conn.execute("SELECT intent, card_id FROM a2a_messages WHERE message_uuid = ?;", (evt_uuid,)).fetchone()
+                            if msg_row:
+                                intent = msg_row["intent"]
+                                card_id = msg_row["card_id"]
+
+                        line_data = {
+                            "event_uuid": evt_uuid,
+                            "project_uuid": ev["project_uuid"],
+                            "node_uuid": ev["node_uuid"],
+                            "event_type": ev["event_type"],
+                            "payload_raw": ev["payload_raw"],
+                            "created_at": ev["created_at"],
+                            "intent": intent,
+                            "card_id": card_id
+                        }
+                        f.write(json.dumps(line_data, ensure_ascii=False) + "\n")
+
+                subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
+                subprocess.run(
+                    ["git", "commit", "-m", f"sync(orphan): flush {len(pending_events)} events from node {local_node}"],
+                    cwd=str(wt_path),
+                    capture_output=True,
+                    creationflags=creationflags
+                )
+                tier1_res["flushed"] = len(pending_events)
+
+            # 1.2 Pull con rebase y push al remoto si existe
+            if self.github.has_remote(gov_path, "origin"):
+                self.github.git_pull(wt_path, remote="origin", branch=orphan_branch, rebase=True)
+                self.github.git_push_branch(wt_path, branch=orphan_branch, remote="origin")
+
+            # 1.3 Importar eventos JSONL de otros nodos a SQLite de forma idempotente
+            imported_count = 0
+            nodes_base = wt_path / "nodes"
+            if nodes_base.is_dir():
+                for node_folder in nodes_base.iterdir():
+                    if not node_folder.is_dir():
+                        continue
+                    ev_folder = node_folder / "events"
+                    if not ev_folder.is_dir():
+                        continue
+                    for jf in ev_folder.glob("*.jsonl"):
+                        try:
+                            with jf.open("r", encoding="utf-8") as f:
+                                for line in f:
+                                    line_str = line.strip()
+                                    if not line_str:
+                                        continue
+                                    evt = json.loads(line_str)
+                                    evt_uuid = evt.get("event_uuid")
+                                    if not evt_uuid:
+                                        continue
+
+                                    with self.db.get_connection() as conn:
+                                        exists = conn.execute("SELECT 1 FROM a2a_messages WHERE message_uuid = ?;", (evt_uuid,)).fetchone()
+                                    if not exists:
+                                        self.db.log_a2a_message(
+                                            project_uuid=target_uuid,
+                                            message_uuid=evt_uuid,
+                                            sender_node_uuid=evt.get("node_uuid", "unknown"),
+                                            intent=evt.get("intent", "INFORMATIVE"),
+                                            payload_rfc_yaml=evt.get("payload_raw", "{}"),
+                                            card_id=evt.get("card_id")
+                                        )
+                                        self.db.enqueue_outbox_event(
+                                            project_uuid=target_uuid,
+                                            node_uuid=evt.get("node_uuid", "unknown"),
+                                            event_type=evt.get("event_type", "A2A_REPLICATED"),
+                                            payload_raw=evt.get("payload_raw", "{}"),
+                                            event_uuid=evt_uuid
+                                        )
+                                        self.db.update_outbox_sync_status(evt_uuid, "acked")
+                                        imported_count += 1
+                                        try:
+                                            self.bus._dispatch_local(evt)
+                                        except Exception:
+                                            pass
+                        except Exception as jf_err:
+                            logger.debug(f"Error procesando {jf}: {jf_err}")
+
+            for ev in pending_events:
+                self.db.update_outbox_sync_status(ev["event_uuid"], "acked")
+
+            tier1_res["imported"] = imported_count
+        except Exception as t1_err:
+            tier1_res["status"] = f"error: {t1_err}"
+
+        # ==========================================
+        # Nivel 2: Repositorio de Gobernanza OKF
+        # ==========================================
+        tier2_res = {"status": "ok"}
+        try:
+            if gov_path.exists() and self.github.has_remote(gov_path, "origin"):
+                pull_gov = self.github.git_pull(gov_path, remote="origin", branch="main", rebase=True)
+                tier2_res["pull"] = pull_gov.get("success", False)
+
+            if gov_path.exists():
+                reconcile_res = self.okf.reconcile_kanban_from_okf(gov_path, target_uuid, self.db)
+                tier2_res["reconciled"] = reconcile_res
+        except Exception as t2_err:
+            tier2_res["status"] = f"error: {t2_err}"
+
+        # ==========================================
+        # Nivel 3: Repositorio de Código de Aplicación
+        # ==========================================
+        tier3_res = {"status": "ok"}
+        try:
+            if app_path.exists() and self.github.has_remote(app_path, "origin"):
+                fetch_app = self.github.git_fetch(app_path, remote="origin")
+                tier3_res["fetch"] = fetch_app.get("success", False)
+        except Exception as t3_err:
+            tier3_res["status"] = f"error: {t3_err}"
+
+        return {
+            "success": True,
+            "project_uuid": target_uuid,
+            "tier1_orphan": tier1_res,
+            "tier2_okf": tier2_res,
+            "tier3_app": tier3_res,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
 
     def get_project_sync_pulse(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene la huella reactiva de cambios en tiempo real del proyecto."""

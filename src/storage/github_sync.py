@@ -10,15 +10,18 @@ Gestiona:
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("mcp2p.github")
 
@@ -36,6 +39,60 @@ class GitHubSyncManager:
             from src.storage.db import DatabaseManager
             self._db = DatabaseManager.get_instance()
         return self._db
+
+    def _get_active_token(self) -> Optional[str]:
+        """Obtiene el PAT configurado en SQLite o en variables de entorno."""
+        if self.db:
+            try:
+                token = self.db.get_setting("github_pat_token")
+                if token:
+                    return str(token).strip()
+            except Exception:
+                pass
+        return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    def _build_git_cmd_and_env(
+        self,
+        base_cmd: List[str],
+        pat: Optional[str] = None
+    ) -> Tuple[List[str], Dict[str, str]]:
+        """
+        Construye el comando git inyectando credenciales por cabecera HTTP efímera sin
+        embebérselas a la URL ni persistirlas en .git/config (RFC 7617 Basic con x-access-token).
+        """
+        token = pat or self._get_active_token()
+        cmd = ["git"]
+        if token:
+            auth_b64 = base64.b64encode(f"x-access-token:{token}".encode("ascii")).decode("ascii")
+            cmd.extend(["-c", f"http.extraHeader=AUTHORIZATION: basic {auth_b64}"])
+        cmd.extend(base_cmd)
+        env = dict(os.environ)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        return cmd, env
+
+    @staticmethod
+    def clean_url_credentials(url: str) -> str:
+        """Remueve cualquier token o credencial embebida de una URL git para evitar filtraciones en disco."""
+        if not url:
+            return ""
+        return re.sub(r"https?://[^/@]+@github\.com/", "https://github.com/", url)
+
+    def sanitize_remote_url(self, repo_path: str | Path, remote: str = "origin") -> bool:
+        """Verifica la URL remota del repositorio local y la limpia si contiene credenciales embebidas."""
+        path = Path(repo_path)
+        if not (path / ".git").exists():
+            return False
+        try:
+            res = subprocess.run(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                raw_url = res.stdout.strip()
+                cleaned = self.clean_url_credentials(raw_url)
+                if cleaned != raw_url:
+                    subprocess.run(["git", "remote", "set-url", remote, cleaned], cwd=path, capture_output=True, timeout=5)
+                    return True
+        except Exception as e:
+            logger.debug(f"Error sanitizando remote {remote} en {repo_path}: {e}")
+        return False
 
     def get_auth_status(self) -> Dict[str, Any]:
         """Comprueba si el usuario tiene una sesión activa de GitHub (PAT, gh CLI o env)."""
@@ -117,12 +174,36 @@ class GitHubSyncManager:
                 if response.status == 200:
                     data = json.loads(response.read().decode("utf-8"))
                     username = data.get("login", "github_user")
+                    user_id = data.get("id")
+                    email = data.get("email") or ""
+
                     # Guardar en SQLite
                     self.db.set_setting("github_pat_token", token_clean)
                     self.db.set_setting("github_pat_username", username)
+                    if user_id:
+                        self.db.set_setting("github_pat_user_id", str(user_id))
+                    if email:
+                        self.db.set_setting("github_pat_email", email)
+
+                    # Vincular identidad al nodo local activo si existe
+                    try:
+                        active_node = self.db.get_active_local_node()
+                        if active_node:
+                            self.db.register_or_update_node(
+                                node_uuid=active_node["node_uuid"],
+                                developer_name=username,
+                                agent_id=active_node.get("agent_id") or f"agent_{username}",
+                                reviewer_sla_hours=active_node.get("reviewer_sla_hours") or 24,
+                                status="online"
+                            )
+                    except Exception as node_err:
+                        logger.debug(f"No se pudo sincronizar identidad de nodo local con PAT: {node_err}")
+
                     return {
                         "success": True,
                         "username": username,
+                        "user_id": user_id,
+                        "email": email,
                         "provider": "pat",
                         "details": f"Autenticado exitosamente vía PAT como @{username}"
                     }
@@ -134,6 +215,131 @@ class GitHubSyncManager:
             return {"success": False, "error": f"Error de autenticación con GitHub (HTTP {e.code}): {e.reason}"}
         except Exception as e:
             return {"success": False, "error": f"Error de conexión con api.github.com: {str(e)}"}
+
+    def get_authenticated_user(self, token: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene la información del usuario autenticado en GitHub."""
+        active_token = token or self._get_active_token()
+        if not active_token:
+            return {"success": False, "error": "No hay token configurado"}
+        req = urllib.request.Request(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "MCP2P-Client"
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return {
+                    "success": True,
+                    "login": data.get("login"),
+                    "id": data.get("id"),
+                    "name": data.get("name"),
+                    "email": data.get("email"),
+                    "avatar_url": data.get("avatar_url")
+                }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def add_repo_collaborator(
+        self,
+        repo_owner: str,
+        repo_name: str,
+        username: str,
+        permission: str = "push",
+        token: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Invita a un usuario como colaborador en el repositorio de GitHub (PUT /repos/{o}/{r}/collaborators/{u}).
+        Permisos estándar: 'pull', 'triage', 'push', 'maintain', 'admin'. Por defecto 'push'.
+        """
+        active_token = token or self._get_active_token()
+        if not active_token:
+            return {"success": False, "error": "No hay un GitHub PAT configurado para invitar colaboradores"}
+
+        clean_user = username.lstrip("@").strip()
+        clean_repo = repo_name.replace(".git", "").strip()
+        url = f"https://api.github.com/repos/{repo_owner}/{clean_repo}/collaborators/{clean_user}"
+        payload = json.dumps({"permission": permission}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "User-Agent": "MCP2P-Client"
+            },
+            method="PUT"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                status = resp.status
+                if status in (201, 204):
+                    invitation_id = None
+                    if status == 201:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        invitation_id = data.get("id")
+                    return {
+                        "success": True,
+                        "status_code": status,
+                        "already_collaborator": status == 204,
+                        "invitation_id": invitation_id,
+                        "message": f"Usuario @{clean_user} invitado exitosamente al repositorio {repo_owner}/{clean_repo}"
+                    }
+                return {"success": False, "status_code": status, "error": f"Respuesta inesperada: HTTP {status}"}
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8") if e.fp else str(e)
+            return {"success": False, "status_code": e.code, "error": f"Error de GitHub API (HTTP {e.code}): {err_body}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def accept_pending_invitations(self, token: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Consulta y acepta invitaciones pendientes a repositorios de GitHub para el usuario autenticado.
+        (GET /user/repository_invitations y PATCH /user/repository_invitations/{id})
+        """
+        active_token = token or self._get_active_token()
+        if not active_token:
+            return {"success": False, "error": "No hay un GitHub PAT configurado"}
+
+        req = urllib.request.Request(
+            "https://api.github.com/user/repository_invitations",
+            headers={
+                "Authorization": f"Bearer {active_token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "MCP2P-Client"
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                invitations = json.loads(resp.read().decode("utf-8"))
+
+            accepted = []
+            for inv in invitations:
+                inv_id = inv.get("id")
+                repo_name = inv.get("repository", {}).get("full_name", str(inv_id))
+                patch_req = urllib.request.Request(
+                    f"https://api.github.com/user/repository_invitations/{inv_id}",
+                    headers={
+                        "Authorization": f"Bearer {active_token}",
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": "MCP2P-Client"
+                    },
+                    method="PATCH"
+                )
+                try:
+                    with urllib.request.urlopen(patch_req, timeout=10) as p_resp:
+                        if p_resp.status in (204, 200):
+                            accepted.append({"id": inv_id, "repo": repo_name})
+                except Exception as p_err:
+                    logger.warning(f"Error aceptando invitación {inv_id} para {repo_name}: {p_err}")
+
+            return {"success": True, "accepted_count": len(accepted), "accepted": accepted}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def clear_pat_token(self) -> Dict[str, Any]:
         """Elimina el Personal Access Token almacenado localmente."""
@@ -415,26 +621,24 @@ class GitHubSyncManager:
         b_p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True)
         current_branch = b_p.stdout.strip() if b_p.returncode == 0 else "main"
 
-        # 5. Configurar origin con credenciales seguras embebidas para push no interactivo
-        auth_remote_url = clone_url
-        if pat and "github.com" in clone_url:
-            auth_remote_url = f"https://{pat}@github.com/{username}/{clean_repo_name}.git"
-
-        self.setup_repo_remote(path, auth_remote_url, "origin")
+        # 5. Configurar origin con URL limpia (sin PAT embebido para prevenir fugas en .git/config)
+        clean_auth_url = self.clean_url_credentials(clone_url)
+        self.setup_repo_remote(path, clean_auth_url, "origin")
+        self.sanitize_remote_url(path, "origin")
 
         # 6. Publicar rama local a GitHub
-        push_res = self.git_push_branch(path, branch=current_branch, remote="origin")
+        push_res = self.git_push_branch(path, branch=current_branch, remote="origin", pat=pat)
         if not push_res.get("success"):
             return {
                 "success": False,
                 "error": f"Repositorio creado en GitHub ({clone_url}), pero falló el push: {push_res.get('error')}",
-                "repo_url": clone_url,
+                "repo_url": clean_auth_url,
                 "html_url": html_url
             }
 
         return {
             "success": True,
-            "repo_url": clone_url,
+            "repo_url": clean_auth_url,
             "html_url": html_url,
             "branch": current_branch,
             "username": username,
@@ -445,7 +649,7 @@ class GitHubSyncManager:
     def set_remote_url(self, repo_path: str | Path, url: str, remote: str = "origin") -> Dict[str, Any]:
         """Configura o actualiza la URL remota en el repositorio."""
         path = Path(repo_path)
-        url = url.strip()
+        url = self.clean_url_credentials(url.strip())
         if not url:
             return {"success": False, "error": "La URL remota no puede estar vacía."}
         try:
@@ -454,12 +658,50 @@ class GitHubSyncManager:
             else:
                 proc = subprocess.run(["git", "remote", "add", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0:
+                self.sanitize_remote_url(path, remote)
                 return {"success": True, "remote": remote, "url": url}
             return {"success": False, "error": proc.stderr or proc.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def git_fetch(self, repo_path: str | Path, remote: str = "origin") -> Dict[str, Any]:
+    def git_clone(
+        self,
+        remote_url: str,
+        target_path: str | Path,
+        branch: Optional[str] = None,
+        pat: Optional[str] = None,
+        timeout: int = 60
+    ) -> Dict[str, Any]:
+        """Clona un repositorio Git remoto utilizando autenticación segura sin persistir credenciales en URL."""
+        path = Path(target_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        clean_url = self.clean_url_credentials(remote_url)
+        cmd_args = ["clone"]
+        if branch:
+            cmd_args.extend(["-b", branch])
+        cmd_args.extend([clean_url, str(path)])
+
+        cmd, env = self._build_git_cmd_and_env(cmd_args, pat=pat)
+        try:
+            proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+            if proc.returncode == 0:
+                self.sanitize_remote_url(path, "origin")
+                return {"success": True, "path": str(path), "output": proc.stdout}
+
+            raw_err = proc.stderr or proc.stdout
+            if any(term in raw_err for term in ("Authentication failed", "could not read Username", "Repository not found", "Permission denied", "HTTP 401", "HTTP 403")):
+                return {
+                    "success": False,
+                    "status": "pending_access",
+                    "error": "Acceso denegado o repositorio no encontrado en GitHub. Verifica tus credenciales (PAT) o que hayas aceptado la invitación.",
+                    "raw_error": raw_err
+                }
+            return {"success": False, "error": raw_err}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def git_fetch(self, repo_path: str | Path, remote: str = "origin", pat: Optional[str] = None) -> Dict[str, Any]:
         """Ejecuta git fetch para sincronizar referencias con el remoto."""
         path = Path(repo_path)
         if not self.has_remote(path, remote):
@@ -469,14 +711,16 @@ class GitHubSyncManager:
                 "error": f"Repositorio remoto '{remote}' no configurado. Para sincronizar o publicar, vincula primero la URL remota de GitHub."
             }
         try:
-            proc = subprocess.run(["git", "fetch", remote], cwd=path, capture_output=True, text=True, timeout=15)
+            cmd, env = self._build_git_cmd_and_env(["fetch", remote], pat=pat)
+            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=20)
             if proc.returncode == 0:
+                self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout or "Referencias remotas actualizadas"}
             return {"success": False, "error": proc.stderr or proc.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def git_pull(self, repo_path: str | Path, remote: str = "origin", branch: Optional[str] = None) -> Dict[str, Any]:
+    def git_pull(self, repo_path: str | Path, remote: str = "origin", branch: Optional[str] = None, rebase: bool = False, pat: Optional[str] = None) -> Dict[str, Any]:
         """Ejecuta git pull para traer los últimos cambios."""
         path = Path(repo_path)
         if not self.has_remote(path, remote):
@@ -485,19 +729,31 @@ class GitHubSyncManager:
                 "requires_remote": True,
                 "error": f"Repositorio remoto '{remote}' no configurado. Vincula la URL remota de GitHub antes de hacer pull."
             }
-        cmd = ["git", "pull", remote]
+        cmd_args = ["pull"]
+        if rebase:
+            cmd_args.append("--rebase")
+        cmd_args.append(remote)
         if branch:
-            cmd.append(branch)
+            cmd_args.append(branch)
         try:
-            proc = subprocess.run(cmd, cwd=path, capture_output=True, text=True, timeout=20)
+            cmd, env = self._build_git_cmd_and_env(cmd_args, pat=pat)
+            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
             if proc.returncode == 0:
+                self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout}
             return {"success": False, "error": proc.stderr or proc.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def git_push_branch(self, repo_path: str | Path, branch: str, remote: str = "origin") -> Dict[str, Any]:
-        """Publica o empuja una rama local hacia el repositorio remoto."""
+    def git_push_branch(
+        self,
+        repo_path: str | Path,
+        branch: str,
+        remote: str = "origin",
+        remote_branch: Optional[str] = None,
+        pat: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Publica o empuja una rama local hacia el repositorio remoto con credenciales efímeras."""
         path = Path(repo_path)
         if not self.has_remote(path, remote):
             return {
@@ -506,12 +762,14 @@ class GitHubSyncManager:
                 "error": f"Repositorio remoto '{remote}' no configurado. Por favor, vincula la URL del repositorio remoto de GitHub antes de publicar ramas."
             }
         try:
-            proc = subprocess.run(["git", "push", "-u", remote, branch], cwd=path, capture_output=True, text=True, timeout=25)
+            refspec = f"{branch}:{remote_branch}" if remote_branch else branch
+            cmd, env = self._build_git_cmd_and_env(["push", "-u", remote, refspec], pat=pat)
+            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
             if proc.returncode == 0:
+                self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout}
-            
+
             raw_err = proc.stderr or proc.stdout
-            # Manejo amigable de errores comunes de autenticación o existencia de repo
             if "Could not read from remote repository" in raw_err or "does not appear to be a git repository" in raw_err or "Repository not found" in raw_err:
                 friendly = "El repositorio remoto no existe en GitHub o no tienes permisos de acceso. Por favor, asegúrate de haber creado el repositorio en tu cuenta de GitHub y que tu token de acceso tenga permisos de escritura ('repo')."
                 return {"success": False, "error": friendly, "raw_error": raw_err}

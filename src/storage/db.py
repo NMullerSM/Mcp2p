@@ -128,6 +128,12 @@ class DatabaseManager:
                         ALTER TABLE a2a_messages_dg_tmp RENAME TO a2a_messages;
                         """)
 
+                    # Migración para projects.default_sla_hours
+                    p_info = conn.execute("PRAGMA table_info(projects);").fetchall()
+                    p_cols = [c["name"] for c in p_info]
+                    if "default_sla_hours" not in p_cols:
+                        conn.execute("ALTER TABLE projects ADD COLUMN default_sla_hours INTEGER DEFAULT 24;")
+
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
                 CREATE TABLE IF NOT EXISTS projects (
@@ -138,6 +144,7 @@ class DatabaseManager:
                     gov_repo_path TEXT DEFAULT '',
                     code_repo_url TEXT DEFAULT '',
                     gov_repo_url TEXT DEFAULT '',
+                    default_sla_hours INTEGER DEFAULT 24,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -148,7 +155,7 @@ class DatabaseManager:
                     developer_name TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
                     public_key TEXT,
-                    reviewer_sla_hours INTEGER DEFAULT 72,
+                    reviewer_sla_hours INTEGER DEFAULT 24,
                     status TEXT CHECK(status IN ('online', 'offline', 'busy')) DEFAULT 'offline',
                     last_heartbeat DATETIME,
                     p2p_endpoint TEXT,
@@ -300,7 +307,8 @@ class DatabaseManager:
         code_repo_url: str = "",
         gov_repo_url: str = "",
         init_git: bool = True,
-        project_uuid: Optional[str] = None
+        project_uuid: Optional[str] = None,
+        reviewer_sla_hours: int = 24
     ) -> Dict[str, Any]:
         """
         Crea un nuevo proyecto en el subsistema.
@@ -391,8 +399,8 @@ class DatabaseManager:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO projects (project_uuid, name, base_path, code_repo_path, gov_repo_path, code_repo_url, gov_repo_url, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO projects (project_uuid, name, base_path, code_repo_path, gov_repo_path, code_repo_url, gov_repo_url, default_sla_hours, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         p_uuid,
@@ -402,6 +410,7 @@ class DatabaseManager:
                         str(gov_dir),
                         code_repo_url,
                         gov_repo_url,
+                        reviewer_sla_hours,
                         now_str,
                         now_str
                     )
@@ -416,6 +425,17 @@ class DatabaseManager:
         )
 
         return self.get_project_by_uuid(p_uuid)
+
+    def update_project_sla(self, project_uuid: str, sla_hours: int) -> bool:
+        """Actualiza la ventana de revisión / SLA por defecto del proyecto."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE projects SET default_sla_hours = ?, updated_at = ? WHERE project_uuid = ?;",
+                    (max(1, int(sla_hours)), now_str, project_uuid)
+                )
+                return cur.rowcount > 0
 
     def delete_project(self, project_uuid: str) -> bool:
         """
@@ -875,6 +895,8 @@ class DatabaseManager:
                     "UPDATE outbox_events SET sync_status = ? WHERE event_uuid = ?;",
                     (sync_status, event_uuid)
                 )
+
+    update_outbox_sync_status = mark_outbox_event_status
 
     # ==========================
     # Gestión de Colaboradores HITL

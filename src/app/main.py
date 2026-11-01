@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from src.app.api_bridge import ApiBridge
+from src.p2p.network import P2PNotificationService
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -52,16 +54,28 @@ def main() -> int:
 
     api = ApiBridge()
 
+    # Iniciar servicio de red P2P en segundo plano (daemon)
+    local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    p2p_network = P2PNotificationService(
+        node_uuid=local_node,
+        lan_port=int(os.environ.get("MCP2P_LAN_PORT", 42424)),
+        on_event_callback=lambda evt: api.sync_three_tiers() if hasattr(api, "sync_three_tiers") else None,
+        crypto_manager=api.crypto
+    )
+    p2p_network.start_lan_server()
+
     if args.headless:
         print("[MCP2P] Modo Headless activo. Base de datos inicializada correctamente.")
         info = api.get_system_info()
-        print(f"[MCP2P] Nodo Local: {info['active_node']} | SQLite WAL: {info['wal_mode']}")
+        print(f"[MCP2P] Nodo Local: {info['active_node']} | SQLite WAL: {info['wal_mode']} | LAN Port: {p2p_network.lan_port}")
+        p2p_network.stop_lan_server()
         return 0
 
     try:
         import webview
     except ImportError as e:
         print(f"[MCP2P Error] PyWebView no está instalado en este entorno: {e}")
+        p2p_network.stop_lan_server()
         return 1
 
     target_url = get_ui_target()
@@ -77,9 +91,12 @@ def main() -> int:
         text_select=True
     )
 
-    print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
-    webview.start(debug=args.debug)
-    print("[MCP2P] Ventana cerrada. Sesión finalizada limpiamente.")
+    try:
+        print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
+        webview.start(debug=args.debug)
+    finally:
+        p2p_network.stop_lan_server()
+        print("[MCP2P] Ventana cerrada. Red P2P y sesión finalizadas limpiamente.")
     return 0
 
 

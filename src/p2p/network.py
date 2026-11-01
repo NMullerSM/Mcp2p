@@ -58,9 +58,27 @@ class P2PWebhookHandler(BaseHTTPRequestHandler):
             except Exception:
                 data = {"raw": body.decode("utf-8", errors="ignore")}
 
+            # Verificación criptográfica Ed25519 si la solicitud viene empaquetada con firma
+            if isinstance(data, dict) and "sig" in data and "payload" in data:
+                from src.p2p.crypto import NodeCryptoManager
+                pubkey = data.get("sender_pubkey", "")
+                sig = data.get("sig", "")
+                payload = data.get("payload", {})
+                if not pubkey or not sig or not NodeCryptoManager.verify_signature(payload, sig, pubkey):
+                    logger.warning("Rechazado webhook P2P entrante: firma Ed25519 inválida o nodo no confiable.")
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "Firma Ed25519 invalida o ausente", "received": false}\n')
+                    return
+                # Si es válida, el evento desempaquetado es el payload
+                dispatch_data = payload
+            else:
+                dispatch_data = data
+
             if hasattr(self.server, "on_event_callback"):
                 try:
-                    self.server.on_event_callback(data)
+                    self.server.on_event_callback(dispatch_data)
                 except Exception as exc:
                     logger.warning(f"Error procesando webhook entrante: {exc}")
 
@@ -83,11 +101,13 @@ class P2PNotificationService:
         self,
         node_uuid: str,
         lan_port: int = 42424,
-        on_event_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        on_event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        crypto_manager: Optional[Any] = None
     ) -> None:
         self.node_uuid = node_uuid
         self.lan_port = lan_port
         self.on_event = on_event_callback or (lambda evt: None)
+        self.crypto = crypto_manager
         self._server: Optional[P2PNotificationServer] = None
         self._server_thread: Optional[threading.Thread] = None
         self._running = False
@@ -132,12 +152,23 @@ class P2PNotificationService:
 
     def broadcast_lan_notification(self, peer_endpoints: List[str], event_payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Envía un aviso de actualización (commit, tarjeta, etc.) a nodos conocidos en LAN.
+        Envía un aviso de actualización firmado con Ed25519 a nodos conocidos en LAN.
         """
         import urllib.request
         event_payload["from_node"] = self.node_uuid
         event_payload["timestamp"] = datetime.now(timezone.utc).isoformat()
-        body = json.dumps(event_payload).encode("utf-8")
+
+        if self.crypto:
+            sig = self.crypto.sign_payload(event_payload)
+            package = {
+                "payload": event_payload,
+                "sig": sig,
+                "sender_pubkey": self.crypto.public_key_base64,
+                "from_node": self.node_uuid
+            }
+            body = json.dumps(package).encode("utf-8")
+        else:
+            body = json.dumps(event_payload).encode("utf-8")
 
         successes = []
         failures = []

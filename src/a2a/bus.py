@@ -519,12 +519,13 @@ class A2ABus:
         contender_b_node: str,
         proposal_a_ref: str,
         proposal_b_ref: str,
-        card_id: Optional[str] = None
+        card_id: Optional[str] = None,
+        ticket_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Abre formalmente un ticket de juicio técnico en disputa."""
-        ticket_id = f"TICKET-{str(uuid.uuid4())[:8].upper()}"
+        t_id = ticket_id or f"TICKET-{str(uuid.uuid4())[:8].upper()}"
         return self.db.create_dispute_ticket(
-            ticket_id=ticket_id,
+            ticket_id=t_id,
             project_uuid=project_uuid,
             title=title,
             collision_reason=collision_reason,
@@ -589,7 +590,9 @@ class A2ABus:
     def compute_jury_verdict(self, project_uuid: str, ticket_id: str) -> Dict[str, Any]:
         """
         Calcula el veredicto ponderado del Juicio de Honor:
-        Score(k) = (Votos Humanos * 2.0) + (Promedio Borda Agentes / 100 * 1.5)
+        Gobernanza Human-Dominant: El voto humano tiene superioridad absoluta decisoria.
+        Score(k) = (Votos Humanos * 1000.0) + (Promedio Borda Agentes / 100 * 1.5)
+        Si todos los humanos votan por una opción y todos los bots por otra, los humanos ganan siempre.
         Promueve la opción ganadora a ADR en architecture/adrs/.
         """
         summary = self.db.get_jury_votes_summary(ticket_id)
@@ -602,13 +605,14 @@ class A2ABus:
             for opt in options
         }
 
-        # 1. Sumar votos humanos (2.0 c/u)
+        # 1. Sumar votos humanos con peso decisorio superior (1000.0 base por voto humano)
         for hv in human_votes:
             voted = hv.get("voted_option")
             if voted in scores_by_option:
-                scores_by_option[voted]["human_weight"] += float(hv.get("weight", 2.0))
+                raw_w = float(hv.get("weight", 2.0))
+                scores_by_option[voted]["human_weight"] += (raw_w * 500.0)  # Min 1000.0 pts con weight=2.0
 
-        # 2. Sumar notas de agentes (Borda 0-100 ponderado a 1.5)
+        # 2. Sumar notas de agentes (Borda 0-100 normalizado a max 1.5 pts)
         for ag in agent_scores:
             opt = ag.get("evaluated_option")
             if opt in scores_by_option:
@@ -618,6 +622,7 @@ class A2ABus:
         # 3. Calcular Score Final
         highest_score = -1.0
         winning_option = "OPTION_A"
+        tie_detected = False
 
         for opt, val in scores_by_option.items():
             avg_agent = (val["agent_score_sum"] / val["agent_count"]) if val["agent_count"] > 0 else 0.0
@@ -627,6 +632,9 @@ class A2ABus:
             if total > highest_score:
                 highest_score = total
                 winning_option = opt
+                tie_detected = False
+            elif total == highest_score and highest_score > 0:
+                tie_detected = True
 
         # 4. Actualizar estado del ticket en base de datos
         self.db.resolve_dispute_ticket(ticket_id=ticket_id, winning_option=winning_option)
@@ -636,6 +644,7 @@ class A2ABus:
             "project_uuid": project_uuid,
             "winning_option": winning_option,
             "highest_score": highest_score,
+            "tie_detected": tie_detected,
             "breakdown": scores_by_option,
             "human_votes_count": len(human_votes),
             "agent_evaluations_count": len(agent_scores)

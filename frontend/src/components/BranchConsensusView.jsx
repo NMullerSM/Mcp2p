@@ -89,22 +89,50 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
     loadData();
   }, [project, api, gitPulseTrigger]);
 
-  const handleAutoPublish = async () => {
+  const handleAutoPublish = async (target = repoTarget) => {
     if (!api || !project) return;
     setActionLoading(true);
     setFeedback(null);
     try {
-      const res = await api.publish_project_to_github(project.project_uuid, repoTarget);
+      const res = await api.publish_project_to_github(project.project_uuid, target);
       if (res.success) {
         setFeedback({
           type: 'success',
-          text: `Repositorio creado y publicado exitosamente en GitHub: ${res.repo_url} (Rama: ${res.branch})`
+          text: target === 'both'
+            ? `Repositorios App (${res.app?.repo_url || ''}) y OKF (${res.gov?.repo_url || ''}) publicados exitosamente en GitHub.`
+            : `Repositorio creado y publicado exitosamente en GitHub: ${res.repo_url} (Rama: ${res.branch})`
         });
         loadData();
       } else {
         setFeedback({
           type: 'error',
           text: res.error || 'Error al auto-publicar repositorio en GitHub'
+        });
+      }
+    } catch (e) {
+      setFeedback({ type: 'error', text: 'Error: ' + e });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSyncThreeTiers = async () => {
+    if (!api || !project) return;
+    setActionLoading(true);
+    setFeedback(null);
+    try {
+      const res = await api.sync_three_tiers(project.project_uuid);
+      if (res.success) {
+        const t1 = res.tier1_orphan || {};
+        setFeedback({
+          type: 'success',
+          text: `Sincronización P2P completada: ${t1.flushed || 0} eventos volcados, ${t1.imported || 0} eventos remotos importados.`
+        });
+        loadData();
+      } else {
+        setFeedback({
+          type: 'error',
+          text: res.error || 'Error durante la sincronización de 3 niveles'
         });
       }
     } catch (e) {
@@ -609,8 +637,29 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               </button>
             </div>
 
-            {/* Operaciones Git (Fetch, Pull, Merge, Push) */}
+            {/* Operaciones Git (Fetch, Pull, Merge, Push, 3 Tiers Sync) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={handleSyncThreeTiers}
+                disabled={actionLoading}
+                title="Sincroniza la memoria huérfana de agentes, reconcilia OKF y comprueba referencias del código"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(99, 102, 241, 0.4)',
+                  backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                  color: '#818cf8',
+                  cursor: actionLoading ? 'wait' : 'pointer'
+                }}
+              >
+                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Sincronizar P2P (3 Niveles)
+              </button>
+
               <button
                 onClick={handleFetch}
                 disabled={actionLoading}
@@ -753,10 +802,33 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleAutoPublish('both')}
+                disabled={actionLoading}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  backgroundColor: '#6366f1',
+                  color: '#ffffff',
+                  cursor: actionLoading ? 'wait' : 'pointer',
+                  boxShadow: 'var(--shadow-sm)'
+                }}
+                title="Crea y publica automáticamente ambos repositorios (App y OKF) y empuja la memoria conversacional huérfana"
+              >
+                <Upload size={13} className={actionLoading ? 'spin' : ''} />
+                <span>⚡ Publicar Ambos (App + OKF + Huérfana)</span>
+              </button>
+
               {!originUrl && (
                 <button
-                  onClick={handleAutoPublish}
+                  onClick={() => handleAutoPublish(repoTarget)}
                   disabled={actionLoading}
                   style={{
                     display: 'inline-flex',
@@ -772,10 +844,10 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     cursor: actionLoading ? 'wait' : 'pointer',
                     boxShadow: 'var(--shadow-sm)'
                   }}
-                  title="Crea el repositorio en GitHub vía API y publica automáticamente esta rama con tus credenciales guardadas"
+                  title={`Crea y publica solo el repositorio ${repoTarget.toUpperCase()} en GitHub`}
                 >
                   <Upload size={13} className={actionLoading ? 'spin' : ''} />
-                  <span>⚡ Publicar Autónomamente en GitHub</span>
+                  <span>Publicar Solo {repoTarget.toUpperCase()}</span>
                 </button>
               )}
               <button
