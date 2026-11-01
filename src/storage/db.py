@@ -108,6 +108,26 @@ class DatabaseManager:
                             ALTER TABLE kanban_cards_dg_tmp RENAME TO kanban_cards;
                             """)
 
+                    # Migración para a2a_messages (soporte para DIALOGUE y CHECKPOINT_COMPACT)
+                    a2a_info = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='a2a_messages';").fetchone()
+                    if a2a_info and "'DIALOGUE'" not in a2a_info[0]:
+                        conn.executescript("""
+                        CREATE TABLE IF NOT EXISTS a2a_messages_dg_tmp (
+                            message_uuid TEXT PRIMARY KEY,
+                            project_uuid TEXT NOT NULL,
+                            sender_node_uuid TEXT NOT NULL,
+                            intent TEXT CHECK(intent IN ('INFORMATIVE', 'COORDINATION', 'SEMANTIC_COLLISION', 'SUMMARY_SYNTHESIS', 'DIALOGUE', 'CHECKPOINT_COMPACT')) NOT NULL,
+                            card_id TEXT,
+                            payload_rfc_yaml TEXT NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
+                        );
+                        INSERT INTO a2a_messages_dg_tmp (message_uuid, project_uuid, sender_node_uuid, intent, card_id, payload_rfc_yaml, created_at)
+                        SELECT message_uuid, project_uuid, sender_node_uuid, intent, card_id, payload_rfc_yaml, created_at FROM a2a_messages;
+                        DROP TABLE a2a_messages;
+                        ALTER TABLE a2a_messages_dg_tmp RENAME TO a2a_messages;
+                        """)
+
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
                 CREATE TABLE IF NOT EXISTS projects (
