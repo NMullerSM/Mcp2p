@@ -18,6 +18,7 @@ import yaml
 
 from src.a2a.jury_engine import CLEAN_ROOM_ALLIANCE_PROMPT, FOCUS_CATALOG, DialecticJuryEngine
 from src.app.api_bridge import ApiBridge
+from src.storage.db import DatabaseManager
 
 
 def test_voter_universe_contender_exclusion_and_small_cluster_fallback():
@@ -145,8 +146,8 @@ def test_hitl_deep_inspector_and_okf_precedents_export(tmp_path: Path, monkeypat
     - Revisión y fusión de tarea en revisión (TASK-102) desde HITL.
     """
     db_file = tmp_path / "test_iterB.db"
-    monkeypatch.setenv("MCP2P_DB_PATH", str(db_file))
-    api = ApiBridge()
+    db_mgr = DatabaseManager(str(db_file))
+    api = ApiBridge(db_manager=db_mgr)
 
     proj_res = api.create_project("Test Dialectic Suite", str(tmp_path / "ws_dialectic"))
     assert proj_res["success"] is True

@@ -7,6 +7,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
     pending_decisions: [],
     open_disputes: [],
     pending_prs: [],
+    history_precedents: [],
     total_count: 0
   });
   const [actionInProgress, setActionInProgress] = useState(null);
@@ -638,6 +639,109 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
 
       </div>
 
+      {/* 4. SECCIÓN DE TRAZABILIDAD: PRECEDENTES OKF Y JUICIOS RATIFICADOS */}
+      {approvals.history_precedents && approvals.history_precedents.length > 0 && (
+        <div style={{
+          backgroundColor: 'var(--bg-surface)',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-subtle)',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          marginTop: '4px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
+            <div>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
+                Trazabilidad Histórica: Precedentes y Juicios Ratificados ({approvals.history_precedents.length})
+              </span>
+              <p style={{ margin: '3px 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                Registro inmutable de dictámenes y ADRs almacenados en <code style={{ fontFamily: 'var(--font-mono)' }}>docs/okf/architecture/precedents_index.yaml</code> y <code style={{ fontFamily: 'var(--font-mono)' }}>rulings/*.yaml</code>.
+              </p>
+            </div>
+            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+              0 tokens de contexto
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+            {approvals.history_precedents.map((item, idx) => (
+              <div
+                key={item.id || idx}
+                onClick={() => openInspector(item.type === 'JURY_RULING' ? 'ruling' : 'decision', item, item.id)}
+                style={{
+                  backgroundColor: 'var(--bg-subtle)',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '12px 14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  cursor: 'pointer',
+                  transition: 'var(--transition)'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                  <span style={{ fontWeight: 700, fontSize: '12.5px', color: 'var(--text-primary)' }}>
+                    {item.title || item.id}
+                  </span>
+                  <span style={{
+                    fontSize: '10px',
+                    fontFamily: 'var(--font-mono)',
+                    fontWeight: 600,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    backgroundColor: item.type === 'JURY_RULING' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                    color: item.type === 'JURY_RULING' ? '#c084fc' : '#10b981',
+                    flexShrink: 0
+                  }}>
+                    {item.type === 'JURY_RULING' ? 'JUICIO RATIFICADO' : 'ADR'}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{item.id}</span>
+                  {item.winning_option && (
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Ganador: <strong style={{ color: 'var(--accent-primary)' }}>{item.winning_option}</strong>
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                    <Eye size={12} /> Consultar acta y mayéutica
+                  </span>
+                  {item.card_id && onOpenCard && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenCard(item.card_id);
+                      }}
+                      style={{
+                        fontSize: '10.5px',
+                        fontFamily: 'var(--font-mono)',
+                        fontWeight: 600,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--border-subtle)',
+                        backgroundColor: 'var(--bg-surface)',
+                        color: 'var(--text-primary)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {item.card_id}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* =====================================================================
           MODAL FRONTAL DE INSPECCIÓN PROFUNDA (MAYÉUTICA, PROPUESTAS Y TAREAS)
          ===================================================================== */}
@@ -684,9 +788,11 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)', textTransform: 'uppercase' }}>
                   {inspectedItem.type === 'jury_vote'
                     ? `Expediente de Juicio Dialéctico · ${inspectedItem.data.ticket_id}`
+                    : inspectedItem.type === 'ruling'
+                    ? `Acta de Juicio Ratificado · ${inspectedItem.data.ruling_id || inspectedItem.data.ticket_id || inspectedItem.data.id}`
                     : inspectedItem.type === 'pr_merge'
                     ? `Inspección de Tarea en Revisión · ${inspectedItem.data.card_id}`
-                    : `Inspección de Decisión Arquitectónica · ${inspectedItem.data.item_id}`}
+                    : `Inspección de Decisión Arquitectónica · ${inspectedItem.data.item_id || inspectedItem.data.id}`}
                 </span>
                 <h3 style={{ margin: '4px 0 0', fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)' }}>
                   {inspectedItem.data.title}
@@ -1049,6 +1155,78 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       Aprobar y Fusionar Entrega
                     </button>
                   </div>
+                </>
+              )}
+
+              {/* VISTA D: ACTA DE JUICIO RATIFICADO / PRECEDENTE OKF */}
+              {inspectedItem.type === 'ruling' && (
+                <>
+                  <div style={{ backgroundColor: 'var(--bg-subtle)', padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '12.5px', color: 'var(--text-primary)' }}>
+                    <div><strong>Título:</strong> {inspectedItem.data.title}</div>
+                    <div style={{ marginTop: '4px' }}>
+                      <strong>Estado:</strong> <span style={{ color: '#10b981', fontWeight: 600 }}>{inspectedItem.data.status}</span>
+                      {inspectedItem.data.resolution_mode && <span style={{ marginLeft: '12px', color: 'var(--text-secondary)' }}>Modo: {inspectedItem.data.resolution_mode}</span>}
+                    </div>
+                  </div>
+
+                  {inspectedItem.data.phases?.phase_1_positions && (
+                    <div>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 8px', color: 'var(--text-primary)' }}>
+                        Posturas y Síntesis Registradas
+                      </h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                        <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                          <strong style={{ fontSize: '11px', color: 'var(--accent-primary)' }}>Tesis (Opción A):</strong>
+                          <p style={{ fontSize: '11.5px', margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+                            {inspectedItem.data.phases.phase_1_positions.thesis_option_a?.proposal_ref}
+                          </p>
+                        </div>
+                        <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                          <strong style={{ fontSize: '11px', color: '#c084fc' }}>Antítesis (Opción B):</strong>
+                          <p style={{ fontSize: '11.5px', margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+                            {inspectedItem.data.phases.phase_1_positions.antithesis_option_b?.proposal_ref}
+                          </p>
+                        </div>
+                        <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
+                          <strong style={{ fontSize: '11px', color: '#10b981' }}>Síntesis (Opción C):</strong>
+                          <p style={{ fontSize: '11.5px', margin: '4px 0 0', color: 'var(--text-secondary)' }}>
+                            {inspectedItem.data.phases.phase_2_synthesis?.summary}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {inspectedItem.data.phases?.phase_3_voting && (
+                    <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>
+                        Resultado de Votación y Dictamen Final
+                      </h4>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <div>Opción Ganadora: <strong style={{ color: 'var(--accent-primary)' }}>{inspectedItem.data.phases.phase_3_voting.winning_option}</strong></div>
+                        <div>Consenso Alcanzado: <strong style={{ color: '#10b981' }}>{inspectedItem.data.phases.phase_3_voting.consensus_reached ? 'Sí' : 'No'}</strong> (Ratio: {inspectedItem.data.phases.phase_3_voting.consensus_ratio})</div>
+                        <div>Humanos Elegibles: {inspectedItem.data.phases.phase_3_voting.eligible_humans} | Jurados Subagentes: {inspectedItem.data.phases.phase_3_voting.agent_jurors_count}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {inspectedItem.data.phases?.phase_2_neutral_matrix && inspectedItem.data.phases.phase_2_neutral_matrix.length > 0 && (
+                    <div>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 8px', color: 'var(--text-primary)' }}>
+                        Jurados Neutrales y Focos Asignados
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {inspectedItem.data.phases.phase_2_neutral_matrix.map((j, idx) => (
+                          <div key={idx} style={{ padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', fontSize: '11.5px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)' }}>
+                              <strong>{j.juror_id}</strong>
+                              <span>T={j.temperature} · {j.focus_labels?.join(', ')}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 

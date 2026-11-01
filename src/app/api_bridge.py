@@ -1592,12 +1592,46 @@ class ApiBridge:
                     "updated_at": c.get("updated_at")
                 })
 
+            # 4. Histórico y Trazabilidad de Decisiones y Juicios Ratificados (Precedentes OKF)
+            history_precedents = []
+            docs_okf = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+            precedents_file = docs_okf / "architecture" / "precedents_index.yaml"
+            if precedents_file.exists():
+                try:
+                    p_index = yaml.safe_load(precedents_file.read_text(encoding="utf-8")) or {}
+                    history_precedents = p_index.get("precedents", [])
+                except Exception as prec_err:
+                    logger.debug("Error leyendo precedents_index.yaml: %s", prec_err)
+
+            # Incluir tickets resueltos desde SQLite con su dictamen
+            with self.db.get_connection() as conn:
+                res_cur = conn.execute(
+                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND status != 'open' ORDER BY created_at DESC LIMIT 30;",
+                    (target_uuid,)
+                )
+                for row in res_cur.fetchall():
+                    row_dict = dict(row)
+                    summary = self.db.get_jury_votes_summary(row_dict["ticket_id"])
+                    row_dict["votes_summary"] = summary
+                    # Si no está en history_precedents, añadirlo
+                    if not any(p.get("id") == f"RULING-{row_dict['ticket_id']}" or p.get("id") == row_dict['ticket_id'] for p in history_precedents):
+                        history_precedents.append({
+                            "id": f"RULING-{row_dict['ticket_id']}",
+                            "type": "JURY_RULING",
+                            "title": row_dict.get("title"),
+                            "winning_option": row_dict.get("winning_quadrant"),
+                            "card_id": row_dict.get("card_id"),
+                            "status": row_dict.get("status"),
+                            "final_adr_path": row_dict.get("final_adr_path")
+                        })
+
             return {
                 "success": True,
                 "project_uuid": target_uuid,
                 "pending_decisions": decisions,
                 "open_disputes": disputes,
                 "pending_prs": prs,
+                "history_precedents": history_precedents,
                 "total_count": len(decisions) + len(disputes) + len(prs)
             }
         except Exception as e:
@@ -1619,6 +1653,22 @@ class ApiBridge:
                 self._ensure_active_project()
                 target_uuid = self.active_project_uuid
 
+            proj = self.db.get_project_by_uuid(target_uuid)
+            gov_path = Path(proj["gov_repo_path"]) if proj and proj.get("gov_repo_path") else None
+
+            # Si es consulta de precedente / fallo resuelto histórico (ruling o adr)
+            if item_type in ("ruling", "resolved_jury"):
+                docs_okf = gov_path / "docs" / "okf" if (gov_path and (gov_path / "docs" / "okf").exists()) else gov_path
+                ruling_file = None
+                if docs_okf and (docs_okf / "architecture" / "rulings").is_dir():
+                    for f in (docs_okf / "architecture" / "rulings").glob("*.yaml"):
+                        if item_id in f.stem:
+                            ruling_file = f
+                            break
+                if ruling_file and ruling_file.exists():
+                    ruling_data = yaml.safe_load(ruling_file.read_text(encoding="utf-8")) or {}
+                    return {"success": True, "item_type": "ruling", "item": ruling_data}
+
             bundle = self.get_pending_human_approvals(target_uuid)
             if not bundle.get("success"):
                 return bundle
@@ -1627,6 +1677,23 @@ class ApiBridge:
                 for d in bundle.get("pending_decisions", []):
                     if d.get("item_id") == item_id or d.get("file_name") == item_id:
                         return {"success": True, "item_type": "decision", "item": d}
+                # Buscar en ADRs aprobados si ya fue promovido
+                if gov_path:
+                    docs_okf = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+                    if (docs_okf / "architecture" / "adrs").is_dir():
+                        for f in (docs_okf / "architecture" / "adrs").glob("*.md"):
+                            if item_id in f.stem:
+                                txt = f.read_text(encoding="utf-8", errors="ignore")
+                                return {
+                                    "success": True,
+                                    "item_type": "decision",
+                                    "item": {
+                                        "item_id": item_id,
+                                        "title": f.stem,
+                                        "full_content": txt,
+                                        "status": "approved_adr"
+                                    }
+                                }
                 return {"success": False, "error": f"Decisión {item_id} no encontrada"}
 
             elif item_type in ("jury_vote", "dispute"):
