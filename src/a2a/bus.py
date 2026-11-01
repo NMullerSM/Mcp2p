@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import msgpack
 
+from src.a2a.jury_engine import DialecticJuryEngine
 from src.storage.db import DatabaseManager
 
 logger = logging.getLogger("mcp2p.a2a.bus")
@@ -55,6 +56,7 @@ class A2ABus:
 
     def __init__(self, db: Optional[DatabaseManager] = None) -> None:
         self.db = db or DatabaseManager.get_instance()
+        self.jury_engine = DialecticJuryEngine()
         self._subscribers: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
 
     # ==========================================
@@ -520,10 +522,21 @@ class A2ABus:
         proposal_a_ref: str,
         proposal_b_ref: str,
         card_id: Optional[str] = None,
-        ticket_id: Optional[str] = None
+        ticket_id: Optional[str] = None,
+        proposal_c_ref: str = "",
+        num_evaluators: int = 3
     ) -> Dict[str, Any]:
-        """Abre formalmente un ticket de juicio técnico en disputa."""
+        """Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."""
         t_id = ticket_id or f"TICKET-{str(uuid.uuid4())[:8].upper()}"
+        matrix_info = self.jury_engine.generate_neutral_jury_matrix(
+            ticket_id=t_id,
+            num_evaluators=num_evaluators,
+            seed=t_id
+        )
+        synthesis_text = proposal_c_ref or (
+            f"Síntesis (Tercera Vía C): Integrar los puntos de mayor resiliencia de Tesis ({proposal_a_ref[:60]}) "
+            f"con la simplicidad operativa de Antítesis ({proposal_b_ref[:60]}), aislando efectos secundarios mediante interfaz intermedia."
+        )
         return self.db.create_dispute_ticket(
             ticket_id=t_id,
             project_uuid=project_uuid,
@@ -533,7 +546,9 @@ class A2ABus:
             contender_b_node=contender_b_node,
             proposal_a_ref=proposal_a_ref,
             proposal_b_ref=proposal_b_ref,
-            card_id=card_id
+            card_id=card_id,
+            proposal_c_ref=synthesis_text,
+            jury_matrix_json=json.dumps(matrix_info.get("evaluators", []), ensure_ascii=False)
         )
 
     def submit_agent_borda_evaluation(
@@ -589,55 +604,98 @@ class A2ABus:
 
     def compute_jury_verdict(self, project_uuid: str, ticket_id: str) -> Dict[str, Any]:
         """
-        Calcula el veredicto ponderado del Juicio de Honor:
-        Gobernanza Human-Dominant: El voto humano tiene superioridad absoluta decisoria.
-        Score(k) = (Votos Humanos * 1000.0) + (Promedio Borda Agentes / 100 * 1.5)
-        Si todos los humanos votan por una opción y todos los bots por otra, los humanos ganan siempre.
-        Promueve la opción ganadora a ADR en architecture/adrs/.
+        Calcula el veredicto ponderado del Juicio de Honor Dialéctico (3 Fases):
+        - Gobernanza Human-Dominant: Peso humano = 2.0 vs Pool de subagentes capado a 1.5 * H (57.14% vs 42.86%).
+        - Umbral de consenso >= 80% o unanimidad humana decisoria.
+        - Si todos los humanos votan por una opción y todos los bots por otra, los humanos ganan siempre.
+        - Persiste el dictamen en docs/okf/architecture/rulings/{ticket_id}.yaml.
         """
         summary = self.db.get_jury_votes_summary(ticket_id)
         human_votes = summary.get("human_votes", [])
         agent_scores = summary.get("agent_scores", [])
+        ticket = self.db.get_dispute_ticket(ticket_id) or {}
 
+        # Universo de votantes del proyecto
+        collabs = self.db.get_project_collaborators(project_uuid)
+        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
+        if not all_nodes:
+            all_nodes = [n["node_uuid"] for n in self.db.get_swarm_nodes()]
+        contenders = [
+            c for c in [ticket.get("contender_a_node"), ticket.get("contender_b_node")]
+            if c
+        ]
+        voter_universe = self.jury_engine.resolve_voter_universe(all_nodes, contenders)
+
+        # Ejecutar motor de consenso dialéctico
+        consensus = self.jury_engine.compute_dialectic_consensus(
+            ticket_id=ticket_id,
+            project_uuid=project_uuid,
+            human_votes=human_votes,
+            agent_scores=agent_scores,
+            all_project_nodes=all_nodes,
+            contender_nodes=contenders
+        )
+
+        # Compatibilidad hacia atrás con breakdown legacy (Score(k) = Votos Humanos * 1000 + Borda * 1.5)
         options = ["OPTION_A", "OPTION_B", "THIRD_WAY_C"]
         scores_by_option: Dict[str, Dict[str, float]] = {
             opt: {"human_weight": 0.0, "agent_score_sum": 0.0, "agent_count": 0.0, "final_score": 0.0}
             for opt in options
         }
-
-        # 1. Sumar votos humanos con peso decisorio superior (1000.0 base por voto humano)
         for hv in human_votes:
             voted = hv.get("voted_option")
             if voted in scores_by_option:
                 raw_w = float(hv.get("weight", 2.0))
-                scores_by_option[voted]["human_weight"] += (raw_w * 500.0)  # Min 1000.0 pts con weight=2.0
-
-        # 2. Sumar notas de agentes (Borda 0-100 normalizado a max 1.5 pts)
+                scores_by_option[voted]["human_weight"] += (raw_w * 500.0)
         for ag in agent_scores:
             opt = ag.get("evaluated_option")
             if opt in scores_by_option:
                 scores_by_option[opt]["agent_score_sum"] += float(ag.get("weighted_total", 0.0))
                 scores_by_option[opt]["agent_count"] += 1.0
 
-        # 3. Calcular Score Final
-        highest_score = -1.0
-        winning_option = "OPTION_A"
-        tie_detected = False
-
         for opt, val in scores_by_option.items():
             avg_agent = (val["agent_score_sum"] / val["agent_count"]) if val["agent_count"] > 0 else 0.0
             agent_points = (avg_agent / 100.0) * 1.5
             total = val["human_weight"] + agent_points
             val["final_score"] = round(total, 4)
-            if total > highest_score:
-                highest_score = total
-                winning_option = opt
-                tie_detected = False
-            elif total == highest_score and highest_score > 0:
-                tie_detected = True
+            c_bd = consensus["breakdown"].get(opt, {})
+            val["dialectic_ratio"] = c_bd.get("consensus_ratio", 0.0)
+            val["dialectic_points"] = c_bd.get("total_points", 0.0)
 
-        # 4. Actualizar estado del ticket en base de datos
-        self.db.resolve_dispute_ticket(ticket_id=ticket_id, winning_option=winning_option)
+        winning_option = consensus["winning_option"]
+        highest_score = scores_by_option.get(winning_option, {}).get("final_score", 0.0)
+        tie_detected = consensus["tie_detected"]
+
+        # Persistir dictamen YAML en OKF si el proyecto tiene gov_repo_path
+        ruling_yaml_path = None
+        proj = self.db.get_project_by_uuid(project_uuid)
+        if proj and proj.get("gov_repo_path"):
+            try:
+                matrix_list = []
+                if ticket.get("jury_matrix_json"):
+                    matrix_list = json.loads(ticket["jury_matrix_json"])
+                ruling_path = self.jury_engine.persist_ruling_yaml(
+                    gov_base_path=proj["gov_repo_path"],
+                    ticket=ticket,
+                    verdict=consensus,
+                    synthesis_data={
+                        "option_id": "THIRD_WAY_C",
+                        "synthesizer_agent": "subagent_synthesizer_third_way",
+                        "temperature": 0.65,
+                        "summary": ticket.get("proposal_c_ref", "")
+                    },
+                    neutral_matrix=matrix_list
+                )
+                ruling_yaml_path = str(ruling_path)
+            except Exception as e:
+                logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket_id, e)
+
+        # Actualizar estado del ticket en base de datos
+        self.db.resolve_dispute_ticket(
+            ticket_id=ticket_id,
+            winning_option=winning_option,
+            final_adr_path=ruling_yaml_path
+        )
 
         return {
             "ticket_id": ticket_id,
@@ -645,7 +703,15 @@ class A2ABus:
             "winning_option": winning_option,
             "highest_score": highest_score,
             "tie_detected": tie_detected,
+            "consensus_reached": consensus["consensus_reached"],
+            "threshold_required": consensus["threshold_required"],
+            "winning_ratio": consensus["consensus_ratio"],
+            "resolution_mode": consensus["resolution_mode"],
+            "effective_agent_weight": consensus["effective_agent_unit_weight"],
+            "voter_universe": voter_universe,
+            "ruling_yaml_path": ruling_yaml_path,
             "breakdown": scores_by_option,
+            "dialectic_breakdown": consensus["breakdown"],
             "human_votes_count": len(human_votes),
             "agent_evaluations_count": len(agent_scores)
         }

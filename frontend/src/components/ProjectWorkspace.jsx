@@ -152,11 +152,17 @@ export function ProjectWorkspace({
             api={api}
             initialBranch={targetBranch}
             onOpenCard={handleOpenCardById}
+            onNavigateToHitl={() => onTabChange && onTabChange('approvals')}
             gitPulseTrigger={gitPulseTrigger}
           />
         )}
         {activeTab === 'approvals' && (
-          <HumanApprovalsView project={project} api={api} />
+          <HumanApprovalsView
+            project={project}
+            api={api}
+            onOpenCard={handleOpenCardById}
+            onNavigateToBranch={handleNavigateToBranch}
+          />
         )}
         {activeTab === 'okf' && (
           <OKFGovernanceView project={project} api={api} />
@@ -174,6 +180,10 @@ export function ProjectWorkspace({
         onSave={handleSaveCard}
         onAcceptTask={handleAcceptCard}
         onNavigateToBranch={handleNavigateToBranch}
+        onNavigateToHitl={() => {
+          setSelectedCard(null);
+          if (onTabChange) onTabChange('approvals');
+        }}
       />
     </div>
   );

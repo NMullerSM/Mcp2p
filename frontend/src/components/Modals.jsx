@@ -466,14 +466,12 @@ export function DeleteProjectModal({ isOpen, project, onClose, onConfirm }) {
   );
 }
 
-export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, onNavigateToBranch }) {
-  if (!isOpen || !card) return null;
-
-  const [title, setTitle] = useState(card.title || '');
-  const [desc, setDesc] = useState(card.description || '');
-  const [criteria, setCriteria] = useState(card.acceptance_criteria || '');
-  const [branchRef, setBranchRef] = useState(card.branch_ref || '');
-  const [status, setStatus] = useState(card.status || 'backlog');
+export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, onNavigateToBranch, onNavigateToHitl }) {
+  const [title, setTitle] = useState(card?.title || '');
+  const [desc, setDesc] = useState(card?.description || '');
+  const [criteria, setCriteria] = useState(card?.acceptance_criteria || '');
+  const [branchRef, setBranchRef] = useState(card?.branch_ref || '');
+  const [status, setStatus] = useState(card?.status || 'backlog');
 
   useEffect(() => {
     if (card) {
@@ -484,6 +482,8 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
       setStatus(card.status || 'backlog');
     }
   }, [card]);
+
+  if (!isOpen || !card) return null;
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -586,27 +586,49 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
               </span>
             </label>
             {branchRef && onNavigateToBranch && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  onNavigateToBranch(branchRef);
-                }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--accent-primary)',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  padding: 0
-                }}
-              >
-                Ver en Grafo de Commits →
-              </button>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onNavigateToBranch(branchRef);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-primary)',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: 0
+                  }}
+                >
+                  Ver en Grafo de Commits →
+                </button>
+                {(status === 'in_review' || status === 'disputed') && onNavigateToHitl && (
+                  <button
+                    type="button"
+                    onClick={onNavigateToHitl}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#10b981',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      padding: 0
+                    }}
+                  >
+                    Inspeccionar en HITL →
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <input

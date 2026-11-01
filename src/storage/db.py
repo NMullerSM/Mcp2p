@@ -134,6 +134,15 @@ class DatabaseManager:
                     if "default_sla_hours" not in p_cols:
                         conn.execute("ALTER TABLE projects ADD COLUMN default_sla_hours INTEGER DEFAULT 24;")
 
+                    # Migración para dispute_tickets (Síntesis Tercera Vía y Matriz Neutral Anti-Sycophancy)
+                    dt_info = conn.execute("PRAGMA table_info(dispute_tickets);").fetchall()
+                    dt_cols = [c["name"] for c in dt_info]
+                    if dt_cols:
+                        if "proposal_c_ref" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN proposal_c_ref TEXT DEFAULT '';")
+                        if "jury_matrix_json" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN jury_matrix_json TEXT DEFAULT '[]';")
+
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
                 CREATE TABLE IF NOT EXISTS projects (
@@ -206,6 +215,8 @@ class DatabaseManager:
                     contender_b_node TEXT NOT NULL,
                     proposal_a_ref TEXT NOT NULL,
                     proposal_b_ref TEXT NOT NULL,
+                    proposal_c_ref TEXT DEFAULT '',
+                    jury_matrix_json TEXT DEFAULT '[]',
                     status TEXT CHECK(status IN ('open', 'provisional_ruling', 'ratified', 'challenged', 'resolved_hitl')) NOT NULL DEFAULT 'open',
                     winning_quadrant TEXT CHECK(winning_quadrant IN ('OPTION_A', 'OPTION_B', 'ASYMMETRIC_HYBRID', 'THIRD_WAY_C')),
                     provisional_branch TEXT,
@@ -1025,9 +1036,11 @@ class DatabaseManager:
         contender_b_node: str,
         proposal_a_ref: str,
         proposal_b_ref: str,
-        card_id: Optional[str] = None
+        card_id: Optional[str] = None,
+        proposal_c_ref: str = "",
+        jury_matrix_json: str = "[]"
     ) -> Dict[str, Any]:
-        """Crea un nuevo ticket de arbitraje técnico."""
+        """Crea un nuevo ticket de arbitraje técnico con soporte para Tercera Vía (Síntesis) y Matriz Neutral."""
         now_str = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -1036,11 +1049,32 @@ class DatabaseManager:
                     INSERT INTO dispute_tickets (
                         ticket_id, project_uuid, card_id, title, collision_reason,
                         contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
-                        status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?);
+                        proposal_c_ref, jury_matrix_json, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?);
                     """,
                     (ticket_id, project_uuid, card_id, title, collision_reason,
-                     contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref, now_str)
+                     contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
+                     proposal_c_ref, jury_matrix_json, now_str)
+                )
+        return self.get_dispute_ticket(ticket_id) or {}
+
+    def update_dispute_synthesis_and_matrix(
+        self,
+        ticket_id: str,
+        proposal_c_ref: Optional[str] = None,
+        jury_matrix: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Actualiza la Síntesis (Tercera Vía C) y/o la matriz de subagentes neutrales de un ticket."""
+        ticket = self.get_dispute_ticket(ticket_id)
+        if not ticket:
+            return {}
+        new_c = proposal_c_ref if proposal_c_ref is not None else ticket.get("proposal_c_ref", "")
+        new_matrix = json.dumps(jury_matrix, ensure_ascii=False) if jury_matrix is not None else ticket.get("jury_matrix_json", "[]")
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE dispute_tickets SET proposal_c_ref = ?, jury_matrix_json = ? WHERE ticket_id = ?;",
+                    (new_c, new_matrix, ticket_id)
                 )
         return self.get_dispute_ticket(ticket_id) or {}
 

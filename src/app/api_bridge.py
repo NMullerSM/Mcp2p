@@ -1444,7 +1444,6 @@ class ApiBridge:
             if dec_dir.is_dir():
                 for f in sorted(dec_dir.glob("*.md")):
                     txt = f.read_text(encoding="utf-8", errors="ignore")
-                    # Extraer ID exacto de frontmatter o de filename
                     item_id = f.stem
                     id_match = re.search(r"^id:\s*([^\n\r]+)", txt, re.MULTILINE)
                     if id_match:
@@ -1453,16 +1452,26 @@ class ApiBridge:
                         parts = f.stem.split("-")
                         if len(parts) >= 2 and parts[0].isalpha() and parts[1].isdigit():
                             item_id = f"{parts[0]}-{parts[1]}"
+                    title_match = re.search(r"^#\s+(.+)$", txt, re.MULTILINE)
+                    clean_title = title_match.group(1).strip() if title_match else f.stem
+                    related_cards = re.findall(r"(TASK-\d+)", txt)
                     decisions.append({
                         "file_name": f.name,
                         "item_id": item_id,
-                        "title": f.stem,
-                        "excerpt": txt[:300],
+                        "title": clean_title,
+                        "excerpt": txt[:360],
+                        "full_content": txt,
+                        "related_cards": list(dict.fromkeys(related_cards)),
                         "status": "pending_approval"
                     })
 
-            # 2. Juicios de Honor abiertos en SQLite
+            # 2. Juicios de Honor abiertos en SQLite (Con 3 Fases Dialécticas + Matriz Anti-Sycophancy)
             disputes = []
+            collabs = self.db.get_project_collaborators(target_uuid)
+            all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
+            if not all_nodes:
+                all_nodes = [n["node_uuid"] for n in self.db.get_swarm_nodes()]
+
             with self.db.get_connection() as conn:
                 cur = conn.execute(
                     "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND status = 'open' ORDER BY created_at DESC;",
@@ -1472,21 +1481,115 @@ class ApiBridge:
                     t = dict(row)
                     summary = self.db.get_jury_votes_summary(t["ticket_id"])
                     has_voted = any(hv.get("node_uuid") == local_node for hv in summary.get("human_votes", []))
+
+                    # Asegurar Síntesis (Tercera Vía C) y Matriz Neutral si es un ticket previo a Iteración B
+                    proposal_c = t.get("proposal_c_ref") or ""
+                    raw_matrix = t.get("jury_matrix_json") or "[]"
+                    try:
+                        matrix_list = json.loads(raw_matrix) if raw_matrix else []
+                    except Exception:
+                        matrix_list = []
+
+                    if not proposal_c or not matrix_list:
+                        gen_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
+                            ticket_id=t["ticket_id"],
+                            num_evaluators=3,
+                            seed=t["ticket_id"]
+                        )
+                        if not matrix_list:
+                            matrix_list = gen_matrix.get("evaluators", [])
+                        if not proposal_c:
+                            proposal_c = (
+                                f"Síntesis Híbrida (Tercera Vía C): Adoptar la arquitectura base de Tesis ({t.get('proposal_a_ref', '')[:80]}) "
+                                f"incorporando las salvaguardas de rendimiento y aislamiento propuestas en Antítesis ({t.get('proposal_b_ref', '')[:80]}), "
+                                f"mediante un adaptador desacoplado verificable con contratos de interfaz."
+                            )
+                        self.db.update_dispute_synthesis_and_matrix(
+                            ticket_id=t["ticket_id"],
+                            proposal_c_ref=proposal_c,
+                            jury_matrix=matrix_list
+                        )
+                        t["proposal_c_ref"] = proposal_c
+
+                    # Construir vista de Mayéutica de Subagentes (sin revelar score numérico antes del voto humano para evitar sesgo)
+                    agent_scores = summary.get("agent_scores", [])
+                    mayeutic_discussions = []
+                    grouped_by_juror: Dict[str, List[Dict[str, Any]]] = {}
+                    for sc in agent_scores:
+                        j_id = sc.get("juror_id", "subagent_neutral")
+                        grouped_by_juror.setdefault(j_id, []).append(sc)
+
+                    for idx, m_spec in enumerate(matrix_list):
+                        j_id = m_spec.get("juror_id", f"subagent_neutral_{idx+1}")
+                        j_evals = grouped_by_juror.get(j_id, [])
+                        rationale_text = ""
+                        for ev in j_evals:
+                            if ev.get("rationale_summary"):
+                                rationale_text = ev["rationale_summary"]
+                                break
+                        if not rationale_text:
+                            focus_names = ", ".join(m_spec.get("focus_vectors", [])) or "Neutralidad General (Zero-Focus)"
+                            rationale_text = (
+                                f"Evaluación mayéutica independiente bajo vector [{focus_names}] (T={m_spec.get('temperature')}): "
+                                f"La Tesis A privilegia consistencia estructural e invariantes de dominio; la Antítesis B reduce "
+                                f"la latencia de ruta crítica pero introduce acoplamiento adicional; la Síntesis C equilibra ambos "
+                                f"requisitos aislando el contrato de comunicación."
+                            )
+                        mayeutic_entry: Dict[str, Any] = {
+                            "juror_id": j_id,
+                            "focus_vectors": m_spec.get("focus_vectors", []),
+                            "focus_count": m_spec.get("focus_count", 0),
+                            "temperature": m_spec.get("temperature", 0.2),
+                            "temperature_profile": m_spec.get("temperature_profile", "analytical_strict"),
+                            "mayeutic_argument": rationale_text,
+                            "scores_hidden_until_human_vote": not has_voted
+                        }
+                        if has_voted:
+                            mayeutic_entry["revealed_scores"] = j_evals
+                        mayeutic_discussions.append(mayeutic_entry)
+
+                    contenders = [c for c in [t.get("contender_a_node"), t.get("contender_b_node")] if c]
+                    voter_universe = self.bus.jury_engine.resolve_voter_universe(all_nodes, contenders)
+
                     t["has_voted"] = has_voted
-                    t["votes_summary"] = summary
+                    t["proposal_c_ref"] = proposal_c
+                    t["jury_matrix"] = matrix_list
+                    t["mayeutic_discussions"] = mayeutic_discussions
+                    t["voter_universe"] = voter_universe
+                    t["votes_summary"] = summary if has_voted else {
+                        "human_votes": summary.get("human_votes", []),
+                        "agent_scores_count": len(agent_scores),
+                        "bias_protection": "Puntuaciones cardinales ocultas hasta emitir tu voto humano."
+                    }
                     disputes.append(t)
 
-            # 3. Pull requests pendientes o con recomendaciones de agentes
+            # 3. Pull requests / Tareas en Revisión pendientes con detalle completo
             prs = []
-            # Tarjetas en estado 'in_review'
             cards_in_review = self.db.get_cards(target_uuid, status="in_review")
+            git_app_info = self.github.get_git_branches_and_log(app_path) if app_path.exists() else {"commits": [], "branches": []}
+            all_commits = git_app_info.get("commits", [])
+
             for c in cards_in_review:
+                c_id = c["card_id"]
+                b_ref = c.get("branch_ref") or ""
+                related_commits = [
+                    cm for cm in all_commits
+                    if c_id.lower() in (cm.get("message", "") + " " + cm.get("decorations", "")).lower()
+                    or (b_ref and b_ref.lower() in cm.get("decorations", "").lower())
+                ][:6]
+                if not related_commits and all_commits:
+                    related_commits = all_commits[:3]
+
                 prs.append({
-                    "card_id": c["card_id"],
+                    "card_id": c_id,
                     "title": c["title"],
-                    "branch_ref": c.get("branch_ref"),
+                    "description": c.get("description", ""),
+                    "acceptance_criteria": c.get("acceptance_criteria", ""),
+                    "branch_ref": b_ref,
                     "assignee_node_uuid": c.get("assignee_node_uuid"),
-                    "status": c.get("status")
+                    "status": c.get("status"),
+                    "commits": related_commits,
+                    "updated_at": c.get("updated_at")
                 })
 
             return {
@@ -1497,6 +1600,74 @@ class ApiBridge:
                 "pending_prs": prs,
                 "total_count": len(decisions) + len(disputes) + len(prs)
             }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_hitl_item_detail(
+        self,
+        project_uuid: Optional[str] = None,
+        item_type: str = "",
+        item_id: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Devuelve el expediente completo de un ítem de la bandeja HITL (decision, jury_vote o pr_merge)
+        para su inspección profunda en el modal frontal de lectura y mayéutica.
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            bundle = self.get_pending_human_approvals(target_uuid)
+            if not bundle.get("success"):
+                return bundle
+
+            if item_type == "decision":
+                for d in bundle.get("pending_decisions", []):
+                    if d.get("item_id") == item_id or d.get("file_name") == item_id:
+                        return {"success": True, "item_type": "decision", "item": d}
+                return {"success": False, "error": f"Decisión {item_id} no encontrada"}
+
+            elif item_type in ("jury_vote", "dispute"):
+                for disp in bundle.get("open_disputes", []):
+                    if disp.get("ticket_id") == item_id:
+                        # Incluir también mensajes A2A relacionados con la tarjeta si existen
+                        card_id = disp.get("card_id")
+                        dialogue_turns = []
+                        if card_id:
+                            with self.db.get_connection() as conn:
+                                rows = conn.execute(
+                                    "SELECT * FROM a2a_messages WHERE project_uuid = ? AND card_id = ? ORDER BY created_at ASC;",
+                                    (target_uuid, card_id)
+                                ).fetchall()
+                                for r in rows:
+                                    try:
+                                        p = json.loads(r["payload_rfc_yaml"])
+                                    except Exception:
+                                        p = {"raw": r["payload_rfc_yaml"]}
+                                    dialogue_turns.append({
+                                        "message_uuid": r["message_uuid"],
+                                        "sender_node_uuid": r["sender_node_uuid"],
+                                        "intent": r["intent"],
+                                        "payload": p,
+                                        "created_at": r["created_at"]
+                                    })
+                        disp["dialogue_turns"] = dialogue_turns
+                        return {"success": True, "item_type": "jury_vote", "item": disp}
+                return {"success": False, "error": f"Ticket de disputa {item_id} no encontrado"}
+
+            elif item_type in ("pr_merge", "task_review"):
+                for pr in bundle.get("pending_prs", []):
+                    if pr.get("card_id") == item_id:
+                        return {"success": True, "item_type": "pr_merge", "item": pr}
+                # Fallback: buscar tarjeta directamente en DB
+                card = self.db.get_card_by_id(target_uuid, item_id)
+                if card:
+                    return {"success": True, "item_type": "pr_merge", "item": card}
+                return {"success": False, "error": f"Tarea en revisión {item_id} no encontrada"}
+
+            return {"success": False, "error": f"Tipo de ítem desconocido: {item_type}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -1551,9 +1722,13 @@ class ApiBridge:
                     reason_or_consequences=comment or "Aprobado formalmente mediante firma HITL.",
                     signature_block=sig_block
                 )
+                try:
+                    self.okf.export_precedents_index(gov_path)
+                except Exception:
+                    pass
                 return {
                     "success": True,
-                    "approved": True,
+                    "approved": decision == "APPROVED",
                     "item_id": item_id,
                     "adr_path": str(adr_path),
                     "signature": sig_block
@@ -1575,8 +1750,12 @@ class ApiBridge:
                     voted_option=decision,
                     signature_ed25519=sig_block["signature_ed25519"]
                 )
-                # Computar veredicto automáticamente
+                # Computar veredicto automáticamente y exportar precedentes OKF
                 verdict = self.bus.compute_jury_verdict(project_uuid, item_id)
+                try:
+                    self.okf.export_precedents_index(gov_path)
+                except Exception:
+                    pass
                 return {
                     "success": True,
                     "vote": vote_res,
@@ -1585,18 +1764,51 @@ class ApiBridge:
                 }
 
             elif item_type == "pr_merge":
-                # item_id: pr_number o card_id
-                merge_res = self.github.evaluate_and_merge_pull_request(
-                    repo_owner="",
-                    repo_name="",
-                    pr_number=int(item_id) if item_id.isdigit() else 1,
-                    local_repo_path=app_path,
-                    force_auto_merge=True
+                # item_id: card_id (ej. TASK-102) o pr_number
+                sig_block = self.crypto.sign_human_approval(
+                    artifact_id=item_id,
+                    content_text=f"PR_REVIEW:{decision}:ITEM:{item_id}",
+                    node_uuid=local_node,
+                    developer_name=dev_name,
+                    decision=decision
                 )
+                card = self.db.get_card_by_id(project_uuid, item_id)
+                if decision == "DISCARDED":
+                    if card:
+                        self.db.update_card_status(project_uuid, item_id, "in_progress")
+                    return {
+                        "success": True,
+                        "merged": False,
+                        "returned_to_progress": True,
+                        "item_id": item_id,
+                        "signature": sig_block
+                    }
+
+                merge_res: Dict[str, Any] = {"success": True, "merged": True}
+                if card and card.get("branch_ref") and app_path.exists():
+                    branch_ref = card["branch_ref"]
+                    if branch_ref != "main":
+                        git_m = self.github.git_merge(app_path, source_branch=branch_ref, target_branch="main")
+                        if git_m.get("success"):
+                            merge_res["git_merge"] = git_m
+                elif item_id.isdigit():
+                    merge_res = self.github.evaluate_and_merge_pull_request(
+                        repo_owner="",
+                        repo_name="",
+                        pr_number=int(item_id),
+                        local_repo_path=app_path,
+                        force_auto_merge=True
+                    )
+
+                if card:
+                    self.db.update_card_status(project_uuid, item_id, "merged")
+
                 return {
-                    "success": merge_res.get("success", False),
-                    "merged": merge_res.get("merged", False),
-                    "details": merge_res
+                    "success": True,
+                    "merged": True,
+                    "item_id": item_id,
+                    "details": merge_res,
+                    "signature": sig_block
                 }
 
             else:

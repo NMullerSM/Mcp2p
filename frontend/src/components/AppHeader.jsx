@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, Settings, Plus, ArrowLeft, Kanban, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
+import { Sun, Moon, Settings, Plus, ArrowLeft, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
 
 export function AppHeader({
   theme,
@@ -15,30 +15,31 @@ export function AppHeader({
 }) {
   return (
     <header style={{
-      height: '56px',
+      height: '64px',
       backgroundColor: 'var(--bg-surface)',
       borderBottom: '1px solid var(--border-subtle)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      padding: '0 clamp(10px, 2vw, 20px)',
+      padding: '0 clamp(14px, 2vw, 24px)',
       flexShrink: 0,
       zIndex: 20,
-      gap: '12px',
+      gap: '16px',
       overflowX: 'auto',
       whiteSpace: 'nowrap'
     }}>
-      {/* 1. SECCIÓN IZQUIERDA: Marca, Breadcrumbs e Identificador de Proyecto */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, height: '100%' }}>
+      {/* 1. SECCIÓN IZQUIERDA: Marca, Botón Hub y Nombre de Proyecto Limpio (Sin UUID) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0, height: '100%' }}>
         <span style={{
           background: 'var(--accent-primary)',
           color: '#ffffff',
           fontWeight: 900,
           fontSize: '13px',
-          height: '28px',
-          padding: '0 10px',
+          height: '32px',
+          padding: '0 11px',
           display: 'inline-flex',
           alignItems: 'center',
+          justifyContent: 'center',
           lineHeight: 1,
           borderRadius: 'var(--radius-sm)',
           fontFamily: 'var(--font-mono)',
@@ -51,16 +52,17 @@ export function AppHeader({
         <span style={{ color: 'var(--border-subtle)', fontWeight: 300, display: 'inline-flex', alignItems: 'center' }}>|</span>
 
         {activeProject ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', height: '100%' }}>
             <button
               onClick={onBackToProjects}
               title="Volver al Hub de Proyectos"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '4px',
-                height: '28px',
-                padding: '0 8px',
+                justifyContent: 'center',
+                gap: '5px',
+                height: '32px',
+                padding: '0 10px',
                 lineHeight: 1,
                 fontSize: '12px',
                 fontWeight: 600,
@@ -74,47 +76,35 @@ export function AppHeader({
             >
               <ArrowLeft size={13} /> Hub
             </button>
-            <span style={{
-              fontSize: '13px',
-              fontWeight: 700,
-              color: 'var(--text-primary)',
-              maxWidth: 'clamp(100px, 15vw, 240px)',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: 'inline-flex',
-              alignItems: 'center',
-              lineHeight: 1,
-              height: '28px'
-            }}>
+            <span
+              title={activeProject.name}
+              style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                maxWidth: 'clamp(140px, 20vw, 300px)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                display: 'inline-flex',
+                alignItems: 'center',
+                lineHeight: 1,
+                height: '32px'
+              }}
+            >
               {activeProject.name}
-            </span>
-            <span style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '10px',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--accent-primary)',
-              padding: '0 6px',
-              height: '22px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              lineHeight: 1,
-              borderRadius: 'var(--radius-sm)',
-              fontWeight: 600
-            }}>
-              {activeProject.project_uuid}
             </span>
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '100%' }}>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', height: '28px' }}>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', height: '32px' }}>
               Proyectos
             </span>
             <span style={{
               fontSize: '11px',
               fontWeight: 600,
               fontFamily: 'var(--font-mono)',
-              padding: '1px 7px',
+              padding: '2px 8px',
               borderRadius: '10px',
               backgroundColor: 'var(--bg-subtle)',
               color: 'var(--text-secondary)'
@@ -125,22 +115,24 @@ export function AppHeader({
         )}
       </div>
 
-      {/* 2. SECCIÓN CENTRAL: Segmented Switcher tipo Parma */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, minWidth: 0 }}>
+      {/* 2. SECCIÓN CENTRAL: Segmented Switcher Centrado y Equilibrado */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, minWidth: 0, height: '100%' }}>
         {activeProject ? (
           <div style={{
             display: 'inline-flex',
+            alignItems: 'center',
             backgroundColor: 'var(--bg-subtle)',
-            padding: '3px',
+            padding: '4px',
+            height: '38px',
             borderRadius: 'var(--radius-md)',
-            gap: '3px',
+            gap: '4px',
             border: '1px solid var(--border-subtle)',
             overflowX: 'auto'
           }}>
             {[
-              { id: 'kanban', label: 'Tablero Kanban', icon: Kanban },
+              { id: 'kanban', label: 'Tablero Kanban', icon: null },
               { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-              { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
+              { id: 'approvals', label: 'HITL', title: 'HITL — Human in the Loop', icon: ShieldCheck },
               { id: 'collaborators', label: 'Colaboradores & Agentes', icon: Users }
             ].map(tab => {
               const Icon = tab.icon;
@@ -148,13 +140,16 @@ export function AppHeader({
               return (
                 <button
                   key={tab.id}
+                  title={tab.title || tab.label}
                   onClick={() => onTabChange(tab.id)}
                   style={{
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
+                    justifyContent: 'center',
                     gap: '6px',
-                    padding: '5px clamp(8px, 1.2vw, 14px)',
-                    fontSize: '12px',
+                    height: '30px',
+                    padding: '0 clamp(10px, 1.3vw, 16px)',
+                    fontSize: '12.5px',
                     fontWeight: isSelected ? 600 : 500,
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
@@ -166,7 +161,7 @@ export function AppHeader({
                     whiteSpace: 'nowrap'
                   }}
                 >
-                  <Icon size={14} color={isSelected ? 'var(--accent-primary)' : 'currentColor'} />
+                  {Icon && <Icon size={14} color={isSelected ? 'var(--accent-primary)' : 'currentColor'} />}
                   <span>{tab.label}</span>
                 </button>
               );
@@ -175,9 +170,8 @@ export function AppHeader({
         ) : null}
       </div>
 
-      {/* 3. SECCIÓN DERECHA: Acciones, Estado GitHub, Tema y Tuerca de Configuración */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'flex-end' }}>
-        {/* Botón Nueva Tarea si hay proyecto activo */}
+      {/* 3. SECCIÓN DERECHA: Botones de Altura Unificada (36px) y Alineación Vertical Exacta */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'flex-end', height: '100%', flexShrink: 0 }}>
         {activeProject && (
           <button
             onClick={onNewTask}
@@ -185,9 +179,11 @@ export function AppHeader({
             style={{
               display: 'inline-flex',
               alignItems: 'center',
+              justifyContent: 'center',
               gap: '6px',
-              padding: '6px 14px',
-              fontSize: '12px',
+              height: '36px',
+              padding: '0 14px',
+              fontSize: '12.5px',
               fontWeight: 600,
               borderRadius: 'var(--radius-md)',
               border: 'none',
@@ -212,8 +208,10 @@ export function AppHeader({
           style={{
             display: 'inline-flex',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: '6px',
-            padding: '5px 10px',
+            height: '36px',
+            padding: '0 12px',
             fontSize: '12px',
             fontWeight: 500,
             borderRadius: 'var(--radius-md)',
@@ -233,7 +231,7 @@ export function AppHeader({
             display: 'inline-block'
           }} />
           <span style={{
-            fontSize: '11px',
+            fontSize: '11.5px',
             fontFamily: 'var(--font-mono)',
             maxWidth: '110px',
             overflow: 'hidden',
@@ -251,7 +249,7 @@ export function AppHeader({
           style={{
             width: '36px',
             height: '36px',
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: 'var(--radius-md)',
@@ -265,14 +263,14 @@ export function AppHeader({
           {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
         </button>
 
-        {/* Botón de Configuración: ESTRICTAMENTE SOLO LA TUERCA (Sin texto) */}
+        {/* Botón de Configuración: Solo la tuerca */}
         <button
           onClick={() => onOpenSettings()}
           title="Configuración del Nodo, P2P y Agentes (F1)"
           style={{
             width: '36px',
             height: '36px',
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             borderRadius: 'var(--radius-md)',

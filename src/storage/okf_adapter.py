@@ -88,6 +88,7 @@ class OKFAdapter:
             "frontend",
             "architecture/decisions",
             "architecture/adrs",
+            "architecture/rulings",
             "architecture/discarded",
             "architecture/diagrams/src",
             "design/heuristics",
@@ -1049,3 +1050,64 @@ graph TD
                 logger.warning(f"Error leyendo snapshot de memoria: {exc}")
                 return None
         return None
+
+    def export_precedents_index(self, gov_base_path: str | Path) -> Path:
+        """
+        Compila todos los dictámenes del Jurado (architecture/rulings/*.yaml) y ADRs
+        (architecture/adrs/*.md) en un índice estructurado docs/okf/architecture/precedents_index.yaml
+        para consulta de precedentes a 0 tokens de inferencia.
+        """
+        base = Path(gov_base_path)
+        docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
+        arch_dir = docs_okf / "architecture"
+        arch_dir.mkdir(parents=True, exist_ok=True)
+
+        rulings_dir = arch_dir / "rulings"
+        adrs_dir = arch_dir / "adrs"
+
+        precedents: List[Dict[str, Any]] = []
+
+        if rulings_dir.is_dir():
+            for y_file in sorted(rulings_dir.glob("*.yaml")):
+                try:
+                    data = yaml.safe_load(y_file.read_text(encoding="utf-8")) or {}
+                    precedents.append({
+                        "id": data.get("ruling_id", y_file.stem),
+                        "type": "JURY_RULING",
+                        "title": data.get("title", y_file.stem),
+                        "winning_option": data.get("verdict", {}).get("winning_option"),
+                        "winning_ratio": data.get("verdict", {}).get("winning_ratio"),
+                        "consensus_reached": data.get("verdict", {}).get("consensus_reached"),
+                        "card_id": data.get("card_id"),
+                        "file": f"architecture/rulings/{y_file.name}",
+                        "timestamp": data.get("timestamp")
+                    })
+                except Exception as e:
+                    logger.debug("Error leyendo ruling %s: %s", y_file, e)
+
+        if adrs_dir.is_dir():
+            for md_file in sorted(adrs_dir.glob("*.md")):
+                try:
+                    text = md_file.read_text(encoding="utf-8", errors="ignore")
+                    title_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+                    precedents.append({
+                        "id": md_file.stem,
+                        "type": "ADR",
+                        "title": title_match.group(1).strip() if title_match else md_file.stem,
+                        "file": f"architecture/adrs/{md_file.name}"
+                    })
+                except Exception as e:
+                    logger.debug("Error leyendo ADR %s: %s", md_file, e)
+
+        index_payload = {
+            "schema_version": "okf.precedents.v2",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "total_precedents": len(precedents),
+            "precedents": precedents
+        }
+        index_path = arch_dir / "precedents_index.yaml"
+        index_path.write_text(
+            yaml.safe_dump(index_payload, sort_keys=False, allow_unicode=True),
+            encoding="utf-8"
+        )
+        return index_path

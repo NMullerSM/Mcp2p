@@ -989,7 +989,7 @@ export function SettingsDrawer({
                   </div>
                 </div>
 
-                {/* Consenso Dialéctico 3-Turn A2A */}
+                {/* Consenso Dialéctico 3-Turn A2A & Juicio de Honor */}
                 <div style={{
                   backgroundColor: 'var(--bg-card)',
                   border: '1px solid var(--border-subtle)',
@@ -997,11 +997,15 @@ export function SettingsDrawer({
                   padding: '12px 14px'
                 }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                    4. Consenso Dialéctico (3-Turn A2A RFC)
+                    4. Bandeja HITL, Juicio de Honor Dialéctico (3 Fases) y Matriz Anti-Sycophancy
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                    Mecanismo autónomo donde los agentes coordinan decisiones técnicas en exactamente 3 turnos:
-                    <strong> 1. Tesis (Propuesta)</strong> → <strong>2. Antítesis (Contrapropuesta o Jurado)</strong> → <strong>3. Síntesis (Resolución: ACCEPT / COMPROMISE / REJECT)</strong>. Evita debates infinitos y reduce el gasto de tokens a casi cero.
+                    En la pestaña <strong>HITL</strong> puedes inspeccionar cada decisión, tarea en revisión y juicio técnico:
+                    <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                      <li><strong>Fase 1 (Exposición)</strong>: Lectura íntegra de <em>Tesis (Opción A)</em>, <em>Antítesis (Opción B)</em> y <em>Síntesis / Tercera Vía (Opción C)</em>.</li>
+                      <li><strong>Fase 2 (Mayéutica Clean-Room)</strong>: Subagentes neutrales evalúan con vectores de foco estocásticos (0 a 4) y temperaturas diferenciadas sin heredar el prompt del usuario. Sus puntuaciones se ocultan antes del voto humano para evitar sesgo cognitivo.</li>
+                      <li><strong>Fase 3 (Votación Ponderada 80% + Supremacía Humana)</strong>: El voto humano pesa <code>2.0 pts</code> frente al tope de <code>1.5 × H</code> del pool de subagentes (<code>57.14%</code> humano vs <code>42.86%</code> máquina). Toda aprobación exige <strong>Doble Factor de Confirmación Consciente</strong> y firma <code>Ed25519</code>.</li>
+                    </ul>
                   </div>
                 </div>
 
