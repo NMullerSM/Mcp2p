@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -126,3 +127,60 @@ class NodeCryptoManager:
             return True, data, ""
         except Exception as e:
             return False, {}, f"Error al procesar token criptográfico: {str(e)}"
+
+    def sign_human_approval(
+        self,
+        artifact_id: str,
+        content_text: str,
+        node_uuid: str,
+        developer_name: str,
+        decision: str = "APPROVED"
+    ) -> Dict[str, Any]:
+        """
+        Calcula el hash SHA-256 de content_text y lo firma con la clave privada Ed25519 del desarrollador local.
+        Exclusivo para la bandeja HITL (Human-in-the-Loop); no accesible por herramientas de agentes MCP.
+        """
+        import hashlib
+        sha256_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+        now_str = datetime.now(timezone.utc).isoformat()
+        
+        payload_to_sign = {
+            "artifact_id": artifact_id,
+            "content_sha256": sha256_hash,
+            "node_uuid": node_uuid,
+            "developer_name": developer_name,
+            "decision": decision,
+            "signed_at": now_str
+        }
+        sig_b64 = self.sign_payload(payload_to_sign)
+        return {
+            **payload_to_sign,
+            "signature_ed25519": sig_b64,
+            "public_key": self.public_key_base64
+        }
+
+    @staticmethod
+    def verify_artifact_signature(
+        content_text: str,
+        signature_block: Dict[str, Any]
+    ) -> bool:
+        """Verifica que la firma de un artefacto corresponda a su contenido actual y clave pública."""
+        import hashlib
+        sha256_hash = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+        if signature_block.get("content_sha256") != sha256_hash:
+            return False
+            
+        pubkey = signature_block.get("public_key")
+        sig = signature_block.get("signature_ed25519")
+        if not pubkey or not sig:
+            return False
+            
+        payload = {
+            "artifact_id": signature_block.get("artifact_id"),
+            "content_sha256": signature_block.get("content_sha256"),
+            "node_uuid": signature_block.get("node_uuid"),
+            "developer_name": signature_block.get("developer_name"),
+            "decision": signature_block.get("decision"),
+            "signed_at": signature_block.get("signed_at")
+        }
+        return NodeCryptoManager.verify_signature(payload, sig, pubkey)

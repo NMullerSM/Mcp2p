@@ -3,6 +3,7 @@ import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
 import { BranchConsensusView } from './BranchConsensusView';
+import { HumanApprovalsView } from './HumanApprovalsView';
 import { CardDetailModal } from './Modals';
 import { useProjectPulse } from '../hooks/useProjectPulse';
 
@@ -153,6 +154,9 @@ export function ProjectWorkspace({
             onOpenCard={handleOpenCardById}
             gitPulseTrigger={gitPulseTrigger}
           />
+        )}
+        {activeTab === 'approvals' && (
+          <HumanApprovalsView project={project} api={api} />
         )}
         {activeTab === 'okf' && (
           <OKFGovernanceView project={project} api={api} />

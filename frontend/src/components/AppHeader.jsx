@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Moon, Settings, Plus, ArrowLeft, Kanban, GitBranch, Users, Github } from 'lucide-react';
+import { Sun, Moon, Settings, Plus, ArrowLeft, Kanban, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
 
 export function AppHeader({
   theme,
@@ -140,6 +140,7 @@ export function AppHeader({
             {[
               { id: 'kanban', label: 'Tablero Kanban', icon: Kanban },
               { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+              { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
               { id: 'collaborators', label: 'Colaboradores & Agentes', icon: Users }
             ].map(tab => {
               const Icon = tab.icon;

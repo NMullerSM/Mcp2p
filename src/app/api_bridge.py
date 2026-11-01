@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import platform
+import re
 import sys
 import urllib.parse
 from datetime import datetime, timezone
@@ -930,3 +932,195 @@ class ApiBridge:
             "active_node": os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}"),
             "active_project": active_proj
         }
+
+    # ==========================
+    # Bandeja HITL de Aprobación Humana (Etapa 4)
+    # ==========================
+
+    def get_pending_human_approvals(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Recupera en una sola llamada todos los elementos pendientes de aprobación humana:
+        1. Pull Requests con recomendación del agente y reloj de tiempo de gracia.
+        2. Decisiones técnicas pendientes de firma Ed25519 o promoción.
+        3. Tickets de Juicio de Honor donde falta el voto humano (peso 2.0).
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = Path(proj["gov_repo_path"])
+            app_path = Path(proj["code_repo_path"])
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+
+            # 1. Decisiones técnicas en docs/okf/architecture/decisions/
+            decisions = []
+            docs_base = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+            dec_dir = docs_base / "architecture" / "decisions"
+            if dec_dir.is_dir():
+                for f in sorted(dec_dir.glob("*.md")):
+                    txt = f.read_text(encoding="utf-8", errors="ignore")
+                    # Extraer ID exacto de frontmatter o de filename
+                    item_id = f.stem
+                    id_match = re.search(r"^id:\s*([^\n\r]+)", txt, re.MULTILINE)
+                    if id_match:
+                        item_id = id_match.group(1).strip()
+                    elif "-" in f.stem:
+                        parts = f.stem.split("-")
+                        if len(parts) >= 2 and parts[0].isalpha() and parts[1].isdigit():
+                            item_id = f"{parts[0]}-{parts[1]}"
+                    decisions.append({
+                        "file_name": f.name,
+                        "item_id": item_id,
+                        "title": f.stem,
+                        "excerpt": txt[:300],
+                        "status": "pending_approval"
+                    })
+
+            # 2. Juicios de Honor abiertos en SQLite
+            disputes = []
+            with self.db.get_connection() as conn:
+                cur = conn.execute(
+                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND status = 'open' ORDER BY created_at DESC;",
+                    (target_uuid,)
+                )
+                for row in cur.fetchall():
+                    t = dict(row)
+                    summary = self.db.get_jury_votes_summary(t["ticket_id"])
+                    has_voted = any(hv.get("node_uuid") == local_node for hv in summary.get("human_votes", []))
+                    t["has_voted"] = has_voted
+                    t["votes_summary"] = summary
+                    disputes.append(t)
+
+            # 3. Pull requests pendientes o con recomendaciones de agentes
+            prs = []
+            # Tarjetas en estado 'in_review'
+            cards_in_review = self.db.get_cards(target_uuid, status="in_review")
+            for c in cards_in_review:
+                prs.append({
+                    "card_id": c["card_id"],
+                    "title": c["title"],
+                    "branch_ref": c.get("branch_ref"),
+                    "assignee_node_uuid": c.get("assignee_node_uuid"),
+                    "status": c.get("status")
+                })
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "pending_decisions": decisions,
+                "open_disputes": disputes,
+                "pending_prs": prs,
+                "total_count": len(decisions) + len(disputes) + len(prs)
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def sign_and_approve_item(
+        self,
+        project_uuid: str,
+        item_type: str,
+        item_id: str,
+        decision: str = "APPROVED",
+        comment: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Firma y aprueba un ítem utilizando la clave privada Ed25519 del desarrollador local.
+        item_type: 'decision' (promueve a ADR), 'jury_vote' (emite voto 2.0), o 'pr_merge'.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            gov_path = Path(proj["gov_repo_path"])
+            app_path = Path(proj["code_repo_path"])
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            dev_name = os.environ.get("USER", os.environ.get("USERNAME", "developer"))
+
+            if item_type == "decision":
+                # Leer decisión
+                docs_base = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+                dec_dir = docs_base / "architecture" / "decisions"
+                dec_file = None
+                for f in dec_dir.glob("*.md"):
+                    if item_id in f.name:
+                        dec_file = f
+                        break
+                if not dec_file:
+                    return {"success": False, "error": f"Decisión {item_id} no encontrada"}
+
+                content = dec_file.read_text(encoding="utf-8")
+                # Estampar firma humana Ed25519
+                sig_block = self.crypto.sign_human_approval(
+                    artifact_id=item_id,
+                    content_text=content,
+                    node_uuid=local_node,
+                    developer_name=dev_name,
+                    decision=decision
+                )
+                # Promover decisión a ADR
+                adr_path = self.okf.move_decision_lifecycle(
+                    gov_base_path=gov_path,
+                    dec_id=item_id,
+                    target_state="approved" if decision == "APPROVED" else "discarded",
+                    reason_or_consequences=comment or "Aprobado formalmente mediante firma HITL.",
+                    signature_block=sig_block
+                )
+                return {
+                    "success": True,
+                    "approved": True,
+                    "item_id": item_id,
+                    "adr_path": str(adr_path),
+                    "signature": sig_block
+                }
+
+            elif item_type == "jury_vote":
+                # decision: 'OPTION_A', 'OPTION_B', 'THIRD_WAY_C'
+                sig_block = self.crypto.sign_human_approval(
+                    artifact_id=item_id,
+                    content_text=f"VOTE:{decision}:TICKET:{item_id}",
+                    node_uuid=local_node,
+                    developer_name=dev_name,
+                    decision=decision
+                )
+                vote_res = self.bus.submit_human_jury_vote(
+                    ticket_id=item_id,
+                    node_uuid=local_node,
+                    developer_name=dev_name,
+                    voted_option=decision,
+                    signature_ed25519=sig_block["signature_ed25519"]
+                )
+                # Computar veredicto automáticamente
+                verdict = self.bus.compute_jury_verdict(project_uuid, item_id)
+                return {
+                    "success": True,
+                    "vote": vote_res,
+                    "verdict": verdict,
+                    "signature": sig_block
+                }
+
+            elif item_type == "pr_merge":
+                # item_id: pr_number o card_id
+                merge_res = self.github.evaluate_and_merge_pull_request(
+                    repo_owner="",
+                    repo_name="",
+                    pr_number=int(item_id) if item_id.isdigit() else 1,
+                    local_repo_path=app_path,
+                    force_auto_merge=True
+                )
+                return {
+                    "success": merge_res.get("success", False),
+                    "merged": merge_res.get("merged", False),
+                    "details": merge_res
+                }
+
+            else:
+                return {"success": False, "error": f"item_type desconocido: {item_type}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
