@@ -267,6 +267,31 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
             rationale=rationale
         )
 
+    # 17. Herramienta: Escanear e Iniciar Bootstrap OKF (Modo 1 Onboarding)
+    @server.tool()
+    def scan_and_bootstrap_okf(project_uuid: str) -> str:
+        """
+        Escanea exhaustivamente código y documentación existente para extraer todas las ADRs,
+        requisitos y convenciones, generando el Dossier Unificado de Alineación OKF.
+        """
+        return handler.scan_and_bootstrap_okf(project_uuid=project_uuid)
+
+    # 18. Herramienta: Obtener Dossier Unificado de Alineación OKF
+    @server.tool()
+    def get_alignment_dossier(project_uuid: str) -> str:
+        """
+        Recupera el Dossier Unificado de Alineación para inspección de agentes (Claude Pro) y humanos.
+        """
+        return handler.get_alignment_dossier(project_uuid=project_uuid)
+
+    # 19. Herramienta: Auditar Deriva OKF (Modo 2 Drift Audit)
+    @server.tool()
+    def audit_okf_drift(project_uuid: str) -> str:
+        """
+        Compara el código real en app/ contra la gobernanza OKF ratificada y reporta discrepancias.
+        """
+        return handler.audit_okf_drift(project_uuid=project_uuid)
+
     return server
 
 

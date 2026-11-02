@@ -128,11 +128,15 @@ class DatabaseManager:
                         ALTER TABLE a2a_messages_dg_tmp RENAME TO a2a_messages;
                         """)
 
-                    # Migración para projects.default_sla_hours
+                    # Migración para projects.default_sla_hours, okf_alignment_status, alignment_dossier_markdown
                     p_info = conn.execute("PRAGMA table_info(projects);").fetchall()
                     p_cols = [c["name"] for c in p_info]
                     if "default_sla_hours" not in p_cols:
                         conn.execute("ALTER TABLE projects ADD COLUMN default_sla_hours INTEGER DEFAULT 24;")
+                    if "okf_alignment_status" not in p_cols:
+                        conn.execute("ALTER TABLE projects ADD COLUMN okf_alignment_status TEXT DEFAULT 'aligned_okf';")
+                    if "alignment_dossier_markdown" not in p_cols:
+                        conn.execute("ALTER TABLE projects ADD COLUMN alignment_dossier_markdown TEXT DEFAULT '';")
 
                     # Migración para dispute_tickets (Síntesis Tercera Vía y Matriz Neutral Anti-Sycophancy)
                     dt_info = conn.execute("PRAGMA table_info(dispute_tickets);").fetchall()
@@ -154,6 +158,8 @@ class DatabaseManager:
                     code_repo_url TEXT DEFAULT '',
                     gov_repo_url TEXT DEFAULT '',
                     default_sla_hours INTEGER DEFAULT 24,
+                    okf_alignment_status TEXT DEFAULT 'aligned_okf',
+                    alignment_dossier_markdown TEXT DEFAULT '',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -319,7 +325,9 @@ class DatabaseManager:
         gov_repo_url: str = "",
         init_git: bool = True,
         project_uuid: Optional[str] = None,
-        reviewer_sla_hours: int = 24
+        reviewer_sla_hours: int = 24,
+        okf_alignment_status: str = "aligned_okf",
+        alignment_dossier_markdown: str = ""
     ) -> Dict[str, Any]:
         """
         Crea un nuevo proyecto en el subsistema.
@@ -410,8 +418,11 @@ class DatabaseManager:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO projects (project_uuid, name, base_path, code_repo_path, gov_repo_path, code_repo_url, gov_repo_url, default_sla_hours, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO projects (
+                        project_uuid, name, base_path, code_repo_path, gov_repo_path,
+                        code_repo_url, gov_repo_url, default_sla_hours, okf_alignment_status,
+                        alignment_dossier_markdown, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         p_uuid,
@@ -422,6 +433,8 @@ class DatabaseManager:
                         code_repo_url,
                         gov_repo_url,
                         reviewer_sla_hours,
+                        okf_alignment_status,
+                        alignment_dossier_markdown,
                         now_str,
                         now_str
                     )
@@ -436,6 +449,28 @@ class DatabaseManager:
         )
 
         return self.get_project_by_uuid(p_uuid)
+
+    def update_project_alignment(
+        self,
+        project_uuid: str,
+        status: str,
+        dossier_markdown: Optional[str] = None
+    ) -> bool:
+        """Actualiza el estado de alineación OKF y el contenido del dossier Markdown."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                if dossier_markdown is not None:
+                    cur = conn.execute(
+                        "UPDATE projects SET okf_alignment_status = ?, alignment_dossier_markdown = ?, updated_at = ? WHERE project_uuid = ?;",
+                        (status, dossier_markdown, now_str, project_uuid)
+                    )
+                else:
+                    cur = conn.execute(
+                        "UPDATE projects SET okf_alignment_status = ?, updated_at = ? WHERE project_uuid = ?;",
+                        (status, now_str, project_uuid)
+                    )
+                return cur.rowcount > 0
 
     def update_project_sla(self, project_uuid: str, sla_hours: int) -> bool:
         """Actualiza la ventana de revisión / SLA por defecto del proyecto."""

@@ -1111,3 +1111,374 @@ graph TD
             encoding="utf-8"
         )
         return index_path
+
+    # =========================================================================
+    # Ingesta Cognitiva (Bootstrap) y Auditoría de Deriva (Drift)
+    # =========================================================================
+
+    def materialize_bootstrap_dossier(
+        self,
+        gov_base_path: str | Path,
+        analysis_result: Dict[str, Any],
+        signature_block: Optional[Dict[str, Any]] = None,
+        project_uuid: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Materializa de forma persistente y determinista todo el contenido del
+        Dossier de Alineación Inicial OKF v2 en el repositorio de gobernanza:
+        1. N ADRs en architecture/adrs/ sin límites artificiales.
+        2. Índice de precedentes architecture/precedents_index.yaml.
+        3. Requisitos funcionales en requirements/functional/ y no funcionales en requirements/non_functional/.
+        4. Convenciones en conventions/DEVELOPMENT_CONVENTIONS.md.
+        5. Actualización de 01_ARQUITECTURA_Y_GOBERNANZA.md y 02_MAPA_DE_CODIGO_Y_FEATURES.md.
+        6. Registro histórico en history/ALIGNMENT_DOSSIER_RATIFIED.md.
+        7. Commit git limpio en la gobernanza.
+        """
+        base = Path(gov_base_path).resolve()
+        docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
+
+        # Asegurar subcarpetas OKF requeridas
+        adrs_dir = docs_okf / "architecture" / "adrs"
+        rf_dir = docs_okf / "requirements" / "functional"
+        rnf_dir = docs_okf / "requirements" / "non_functional"
+        conv_dir = docs_okf / "conventions"
+        hist_dir = docs_okf / "history"
+        for d in (adrs_dir, rf_dir, rnf_dir, conv_dir, hist_dir):
+            d.mkdir(parents=True, exist_ok=True)
+
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        date_short = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # 1. Materializar ADRs individuales
+        created_adrs: List[str] = []
+        raw_adrs = analysis_result.get("adrs", [])
+        for adr in raw_adrs:
+            a_id = getattr(adr, "adr_id", None) or adr.get("adr_id", "ADR-001")
+            a_title = getattr(adr, "title", None) or adr.get("title", "Decisión Arquitectónica")
+            a_ctx = getattr(adr, "context", None) or adr.get("context", "")
+            a_dec = getattr(adr, "decision", None) or adr.get("decision", "")
+            a_cons = getattr(adr, "consequences", None) or adr.get("consequences", "")
+            a_source = getattr(adr, "source_ref", None) or adr.get("source_ref", "Análisis de código")
+
+            slug = re.sub(r"[^a-zA-Z0-9]+", "_", a_title.lower()).strip("_")[:50]
+            filename = f"{a_id}_{slug}.md"
+            file_path = adrs_dir / filename
+
+            content = f"""# {a_id}: {a_title}
+
+> **Estado**: Aceptado / Ratificado mediante HITL
+> **Fecha de Ratificación**: {date_short}
+> **Fuente Original**: `{a_source}`
+
+---
+
+## Contexto
+{a_ctx}
+
+## Decisión
+{a_dec}
+
+## Consecuencias
+{a_cons}
+"""
+            if signature_block:
+                content += f"""
+---
+
+### Firma Criptográfica HITL (Supremacía Humana)
+* **Firmante**: `{signature_block.get('developer_name', 'Desarrollador')}` (`{signature_block.get('node_uuid', 'local')}`)
+* **Algoritmo**: `Ed25519`
+* **Firma**: `{signature_block.get('signature_ed25519', '')}`
+* **Fecha de Firma**: `{signature_block.get('signed_at', now_str)}`
+"""
+            file_path.write_text(content, encoding="utf-8")
+            created_adrs.append(filename)
+
+        # 2. Actualizar índice de precedentes
+        self.export_precedents_index(base)
+
+        # 3. Materializar Requisitos Funcionales y No Funcionales
+        raw_reqs = analysis_result.get("requirements", [])
+        rf_list: List[Dict[str, Any]] = []
+        rnf_list: List[Dict[str, Any]] = []
+
+        for req in raw_reqs:
+            r_id = getattr(req, "req_id", None) or req.get("req_id", "")
+            r_cat = getattr(req, "category", None) or req.get("category", "functional")
+            r_title = getattr(req, "title", None) or req.get("title", "")
+            r_desc = getattr(req, "description", None) or req.get("description", "")
+            r_src = getattr(req, "source_ref", None) or req.get("source_ref", "")
+            r_prio = getattr(req, "priority", None) or req.get("priority", "media")
+
+            item_data = {
+                "id": r_id,
+                "title": r_title,
+                "description": r_desc,
+                "source": r_src,
+                "priority": r_prio
+            }
+            if r_cat == "non_functional" or r_id.startswith("RNF-"):
+                rnf_list.append(item_data)
+                slug = re.sub(r"[^a-zA-Z0-9]+", "_", r_title.lower()).strip("_")[:40]
+                rf_file = rnf_dir / f"{r_id}_{slug}.md"
+                rf_file.write_text(
+                    f"# {r_id}: {r_title}\n\n* **Categoría**: Requisito No Funcional\n* **Prioridad**: {r_prio.capitalize()}\n* **Fuente**: `{r_src}`\n\n## Descripción\n{r_desc}\n",
+                    encoding="utf-8"
+                )
+            else:
+                rf_list.append(item_data)
+                slug = re.sub(r"[^a-zA-Z0-9]+", "_", r_title.lower()).strip("_")[:40]
+                rf_file = rf_dir / f"{r_id}_{slug}.md"
+                rf_file.write_text(
+                    f"# {r_id}: {r_title}\n\n* **Categoría**: Requisito Funcional\n* **Prioridad**: {r_prio.capitalize()}\n* **Fuente**: `{r_src}`\n\n## Descripción y Criterios de Aceptación\n{r_desc}\n",
+                    encoding="utf-8"
+                )
+
+        # Índices de Requisitos
+        rf_index = rf_dir / "RF_INDEX.md"
+        rf_table = "# Requisitos Funcionales (RF) Ratificados\n\n| ID | Requisito / Caso de Uso | Prioridad | Fuente |\n| :--- | :--- | :--- | :--- |\n"
+        for rf in rf_list:
+            rf_table += f"| `{rf['id']}` | {rf['description']} | {rf['priority'].capitalize()} | `{rf['source']}` |\n"
+        rf_index.write_text(rf_table, encoding="utf-8")
+
+        rnf_index = rnf_dir / "RNF_INDEX.md"
+        rnf_table = "# Requisitos No Funcionales (RNF) Ratificados\n\n| ID | Criterio de Calidad | Prioridad | Fuente |\n| :--- | :--- | :--- | :--- |\n"
+        for rnf in rnf_list:
+            rnf_table += f"| `{rnf['id']}` | {rnf['description']} | {rnf['priority'].capitalize()} | `{rnf['source']}` |\n"
+        rnf_index.write_text(rnf_table, encoding="utf-8")
+
+        # 4. Materializar Convenciones de Desarrollo
+        conv_file = conv_dir / "DEVELOPMENT_CONVENTIONS.md"
+        conv_data = analysis_result.get("conventions", {})
+        conv_text = f"""# Convenciones de Desarrollo del Proyecto
+> Ratificado en ingesta OKF v2 el {now_str}.
+
+## 1. Estrategia Git y Ramas
+* **Flujo**: {conv_data.get('git_branching', 'Trunk-based con ramas de feature')}
+* **Aislamiento**: {conv_data.get('worktrees', 'Git Worktrees')}
+
+## 2. Guía de Estilo y Linters
+* **Estilo**: {conv_data.get('style_guide', 'Estándar')}
+* **Linters activos**: {', '.join(conv_data.get('linters', [])) or 'Por configurar'}
+"""
+        conv_file.write_text(conv_text, encoding="utf-8")
+
+        # 5. Actualizar 01_ARQUITECTURA_Y_GOBERNANZA.md
+        file_01 = docs_okf / "01_ARQUITECTURA_Y_GOBERNANZA.md"
+        stack = analysis_result.get("stack")
+        langs = getattr(stack, "languages", []) if stack else []
+        fws = getattr(stack, "frameworks", []) if stack else []
+        builds = getattr(stack, "build_tools", []) if stack else []
+        tests = getattr(stack, "testing_tools", []) if stack else []
+        env = getattr(stack, "runtime_environment", "Multiplataforma") if stack else "Multiplataforma"
+
+        adrs_summary_md = ""
+        for adr in raw_adrs:
+            a_id = getattr(adr, "adr_id", None) or adr.get("adr_id", "")
+            a_title = getattr(adr, "title", None) or adr.get("title", "")
+            a_dec = getattr(adr, "decision", None) or adr.get("decision", "")
+            adrs_summary_md += f"* **[{a_id}] {a_title}**: {a_dec[:180]}...\n"
+
+        content_01 = f"""# OKF-01: Arquitectura, Gobernanza y Principios del Enjambre
+## Gobernanza Viva del Proyecto (UUID: `{project_uuid}`)
+
+> **Identificador**: `OKF-01`
+> **Estado**: Aprobado / Ratificado mediante Ingesta Cognitiva Bootstrap
+> **Metodología**: Organic Driven Development (ODD)
+> **Última Actualización**: {now_str}
+
+---
+
+## 1. Stack Tecnológico Base
+* **Lenguajes**: {', '.join(langs) or 'Políglota'}
+* **Frameworks**: {', '.join(fws) or 'Nativos'}
+* **Herramientas de Construcción**: {', '.join(builds) or 'Nativas'}
+* **Testing**: {', '.join(tests) or 'Configurado'}
+* **Entorno de Ejecución**: {env}
+
+---
+
+## 2. Architecture Decision Records (ADRs) ({len(created_adrs)} Ratificados)
+{adrs_summary_md or '* Ver directorio architecture/adrs/ para detalle completo.'}
+
+---
+
+## 3. Historias de Usuario y Requisitos
+* Se registran {len(rf_list)} Requisitos Funcionales y {len(rnf_list)} Requisitos No Funcionales en `requirements/`.
+"""
+        file_01.write_text(content_01, encoding="utf-8")
+
+        # 6. Actualizar 02_MAPA_DE_CODIGO_Y_FEATURES.md
+        file_02 = docs_okf / "02_MAPA_DE_CODIGO_Y_FEATURES.md"
+        features = analysis_result.get("features_map", [])
+        mermaid_nodes = "\n".join([f"    App --> Mod_{re.sub(r'[^a-zA-Z0-9]', '', f['feature'])}[\"{f['feature']} ({f['directory']})\"]" for f in features])
+        feat_table = "\n".join([f"| **{f['feature']}** | `{f['directory']}` | {f['purpose']} |" for f in features])
+
+        content_02 = f"""# OKF-02: Mapa de Código, Relación entre Componentes y Features
+## Estructura Física y Módulos (UUID: `{project_uuid}`)
+
+> **Identificador**: `OKF-02`
+> **Propósito**: Navegación rápida para agentes y desarrolladores sin consumo innecesario de tokens.
+> **Última Actualización**: {now_str}
+
+---
+
+## 1. Grafo de Componentes
+```mermaid
+graph TD
+    App["Código Fuente (app/)"]
+{mermaid_nodes or '    App --> Core["Módulos de la Aplicación"]'}
+```
+
+---
+
+## 2. Mapa Detallado de Features
+| Feature / Módulo | Directorio Físico en `app/` | Propósito Funcional |
+| :--- | :--- | :--- |
+{feat_table or '| Core | src/ | Módulo principal |'}
+"""
+        file_02.write_text(content_02, encoding="utf-8")
+
+        # 7. Registrar histórico del Dossier Ratificado
+        dossier_ratified_file = hist_dir / "ALIGNMENT_DOSSIER_RATIFIED.md"
+        dossier_md = analysis_result.get("dossier_markdown", "")
+        if signature_block:
+            dossier_md += f"""
+
+---
+
+## 8. Certificado de Ratificación Criptográfica Ed25519
+* **Firmante**: `{signature_block.get('developer_name')}` (`{signature_block.get('node_uuid')}`)
+* **Clave Pública**: `{signature_block.get('public_key', '')}`
+* **Firma Criptográfica**: `{signature_block.get('signature_ed25519')}`
+* **Fecha y Hora**: `{signature_block.get('signed_at', now_str)}`
+"""
+        dossier_ratified_file.write_text(dossier_md, encoding="utf-8")
+
+        # 8. Git commit en el repositorio de gobernanza
+        if (base / ".git").is_dir():
+            creationflags = 0
+            try:
+                subprocess.run(["git", "add", "."], cwd=str(base), capture_output=True, check=False)
+                subprocess.run(
+                    ["git", "commit", "-m", f"feat(okf): bootstrap and ratify initial OKF v2 governance dossier for {project_uuid}"],
+                    cwd=str(base),
+                    capture_output=True,
+                    check=False
+                )
+            except Exception as ge:
+                logger.debug(f"Git commit tras materializar OKF omitido o fallido: {ge}")
+
+        return {
+            "success": True,
+            "project_uuid": project_uuid,
+            "adrs_created_count": len(created_adrs),
+            "rf_count": len(rf_list),
+            "rnf_count": len(rnf_list),
+            "conventions_path": str(conv_file.relative_to(base)),
+            "precedents_index": str((docs_okf / "architecture" / "precedents_index.yaml").relative_to(base)),
+            "ratified_at": now_str
+        }
+
+    def audit_okf_drift(
+        self,
+        code_repo_path: str | Path,
+        gov_base_path: str | Path
+    ) -> Dict[str, Any]:
+        """
+        Modo 2: Auditoría Continua de Deriva (Drift) entre el código real y el OKF ratificado.
+        Compara directorios físicos de app/ con 02_MAPA_DE_CODIGO_Y_FEATURES.md y
+        dependencias con 01_ARQUITECTURA_Y_GOBERNANZA.md, reportando componentes no mapeados.
+        """
+        code_path = Path(code_repo_path).resolve()
+        gov_path = Path(gov_base_path).resolve()
+        docs_okf = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
+
+        excluded = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".idea", ".vscode", "target"}
+
+        # 1. Leer directorios físicos reales en app/
+        physical_dirs: List[str] = []
+        if code_path.exists():
+            for item in sorted(code_path.iterdir()):
+                if item.is_dir() and item.name not in excluded and not item.name.startswith("."):
+                    physical_dirs.append(item.name)
+
+        # 2. Leer mapa de features en OKF-02
+        file_02 = docs_okf / "02_MAPA_DE_CODIGO_Y_FEATURES.md"
+        doc_02_text = file_02.read_text(encoding="utf-8", errors="ignore") if file_02.exists() else ""
+
+        unmapped_components: List[str] = []
+        for d in physical_dirs:
+            if f"`{d}`" not in doc_02_text and f"({d})" not in doc_02_text and f"/{d}/" not in doc_02_text:
+                unmapped_components.append(d)
+
+        # 3. Leer dependencias de código vs OKF-01
+        file_01 = docs_okf / "01_ARQUITECTURA_Y_GOBERNANZA.md"
+        doc_01_text = file_01.read_text(encoding="utf-8", errors="ignore") if file_01.exists() else ""
+
+        stack_discrepancies: List[str] = []
+        pkg_json = code_path / "package.json"
+        if pkg_json.exists():
+            try:
+                data = json.loads(pkg_json.read_text(encoding="utf-8"))
+                deps = list(data.get("dependencies", {}).keys())
+                for dep in deps[:10]:
+                    if dep.lower() not in doc_01_text.lower():
+                        stack_discrepancies.append(f"Dependencia npm '{dep}' no documentada en OKF-01")
+            except Exception:
+                pass
+
+        pyproject = code_path / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                txt = pyproject.read_text(encoding="utf-8", errors="ignore")
+                matches = re.findall(r'([a-zA-Z0-9_\-]+)\s*=', txt)
+                for m in matches[:10]:
+                    if m.lower() not in ("name", "version", "description", "authors") and m.lower() not in doc_01_text.lower():
+                        # filtrar nombres comunes
+                        pass
+            except Exception:
+                pass
+
+        # 4. Total de ADRs registradas
+        adrs_dir = docs_okf / "architecture" / "adrs"
+        adrs_count = len(list(adrs_dir.glob("*.md"))) if adrs_dir.exists() else 0
+
+        is_aligned = len(unmapped_components) == 0 and len(stack_discrepancies) == 0
+
+        # Compilar informe Markdown
+        now_iso = datetime.now(timezone.utc).isoformat()
+        status_badge = "✅ ALINEADO CON EL OKF" if is_aligned else "⚠️ SE DETECTÓ DERIVA (DRIFT)"
+        summary_md = f"""# 🔍 Informe de Auditoría de Deriva OKF (Drift Audit)
+> **Fecha de Inspección**: {now_iso}  
+> **Estado**: **{status_badge}**  
+> **Total ADRs Ratificadas**: {adrs_count}
+
+---
+
+## 1. Componentes Físicos en `app/` vs `OKF-02`
+* **Directorios detectados**: {', '.join(physical_dirs) or 'Ninguno'}
+* **Componentes no documentados en el mapa**: {', '.join(unmapped_components) if unmapped_components else 'Ninguno (todos mapeados)'}
+
+## 2. Discrepancias Tecnológicas vs `OKF-01`
+{chr(10).join(['* ' + s for s in stack_discrepancies]) if stack_discrepancies else '* Ninguna discrepancia de librerías detectada.'}
+
+## 3. Recomendaciones de Gobernanza
+"""
+        if is_aligned:
+            summary_md += "* El repositorio se mantiene en perfecta sintonía con la gobernanza OKF. No se requieren acciones correctivas.\n"
+        else:
+            if unmapped_components:
+                summary_md += f"* Registrar los nuevos módulos `{', '.join(unmapped_components)}` en `docs/okf/02_MAPA_DE_CODIGO_Y_FEATURES.md`.\n"
+            if stack_discrepancies:
+                summary_md += "* Formalizar una decisión arquitectónica (ADR) para las nuevas dependencias identificadas.\n"
+
+        return {
+            "is_aligned": is_aligned,
+            "status": "aligned" if is_aligned else "drift_detected",
+            "unmapped_components": unmapped_components,
+            "stack_discrepancies": stack_discrepancies,
+            "total_adrs_registered": adrs_count,
+            "audit_timestamp": now_iso,
+            "summary_markdown": summary_md
+        }

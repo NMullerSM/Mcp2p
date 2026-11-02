@@ -1625,14 +1625,21 @@ class ApiBridge:
                             "final_adr_path": row_dict.get("final_adr_path")
                         })
 
+            alignment_status = proj.get("okf_alignment_status", "aligned_okf")
+            dossier_md = proj.get("alignment_dossier_markdown", "")
+            has_pending_bootstrap = (alignment_status == "pending_bootstrap")
+
             return {
                 "success": True,
                 "project_uuid": target_uuid,
+                "alignment_status": alignment_status,
+                "has_pending_bootstrap": has_pending_bootstrap,
+                "alignment_dossier_markdown": dossier_md,
                 "pending_decisions": decisions,
                 "open_disputes": disputes,
                 "pending_prs": prs,
                 "history_precedents": history_precedents,
-                "total_count": len(decisions) + len(disputes) + len(prs)
+                "total_count": len(decisions) + len(disputes) + len(prs) + (1 if has_pending_bootstrap else 0)
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1655,6 +1662,20 @@ class ApiBridge:
 
             proj = self.db.get_project_by_uuid(target_uuid)
             gov_path = Path(proj["gov_repo_path"]) if proj and proj.get("gov_repo_path") else None
+
+            # Si es consulta de expediente de alineación inicial (Bootstrap Dossier)
+            if item_type in ("bootstrap_dossier", "bootstrap"):
+                dossier_res = self.get_alignment_dossier(target_uuid)
+                return {
+                    "success": True,
+                    "item_type": "bootstrap_dossier",
+                    "item": {
+                        "item_id": "ALIGNMENT_DOSSIER",
+                        "title": f"Dossier Unificado de Alineación Inicial OKF v2 — {proj.get('name') if proj else ''}",
+                        "full_content": dossier_res.get("dossier_markdown", ""),
+                        "status": proj.get("okf_alignment_status", "pending_bootstrap") if proj else "pending_bootstrap"
+                    }
+                }
 
             # Si es consulta de precedente / fallo resuelto histórico (ruling o adr)
             if item_type in ("ruling", "resolved_jury"):
@@ -1878,7 +1899,206 @@ class ApiBridge:
                     "signature": sig_block
                 }
 
+            elif item_type in ("bootstrap_dossier", "bootstrap"):
+                return self.ratify_okf_bootstrap(project_uuid=project_uuid, comment=comment)
+
             else:
                 return {"success": False, "error": f"item_type desconocido: {item_type}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # =========================================================================
+    # Métodos de Ingesta Cognitiva (Bootstrap) y Auditoría de Deriva (Drift)
+    # =========================================================================
+
+    def scan_and_bootstrap_okf(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Escanea exhaustivamente el código y documentación del repositorio en app/
+        y genera el Dossier Unificado de Alineación Inicial OKF v2.
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            code_path = proj.get("code_repo_path")
+            if not code_path or not Path(code_path).exists():
+                return {"success": False, "error": f"Ruta de código inválida o inexistente: {code_path}"}
+
+            from src.storage.code_scanner import CodebaseAnalyzer
+            analyzer = CodebaseAnalyzer(code_path)
+            analysis = analyzer.analyze_full_repository()
+            dossier_md = analyzer.generate_alignment_dossier(proj.get("name", "Proyecto"), target_uuid)
+
+            # Persistir en SQLite
+            self.db.update_project_alignment(
+                project_uuid=target_uuid,
+                status="pending_bootstrap",
+                dossier_markdown=dossier_md
+            )
+
+            stack_data = analysis["stack"].__dict__ if hasattr(analysis["stack"], "__dict__") else analysis["stack"]
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "alignment_status": "pending_bootstrap",
+                "stack": stack_data,
+                "total_adrs_extracted": len(analysis["adrs"]),
+                "total_requirements": len(analysis["requirements"]),
+                "backlog_cards_suggested": len(analysis["backlog_suggestions"]),
+                "dossier_markdown": dossier_md
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_alignment_dossier(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Obtiene el contenido del Dossier Unificado de Alineación OKF.
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            dossier = proj.get("alignment_dossier_markdown")
+            status = proj.get("okf_alignment_status", "aligned_okf")
+
+            if not dossier and proj.get("code_repo_path") and Path(proj["code_repo_path"]).exists():
+                from src.storage.code_scanner import CodebaseAnalyzer
+                analyzer = CodebaseAnalyzer(proj["code_repo_path"])
+                dossier = analyzer.generate_alignment_dossier(proj.get("name", "Proyecto"), target_uuid)
+                self.db.update_project_alignment(target_uuid, status, dossier)
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "alignment_status": status,
+                "dossier_markdown": dossier or "No hay dossier disponible."
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def ratify_okf_bootstrap(self, project_uuid: Optional[str] = None, comment: str = "") -> Dict[str, Any]:
+        """
+        Ratificación formal del Dossier de Alineación Inicial OKF v2 bajo firma Ed25519.
+        Materializa N ADRs, RFs, RNFs, convenciones, mapa, y crea las tarjetas Kanban iniciales.
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            code_path = proj.get("code_repo_path")
+            gov_path = proj.get("gov_repo_path")
+            if not code_path or not gov_path:
+                return {"success": False, "error": "Rutas de repositorio no configuradas"}
+
+            from src.storage.code_scanner import CodebaseAnalyzer
+            analyzer = CodebaseAnalyzer(code_path)
+            analysis = analyzer.analyze_full_repository()
+            dossier_md = analyzer.generate_alignment_dossier(proj.get("name", "Proyecto"), target_uuid)
+            analysis["dossier_markdown"] = dossier_md
+
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            dev_name = os.environ.get("USER", os.environ.get("USERNAME", "developer"))
+
+            # Firmar con Ed25519
+            sig_block = self.crypto.sign_human_approval(
+                artifact_id=f"BOOTSTRAP_OKF_{target_uuid}",
+                content_text=dossier_md,
+                node_uuid=local_node,
+                developer_name=dev_name,
+                decision="RATIFIED"
+            )
+
+            # Materializar archivos en la gobernanza
+            mat_res = self.okf.materialize_bootstrap_dossier(
+                gov_base_path=gov_path,
+                analysis_result=analysis,
+                signature_block=sig_block,
+                project_uuid=target_uuid
+            )
+
+            # Insertar tarjetas sugeridas en kanban_cards si no existen
+            suggested_cards = analysis.get("backlog_suggestions", [])
+            existing_cards = {c["card_id"] for c in self.db.get_cards(target_uuid)}
+            created_cards_count = 0
+            for card in suggested_cards:
+                cid = card["card_id"]
+                if cid not in existing_cards:
+                    self.db.create_card(
+                        project_uuid=target_uuid,
+                        card_id=cid,
+                        title=card["title"],
+                        description=card.get("description", "")
+                    )
+                    created_cards_count += 1
+
+            # Transicionar estado del proyecto a aligned_okf
+            self.db.update_project_alignment(
+                project_uuid=target_uuid,
+                status="aligned_okf",
+                dossier_markdown=dossier_md
+            )
+
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "new_status": "aligned_okf",
+                "materialization": mat_res,
+                "backlog_cards_created": created_cards_count,
+                "signature": sig_block
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def audit_okf_drift(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Modo 2: Auditoría Continua de Deriva (Drift) entre el código real y el OKF ratificado.
+        """
+        try:
+            target_uuid = project_uuid or self.active_project_uuid
+            if not target_uuid:
+                self._ensure_active_project()
+                target_uuid = self.active_project_uuid
+
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            status = proj.get("okf_alignment_status", "aligned_okf")
+            if status == "pending_bootstrap":
+                return {
+                    "success": True,
+                    "is_aligned": False,
+                    "status": "pending_bootstrap",
+                    "message": "El proyecto está en estado pending_bootstrap. Requiere ratificación HITL antes de auditar derivas."
+                }
+
+            drift = self.okf.audit_okf_drift(
+                code_repo_path=proj.get("code_repo_path", ""),
+                gov_base_path=proj.get("gov_repo_path", "")
+            )
+            return {
+                "success": True,
+                "project_uuid": target_uuid,
+                "drift": drift
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}

@@ -80,6 +80,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
         ? decision === 'APPROVED'
           ? 'Revisión aprobada y fusionada mediante doble confirmación HITL.'
           : 'Devuelto a En Proceso tras revisión HITL.'
+        : itemType === 'bootstrap_dossier'
+        ? 'Ratificación consciente de Dossier de Alineación Inicial OKF v2 con firma Ed25519.'
         : decision === 'APPROVED'
         ? 'Decisión aprobada y promovida a ADR mediante firma Ed25519.'
         : 'Decisión descartada mediante firma Ed25519.';
@@ -157,6 +159,163 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           <RefreshCw size={13} className={loading ? "spin" : ""} /> Actualizar
         </button>
       </div>
+
+      {/* Tarjeta Destacada de Alineación Inicial OKF (Bootstrap Ingestion - Modo 1) */}
+      {(approvals.has_pending_bootstrap || approvals.alignment_status === 'pending_bootstrap') && (
+        <div style={{
+          backgroundColor: 'rgba(234, 179, 8, 0.06)',
+          border: '1px solid rgba(234, 179, 8, 0.45)',
+          borderRadius: 'var(--radius-md)',
+          padding: '16px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          boxShadow: 'var(--shadow-sm)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                fontSize: '10.5px',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 700,
+                backgroundColor: 'rgba(234, 179, 8, 0.22)',
+                color: '#eab308',
+                padding: '3px 8px',
+                borderRadius: '4px'
+              }}>
+                MODO 1: BOOTSTRAP PENDIENTE
+              </span>
+              <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                Dossier Unificado de Ingesta y Alineación Inicial OKF v2
+              </span>
+            </div>
+            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              Firma Ed25519 Requerida
+            </span>
+          </div>
+
+          <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+            Se ha escaneado el código fuente y la documentación existente del repositorio. Se detectó el stack tecnológico y se extrajeron dinámicamente todas las decisiones arquitectónicas (ADRs), requisitos funcionales/no funcionales y convenciones. Puedes inspeccionar el expediente o contrastarlo con tu agente (ej. Claude Pro vía MCP) antes de ratificar.
+          </p>
+
+          <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+            <button
+              onClick={() => openInspector('bootstrap_dossier', {
+                item_id: 'ALIGNMENT_DOSSIER',
+                title: `Dossier de Alineación Inicial OKF v2 — ${project?.name || ''}`,
+                full_content: approvals.alignment_dossier_markdown
+              }, 'ALIGNMENT_DOSSIER')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer'
+              }}
+            >
+              <Eye size={13} /> Inspeccionar Dossier Completo
+            </button>
+
+            <button
+              onClick={() => requestDoubleConfirmation({
+                itemType: 'bootstrap_dossier',
+                itemId: 'ALIGNMENT_DOSSIER',
+                decision: 'APPROVED',
+                title: 'Ratificar Dossier de Alineación Inicial OKF v2',
+                summaryText: `Se estampará tu firma Ed25519 sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado ALIGNED_OKF y se poblará docs/okf/ sin modificar tu código fuente.`,
+                badgeLabel: 'RATIFICAR OKF',
+                badgeColor: '#10b981'
+              })}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '7px 16px',
+                fontSize: '12px',
+                fontWeight: 700,
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                backgroundColor: '#10b981',
+                color: '#ffffff',
+                cursor: 'pointer'
+              }}
+            >
+              <CheckCircle2 size={13} /> Ratificar con Firma Ed25519
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Barra de Estado Alineado OKF (Modo 2: Drift Audit) */}
+      {approvals.alignment_status === 'aligned_okf' && !approvals.has_pending_bootstrap && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '9px 16px',
+          backgroundColor: 'rgba(16, 185, 129, 0.05)',
+          border: '1px solid rgba(16, 185, 129, 0.25)',
+          borderRadius: 'var(--radius-sm)',
+          fontSize: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{
+              fontSize: '10px',
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 700,
+              backgroundColor: 'rgba(16, 185, 129, 0.15)',
+              color: '#10b981',
+              padding: '2px 6px',
+              borderRadius: '4px'
+            }}>
+              ALIGNED_OKF
+            </span>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              Gobernanza viva activa. Modo 2: Auditoría de deriva continua habilitada.
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              if (!api || !project) return;
+              try {
+                const driftRes = await api.audit_okf_drift(project.project_uuid);
+                if (driftRes.success) {
+                  openInspector('drift_audit', {
+                    item_id: 'DRIFT_AUDIT',
+                    title: `Auditoría de Deriva OKF — ${project.name}`,
+                    summary_markdown: driftRes.drift?.summary_markdown || 'Sin deriva detectada.'
+                  }, 'DRIFT_AUDIT');
+                } else {
+                  alert('Error al auditar deriva: ' + (driftRes.error || 'Fallo desconocido'));
+                }
+              } catch (e) {
+                alert('Error de comunicación: ' + e);
+              }
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px',
+              fontSize: '11px',
+              fontWeight: 600,
+              padding: '5px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--bg-surface)',
+              color: 'var(--text-primary)',
+              cursor: 'pointer'
+            }}
+          >
+            <RefreshCw size={11} /> Auditar Deriva (Drift)
+          </button>
+        </div>
+      )}
 
       {/* Grid de 3 Columnas Limpias (Sin iconos en las cabeceras, igual que el Tablero Kanban) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(330px, 1fr))', gap: '16px' }}>
@@ -1295,6 +1454,60 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       Aprobar y Promover a ADR
                     </button>
                   </div>
+                </>
+              )}
+
+              {/* VISTA E: DOSSIER DE ALINEACIÓN INICIAL OKF (BOOTSTRAP) O AUDITORÍA DE DERIVA (DRIFT) */}
+              {(inspectedItem.type === 'bootstrap_dossier' || inspectedItem.type === 'drift_audit') && (
+                <>
+                  <div style={{
+                    padding: '16px 18px',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'var(--bg-subtle)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '12.5px',
+                    lineHeight: 1.65,
+                    color: 'var(--text-primary)',
+                    whiteSpace: 'pre-wrap',
+                    maxHeight: '62vh',
+                    overflowY: 'auto'
+                  }}>
+                    {inspectedItem.data.full_content || inspectedItem.data.summary_markdown || inspectedItem.data.excerpt || 'Sin contenido registrado.'}
+                  </div>
+
+                  {inspectedItem.type === 'bootstrap_dossier' && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
+                      <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                        Al ratificar, se materializarán todas las ADRs, requisitos y se poblará el tablero Kanban.
+                      </span>
+                      <button
+                        onClick={() => requestDoubleConfirmation({
+                          itemType: 'bootstrap_dossier',
+                          itemId: 'ALIGNMENT_DOSSIER',
+                          decision: 'APPROVED',
+                          title: 'Ratificar Dossier de Alineación Inicial OKF v2',
+                          summaryText: `Se estampará tu firma Ed25519 sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado ALIGNED_OKF y se poblará docs/okf/ sin modificar tu código fuente.`,
+                          badgeLabel: 'RATIFICAR OKF',
+                          badgeColor: '#10b981'
+                        })}
+                        style={{
+                          padding: '9px 20px',
+                          fontSize: '12.5px',
+                          fontWeight: 700,
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: '#10b981',
+                          color: '#ffffff',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        <CheckCircle2 size={14} /> Ratificar con Firma Ed25519
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
 
