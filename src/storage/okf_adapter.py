@@ -849,7 +849,25 @@ graph TD
         """
         code_dir = Path(code_repo_path)
         gov_dir = Path(gov_base_path)
-        scope = files_scope or []
+
+        def _clean_scope(raw: Any) -> List[str]:
+            curr = raw
+            while isinstance(curr, str):
+                curr = curr.strip()
+                if (curr.startswith("[") and curr.endswith("]")) or (curr.startswith('"') and curr.endswith('"')):
+                    try:
+                        curr = json.loads(curr)
+                    except Exception:
+                        break
+                else:
+                    break
+            if isinstance(curr, list):
+                return [str(x) for x in curr if x]
+            elif isinstance(curr, str) and curr:
+                return [curr]
+            return []
+
+        scope = _clean_scope(files_scope)
 
         # Localizar registro de worktrees en rama huérfana (worktree o .orphan_memory)
         orphan_wt = gov_dir / ".git" / "orphan_worktree"
@@ -868,7 +886,7 @@ graph TD
             # Comprobar colisiones de alcance con otros nodos
             for other_card, info in registry.get("active_worktrees", {}).items():
                 if other_card != card_id and info.get("node_uuid") != node_uuid:
-                    other_scope = info.get("files_scope", [])
+                    other_scope = _clean_scope(info.get("files_scope", []))
                     intersection = [f for f in scope if any(f.startswith(o.replace("*", "")) or o.startswith(f.replace("*", "")) for o in other_scope)]
                     if intersection:
                         return {

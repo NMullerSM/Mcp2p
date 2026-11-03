@@ -27,7 +27,18 @@ if exist "%DIR%.venv\Scripts\python.exe" (
 
 set "PYTHONPATH=%DIR%;%PYTHONPATH%"
 
+set "REBUILD_FRONTEND=0"
 if not exist "%DIR%frontend\dist\index.html" (
+    set "REBUILD_FRONTEND=1"
+) else (
+    REM Verificar si algun archivo de src es mas reciente que dist\index.html
+    powershell -NoProfile -Command "if (Get-ChildItem -Path '%DIR%frontend\src', '%DIR%frontend\package.json' -Recurse | Where-Object { $_.LastWriteTime -gt (Get-Item '%DIR%frontend\dist\index.html').LastWriteTime }) { exit 1 } else { exit 0 }" >nul 2>&1
+    if !ERRORLEVEL! neq 0 (
+        set "REBUILD_FRONTEND=1"
+    )
+)
+
+if "!REBUILD_FRONTEND!"=="1" (
     if exist "%DIR%frontend\package.json" (
         if not exist "%DIR%frontend\node_modules" (
             echo [MCP2P] Instalando dependencias del Frontend con npm install...
@@ -35,7 +46,7 @@ if not exist "%DIR%frontend\dist\index.html" (
             call npm install
             cd /d "%DIR%"
         )
-        echo [MCP2P] Compilando bundle de React con npm run build...
+        echo [MCP2P] Detectados cambios en el frontend o build ausente. Compilando bundle de React (Vite)...
         cd /d "%DIR%frontend"
         call npm run build
         cd /d "%DIR%"

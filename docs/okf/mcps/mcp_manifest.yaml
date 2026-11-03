@@ -1,16 +1,74 @@
 # Manifiesto de Herramientas MCP2P
-version: "2.0"
+version: "2.1"
 server_name: "mcp2p-server"
+description: "Servidor Model Context Protocol con 20 herramientas deterministas a coste 0 tokens para coordinación de enjambres P2P."
 tools:
+  # 1-7: Proyectos, Kanban y Nodos
+  - name: "list_projects"
+    description: "Lista todos los proyectos registrados con su UUID y rutas de doble repositorio."
+    parameters: []
+  - name: "get_kanban_board"
+    description: "Obtiene tarjetas del tablero Kanban filtradas por estado ('all', 'backlog', 'in_progress', 'in_review', 'disputed', 'merged')."
+    parameters: [project_uuid, status]
+  - name: "create_kanban_task"
+    description: "Crea una nueva tarjeta de tarea en el backlog del proyecto."
+    parameters: [project_uuid, card_id, title, description]
+  - name: "claim_kanban_task"
+    description: "Reclama atómicamente un lease temporal exclusivo sobre una tarjeta para prevenir colisiones."
+    parameters: [project_uuid, card_id, node_uuid, duration_minutes]
+  - name: "release_kanban_task"
+    description: "Transiciona una tarjeta ('in_review', 'merged', 'backlog', 'disputed') y libera el lease. Permite a cualquier nodo escalar a 'disputed'."
+    parameters: [project_uuid, card_id, node_uuid, target_status, branch_ref]
+  - name: "get_project_context"
+    description: "Devuelve rutas aisladas de repositorios (app/ y governance/) y leases activos."
+    parameters: [project_uuid]
+  - name: "register_agent_node"
+    description: "Registra o actualiza el latido de un nodo en el enjambre con su SLA de revisión."
+    parameters: [node_uuid, developer_name, agent_id, reviewer_sla_hours]
+
+  # 8-10: Protocolo Dialéctico A2A y Gobernanza
+  - name: "send_coordination_rfc"
+    description: "Envía un turno dialéctico (PROPOSAL, COUNTER_PROPOSAL, RESOLUTION) con validación estricta de esquema y sin defaults silenciosos."
+    parameters: [project_uuid, sender_node_uuid, stage, session_id, payload_json, card_id]
+  - name: "get_coordination_session"
+    description: "Consulta el historial secuencial de turnos dialécticos intercambiados en una sesión."
+    parameters: [project_uuid, session_id]
+  - name: "inspect_okf_governance"
+    description: "Audita la integridad del OKF y valida la coherencia entre ramas de código y gobernanza."
+    parameters: [project_uuid]
+
+  # 11-14: Operaciones de Tareas, Worktrees y Reparto
   - name: "get_task_full_context"
-    description: "Protocolo de lectura previa: tarjeta YAML, ADRs, diseño y diff de rama."
+    description: "Protocolo de lectura previa: tarjeta YAML, ADRs asociadas, reglas de diseño y worktree."
+    parameters: [project_uuid, card_id]
   - name: "manage_task_worktree"
-    description: "Crea o limpia el worktree aislado de la tarea en app/.worktrees/{card_id}."
+    description: "Crea o remueve worktrees aislados en app/.worktrees/{card_id} verificando colisiones de files_scope."
+    parameters: [project_uuid, card_id, node_uuid, action, files_scope_json]
   - name: "run_okf_micro_script"
-    description: "Ejecución de micro-scripts sobre el OKF (scaffold, move, link, discard)."
+    description: "Ejecución de micro-scripts sobre OKF (scaffold_decision, promote_decision, update_card, reconcile_kanban) con validación estricta de estados."
+    parameters: [project_uuid, script_action, params_json]
   - name: "propose_or_apply_task_distribution"
-    description: "Negociación y reparto de tareas del backlog entre nodos."
+    description: "Negociación y reparto de tareas del backlog entre nodos con adquisición atómica opcional."
+    parameters: [project_uuid, sender_node_uuid, session_id, distribution_plan_json, apply_immediately]
+
+  # 15-17: HITL Guardrail y Tribunal de Honor Borda
   - name: "inspect_pr_and_recommend"
-    description: "Cruce de PR contra OKF y emisión de recomendación sin firma."
+    description: "Cruza PR contra OKF y emite recomendación para el humano (RECOMMEND_ACCEPT, RECOMMEND_CHANGES, RECOMMEND_REJECT, RECOMMEND_JURY)."
+    parameters: [project_uuid, pr_id_or_branch, reviewer_node_uuid, recommendation, analysis_summary, suggested_reply]
+  - name: "open_dispute_ticket"
+    description: "Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."
+    parameters: [project_uuid, title, collision_reason, contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref, card_id, ticket_id, proposal_c_ref, num_evaluators]
   - name: "submit_agent_jury_evaluation"
-    description: "Evaluación Borda de 5 dimensiones para el Tribunal de Honor."
+    description: "Emite la evaluación ponderada (peso 1.5) de un jurado en 5 dimensiones (KISS, Performance, Seguridad, Hicks, Testabilidad)."
+    parameters: [project_uuid, ticket_id, agent_id, evaluations_json, rationale]
+
+  # 18-20: Bootstrap OKF y Auditoría de Deriva
+  - name: "scan_and_bootstrap_okf"
+    description: "Escanea exhaustivamente código y documentación existente generando el Dossier Unificado de Alineación OKF."
+    parameters: [project_uuid]
+  - name: "get_alignment_dossier"
+    description: "Recupera el Dossier Unificado de Alineación para inspección de agentes y humanos."
+    parameters: [project_uuid]
+  - name: "audit_okf_drift"
+    description: "Compara código real en app/ contra gobernanza ratificada y reporta discrepancias."
+    parameters: [project_uuid]

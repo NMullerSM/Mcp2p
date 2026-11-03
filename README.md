@@ -1,16 +1,20 @@
-# MCP2P: Plataforma de Colaboración Agéntica y Gobernanza
+# MCP2P: Plataforma de Colaboración Agéntica y Gobernanza OKF
 
-> **Plataforma de Escritorio Local-First** construida con **PyWebView**, **Model Context Protocol (MCP)** y persistencia **SQLite (WAL)** para la orquestación y desarrollo concurrente entre humanos y agentes de Inteligencia Artificial.
+> **Plataforma de Escritorio Local-First** construida con **PyWebView**, **React + Vite**, **Model Context Protocol (MCP)** y persistencia determinista **SQLite (WAL)** para la orquestación, concurrencia y desarrollo colaborativo entre humanos y agentes de Inteligencia Artificial (Claude, Gemini, Antigravity, Cursor, etc.).
 
 ---
 
-## 📌 Estado del Repositorio y Metodología
-* **Metodología de Desarrollo**: **Organic Driven Development (ODD)**. Se avanza mediante prototipos ejecutables incrementales y verificación continua de comportamiento en lugar de especificaciones rígidas pre-congeladas.
-* **Control de Versiones (Git)**: El repositorio local se encuentra preparado estructuralmente. La inicialización y enlace remoto de Git queda reservada para gestión manual por el desarrollador.
+## 📌 Estado del Sistema y Capacidades Clave
+
+* **Servidor MCP Local (20 Herramientas Deterministas a 0 Tokens)**: Expone herramientas deterministas para gestión de proyectos, leases de Kanban, worktrees aislados por tarea, micro-scripts de gobernanza OKF, canal dialéctico A2A y Tribunal de Honor Borda.
+* **Resiliencia Bidireccional de Esquema**: Soporte nativo para convenciones `camelCase` / `snake_case`, payloads estructurados (`dict`/`list`) y cadenas JSON, eliminando errores de validación entre agentes heterogéneos.
+* **Control Estricto de Concurrencia**: Bloqueo atómico de tarjetas Kanban con TTL dinámico y detección de colisiones de alcance de archivos (`files_scope`) en Git Worktrees.
+* **Tribunal de Honor Borda Anti-Sycophancy**: Resolución algorítmica de disputas técnicas y arquitectónicas entre agentes con ponderación imparcial (peso 1.5).
+* **HITL Guardrail (Human-In-The-Loop)**: Los agentes inspeccionan código y recomiendan acciones (`RECOMMEND_ACCEPT`, `RECOMMEND_CHANGES`, `RECOMMEND_REJECT`, `RECOMMEND_JURY`), pero únicamente el humano puede firmar y fusionar mediante su clave Ed25519.
 * **Compatibilidad Multiplataforma**:
-  * 🐧 **Linux**: Ejecución nativa mediante PyWebView (WebKitGTK/Qt).
+  * 🐧 **Linux**: Ejecución nativa mediante PyWebView (WebKitGTK 4.1 / 4.0).
   * 🪟 **Windows**: Ejecución nativa mediante PyWebView (WebView2).
-  * 🍎 **macOS**: Soporte dual (Nativo o en contenedor Dockerizado aislado vía `docker/`).
+  * 🍎 **macOS / Docker**: Soporte dual nativo o en contenedor aislado multi-stage (`docker/Dockerfile`).
 
 ---
 
@@ -18,40 +22,64 @@
 
 ```text
 Mcp2p/
-├── docs/                                 # Documentación técnica y arquitectura
-│   ├── PLAN_MAESTRO_MCP2P.md             # Plan maestro ODD, puntos críticos y roadmap
-│   └── GUIA_DE_USUARIO_Y_UX.md           # Heurísticas de Nielsen, Ley de Hick y UI tokens
-├── src/                                  # Código fuente modular
-│   ├── app/                              # Lógica principal y puente PyWebView (js_api)
-│   ├── ui/                               # Frontend (HTML5, CSS3 temas claro/oscuro, JS)
-│   ├── mcp/                              # Servidor local Model Context Protocol (MCP)
-│   ├── a2a/                              # Canal de comunicación directa Agente-a-Agente
-│   └── storage/                          # Persistencia SQLite WAL y adaptadores OKF
-├── docker/                               # Entorno contenedor para macOS / Headless
+├── docs/                                 # Documentación técnica, arquitectura y auditoría
+│   ├── okf/                              # Gobernanza viva OKF (ADRs, decisiones, requirements, mcps)
+│   ├── PLAN_MAESTRO_MCP2P.md             # Plan maestro ODD y roadmap
+│   └── GUIA_DE_USUARIO_Y_UX.md           # Heurísticas de Nielsen y diseño UX
+├── frontend/                             # Interfaz de usuario SPA en React + Vite + Tailwind/Lucide
+│   ├── src/                              # Componentes visuales conectados de verdad al puente PyWebView
+│   └── dist/                             # Bundle estático servido localmente a coste cero de red
+├── src/                                  # Backend modular en Python 3.11+
+│   ├── app/                              # Lógica de arranque (main.py) y puente bidireccional (api_bridge.py)
+│   ├── mcp/                              # Servidor local Model Context Protocol (server.py y tools.py)
+│   ├── a2a/                              # Canal dialéctico Agente-a-Agente y motor de juicio Borda
+│   └── storage/                          # Base de datos SQLite (WAL) y adaptadores de memoria OKF
+├── docker/                               # Empaquetado en contenedor Docker aislado multi-stage
 │   ├── Dockerfile
 │   └── docker-compose.yml
+├── run.sh                                # Lanzador automático para Linux / macOS (con auto-build de frontend)
+├── run.bat                               # Lanzador automático para Windows (con auto-build de frontend)
 └── README.md                             # Este archivo
 ```
 
 ---
 
-## 🎯 Pilares del Sistema
-1. **Interfaz de Usuario Ergonómica (PyWebView)**:
-   * Diseñada bajo las **10 Heurísticas de Nielsen** y la **Ley de Hick** (máximo 3 acciones primarias visibles para minimizar fatiga cognitiva).
-   * Modo visual **Claro / Oscuro** nativo y tipografía técnica de alta legibilidad (**Inter** y **JetBrains Mono** / **Roboto Mono**).
-   * **Guía de Usuario Integrada** en la propia aplicación mediante panel contextual interactivo.
-2. **Tablero Kanban con Control de Concurrencia (MCP)**:
-   * Herramientas MCP expuestas para agentes (`get_kanban_state`, `claim_kanban_task`, `release_kanban_task`).
-   * Adquisición atómica con **Lease de tiempo** y candados temporales para evitar que dos agentes trabajen sobre la misma tarea.
-3. **Canal Directo Agente a Agente (A2A)**:
-   * Vía de comunicación prioritaria directa para coordinar bloqueos, dependencias y contratos de interfaz sin alterar código productivo.
-4. **Gobernanza OKF Abierta**:
-   * Desacoplada mediante adaptadores modulares para que en fases posteriores se establezca la taxonomía final de carpetas y formatos compartidos.
+## 🚀 Inicio Rápido
+
+### Linux / macOS
+```bash
+chmod +x run.sh
+./run.sh
+```
+El script detectará el entorno virtual `.venv`, compilará el bundle de React si hay cambios en `frontend/src/` y lanzará la aplicación de escritorio.
+
+### Windows
+```cmd
+run.bat
+```
+
+### Servidor MCP para Clientes Agénticos (`mcp.json`)
+Para conectar Claude Desktop, Cursor o Antigravity IDE:
+```json
+{
+  "mcpServers": {
+    "mcp2p": {
+      "command": "/ruta/absoluta/a/Mcp2p/.venv/bin/python",
+      "args": ["-m", "src.mcp.server"],
+      "env": {
+        "PYTHONPATH": "/ruta/absoluta/a/Mcp2p",
+        "MCP2P_DB_PATH": "/ruta/absoluta/a/Mcp2p/mcp2p_local.db"
+      }
+    }
+  }
+}
+```
 
 ---
 
-## 📖 Documentación Detallada
-* Para revisar el plan técnico completo y análisis de riesgos, consulta:  
-  👉 [docs/PLAN_MAESTRO_MCP2P.md](docs/PLAN_MAESTRO_MCP2P.md)
-* Para revisar la especificación de diseño visual, temas y heurísticas UX, consulta:  
-  👉 [docs/GUIA_DE_USUARIO_Y_UX.md](docs/GUIA_DE_USUARIO_Y_UX.md)
+## 🧪 Pruebas Automatizadas
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/ -v
+```
+Suite exhaustiva con 69+ pruebas unitarias y de integración cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor y las 20 herramientas MCP.

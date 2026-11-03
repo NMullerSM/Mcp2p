@@ -179,3 +179,164 @@ def test_mcp_coordination_and_okf_tools(mcp_handler):
     res_gov = json.loads(raw_gov)
     assert res_gov["success"] is True
     assert "validation" in res_gov
+
+
+@pytest.mark.anyio
+async def test_mcp_server_resilience_aliases_and_json_blobs(mcp_handler):
+    """Verifica que el servidor MCP tolere camelCase (sessionId, cardId, task_id) y objetos dict/list."""
+    handler, db = mcp_handler
+    server = create_mcp_server(db_path=db.db_path)
+    projects = db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    # 1. create_kanban_task con task_id
+    res1 = await server.call_tool("create_kanban_task", {
+        "project_uuid": proj_uuid,
+        "task_id": "CARD-RESILIENCE-01",
+        "title": "Tarea Resiliente"
+    })
+    assert res1.is_error is False
+    c1 = json.loads(res1.content[0].text)
+    assert c1["success"] is True
+    assert c1["card"]["card_id"] == "CARD-RESILIENCE-01"
+
+    # 2. send_coordination_rfc con sessionId en camelCase y payload como dict
+    res2 = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": proj_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "PROPOSAL",
+        "sessionId": "session_camel_case_1",
+        "payload_json": {"component": "audit", "intent": "Verificar tolerancia", "rationale": "Validación"}
+    })
+    assert res2.is_error is False
+    c2 = json.loads(res2.content[0].text)
+    assert c2["success"] is True
+
+    # 3. send_coordination_rfc con session_id inferido del payload dict
+    res3 = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": proj_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "PROPOSAL",
+        "payload_json": {"session_id": "session_in_payload_dict", "component": "audit", "intent": "Inferencia", "rationale": "Validación"}
+    })
+    assert res3.is_error is False
+    c3 = json.loads(res3.content[0].text)
+    assert c3["success"] is True
+
+    # 4. propose_or_apply_task_distribution con sessionId camelCase y dict plan
+    res4 = await server.call_tool("propose_or_apply_task_distribution", {
+        "project_uuid": proj_uuid,
+        "sender_node_uuid": "node_alpha",
+        "sessionId": "session_dist_camel",
+        "distribution_plan_json": {"CARD-RESILIENCE-01": "node_alpha"},
+        "apply_immediately": True
+    })
+    assert res4.is_error is False
+    c4 = json.loads(res4.content[0].text)
+    assert c4["success"] is True
+    assert c4["session_id"] == "session_dist_camel"
+
+
+@pytest.mark.anyio
+async def test_mcp_strict_schema_validations_and_dispute_ticket(mcp_handler):
+    """Valida los hallazgos de auditoría: esquemas estrictos sin defaults silenciosos y tickets de disputa."""
+    handler, db = mcp_handler
+    server = create_mcp_server(db_path=db.db_path)
+    projects = db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    # 1. send_coordination_rfc con payload incompleto en PROPOSAL debe fallar explícitamente
+    res_incomplete_prop = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": proj_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "PROPOSAL",
+        "session_id": "sess_inval_1",
+        "payload_json": {"component": "only_comp"}
+    })
+    err_prop = json.loads(res_incomplete_prop.content[0].text)
+    assert err_prop["success"] is False
+    assert "campos obligatorios" in err_prop["error"]
+
+    # 2. send_coordination_rfc con remitente desconocido debe ser rechazado
+    res_unknown_node = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": proj_uuid,
+        "sender_node_uuid": "hacker_node_999",
+        "stage": "PROPOSAL",
+        "session_id": "sess_inval_2",
+        "payload_json": {"component": "core", "intent": "bad", "rationale": "why"}
+    })
+    err_node = json.loads(res_unknown_node.content[0].text)
+    assert err_node["success"] is False
+    assert "no está registrado en el enjambre" in err_node["error"]
+
+    # 3. run_okf_micro_script con promote_decision sin target_state debe fallar explícitamente
+    res_promote_no_state = await server.call_tool("run_okf_micro_script", {
+        "project_uuid": proj_uuid,
+        "script_action": "promote_decision",
+        "params_json": {"decision_id": "DEC-TEST-01"}
+    })
+    err_promote = json.loads(res_promote_no_state.content[0].text)
+    assert err_promote["success"] is False
+    assert "target_state es requerido" in err_promote["error"]
+
+    # 4. inspect_pr_and_recommend con RECOMMEND_REJECT debe ser admitido
+    res_reject_rec = await server.call_tool("inspect_pr_and_recommend", {
+        "project_uuid": proj_uuid,
+        "pr_id_or_branch": "pr-101",
+        "reviewer_node_uuid": "node_alpha",
+        "recommendation": "RECOMMEND_REJECT",
+        "analysis_summary": "Rechazo por regresión crítica",
+        "suggested_reply": "Favor corregir tests antes de merge"
+    })
+    rec_out = json.loads(res_reject_rec.content[0].text)
+    assert rec_out["success"] is True
+
+    # 5. release_kanban_task permitiendo escalado a 'disputed' por nodo no asignado
+    await server.call_tool("create_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": "CARD-DISPUTE-TEST",
+        "title": "Tarea en Disputa"
+    })
+    await server.call_tool("claim_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": "CARD-DISPUTE-TEST",
+        "node_uuid": "node_alpha"
+    })
+    # Nodo Beta (no asignado) intenta marcar 'merged' -> denegado
+    res_unauth_merged = await server.call_tool("release_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": "CARD-DISPUTE-TEST",
+        "node_uuid": "node_beta",
+        "target_status": "merged"
+    })
+    unauth_out = json.loads(res_unauth_merged.content[0].text)
+    assert unauth_out["success"] is False
+    assert unauth_out["code"] == "PERMISSION_DENIED"
+
+    # Nodo Beta (no asignado) escala a 'disputed' -> PERMITIDO
+    res_disputed = await server.call_tool("release_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": "CARD-DISPUTE-TEST",
+        "node_uuid": "node_beta",
+        "target_status": "disputed"
+    })
+    disputed_out = json.loads(res_disputed.content[0].text)
+    assert disputed_out["success"] is True
+    assert disputed_out["card"]["status"] == "disputed"
+
+    # 6. open_dispute_ticket alcanzable vía MCP para el Tribunal de Honor
+    res_ticket = await server.call_tool("open_dispute_ticket", {
+        "project_uuid": proj_uuid,
+        "title": "Conflicto de arquitectura en Cache",
+        "collision_reason": "Divergencia entre Redis vs SQLite en memoria",
+        "contender_a_node": "node_alpha",
+        "contender_b_node": "node_beta",
+        "proposal_a_ref": "branch-alpha",
+        "proposal_b_ref": "branch-beta",
+        "card_id": "CARD-DISPUTE-TEST"
+    })
+    ticket_out = json.loads(res_ticket.content[0].text)
+    assert ticket_out["success"] is True
+    assert "ticket_id" in ticket_out["ticket"]
+    matrix = json.loads(ticket_out["ticket"]["jury_matrix_json"])
+    assert len(matrix) == 3

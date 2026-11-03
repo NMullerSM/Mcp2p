@@ -129,17 +129,26 @@ class MCPToolsHandler:
         Permite adjuntar la referencia de rama o commit en el repositorio de código (app/).
         """
         try:
+            valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged")
+            if target_status not in valid_statuses:
+                return json.dumps({
+                    "success": False,
+                    "error": f"target_status inválido: '{target_status}'. Valores permitidos: {list(valid_statuses)}"
+                }, indent=2, ensure_ascii=False)
+
             card = self.db.get_card_by_id(project_uuid, card_id)
             if not card:
                 return json.dumps({"success": False, "error": f"Tarjeta {card_id} no encontrada"}, indent=2)
 
-            # Validar que quien libera sea el titular del lease o que el lease haya expirado
+            # Validar que quien libera sea el titular del lease o que el lease haya expirado,
+            # salvo cuando se escala a 'disputed' (cualquier nodo revisor o auditor puede señalar una disputa).
             if card.get("assignee_node_uuid") and card.get("assignee_node_uuid") != node_uuid:
-                return json.dumps({
-                    "success": False,
-                    "code": "PERMISSION_DENIED",
-                    "error": f"La tarea está asignada al nodo {card.get('assignee_node_uuid')}, no a {node_uuid}"
-                }, indent=2)
+                if target_status != "disputed":
+                    return json.dumps({
+                        "success": False,
+                        "code": "PERMISSION_DENIED",
+                        "error": f"La tarea está asignada al nodo {card.get('assignee_node_uuid')}, no a {node_uuid}. Solo el titular puede transicionar a '{target_status}', salvo para escalar a 'disputed'."
+                    }, indent=2)
 
             updated = self.db.update_card_status(
                 project_uuid=project_uuid,
@@ -215,45 +224,97 @@ class MCPToolsHandler:
         sender_node_uuid: str,
         stage: str,
         session_id: str,
-        payload_json: str,
+        payload_json: Any,
         card_id: Optional[str] = None
     ) -> str:
         """
         Envía un turno dentro del protocolo RFC Dialéctico de 3 turnos (PROPOSAL, COUNTER_PROPOSAL, RESOLUTION).
         """
         try:
-            data = json.loads(payload_json)
-            stage_upper = stage.upper()
+            if isinstance(payload_json, dict):
+                data = payload_json
+            elif isinstance(payload_json, str):
+                data = json.loads(payload_json) if payload_json.strip() else {}
+            else:
+                data = {}
+
+            if not session_id:
+                session_id = data.get("session_id") or data.get("sessionId") or f"session_rfc_{card_id or uuid.uuid4().hex[:8]}"
+
+            if sender_node_uuid:
+                existing_node = self.db.get_node_by_uuid(sender_node_uuid)
+                if not existing_node:
+                    return json.dumps({
+                        "success": False,
+                        "error": f"El nodo remitente '{sender_node_uuid}' no está registrado en el enjambre. Regístrelo primero con 'register_agent_node'."
+                    }, indent=2, ensure_ascii=False)
+
+            stage_upper = (stage or "PROPOSAL").upper()
 
             if stage_upper == "PROPOSAL":
+                component = data.get("component")
+                intent = data.get("intent")
+                rationale = data.get("rationale")
+                if not component or not intent or not rationale:
+                    return json.dumps({
+                        "success": False,
+                        "error": "Etapa PROPOSAL requiere los campos obligatorios: 'component', 'intent', 'rationale'."
+                    }, indent=2, ensure_ascii=False)
+
                 res = self.bus.send_proposal(
                     project_uuid=project_uuid,
                     sender_node_uuid=sender_node_uuid,
                     session_id=session_id,
-                    component=data.get("component", "system"),
-                    intent=data.get("intent", ""),
-                    rationale=data.get("rationale", ""),
+                    component=component,
+                    intent=intent,
+                    rationale=rationale,
                     diff_ref=data.get("diff_ref", ""),
                     impact=data.get("impact", ""),
                     card_id=card_id
                 )
             elif stage_upper == "COUNTER_PROPOSAL":
+                critique = data.get("critique")
+                verdict_signal = data.get("verdict_signal")
+                if not critique:
+                    return json.dumps({
+                        "success": False,
+                        "error": "Etapa COUNTER_PROPOSAL requiere el campo obligatorio 'critique'."
+                    }, indent=2, ensure_ascii=False)
+                if not verdict_signal or verdict_signal not in ("ACCEPT", "REJECT", "COMPROMISE"):
+                    return json.dumps({
+                        "success": False,
+                        "error": f"verdict_signal es requerido en COUNTER_PROPOSAL y debe ser uno de: ('ACCEPT', 'REJECT', 'COMPROMISE'). Recibido: '{verdict_signal}'."
+                    }, indent=2, ensure_ascii=False)
+
                 res = self.bus.send_counter_proposal(
                     project_uuid=project_uuid,
                     sender_node_uuid=sender_node_uuid,
                     session_id=session_id,
-                    critique=data.get("critique", ""),
+                    critique=critique,
                     alternative=data.get("alternative", {}),
-                    verdict_signal=data.get("verdict_signal", "COMPROMISE"),
+                    verdict_signal=verdict_signal,
                     card_id=card_id
                 )
             elif stage_upper == "RESOLUTION":
+                final_decision = data.get("final_decision")
+                synthesis_notes = data.get("synthesis_notes")
+                if not final_decision or final_decision not in ("AGREED", "ESCALATE_TO_JURY"):
+                    return json.dumps({
+                        "success": False,
+                        "error": f"final_decision es requerido en RESOLUTION y debe ser uno de: ('AGREED', 'ESCALATE_TO_JURY'). Recibido: '{final_decision}'."
+                    }, indent=2, ensure_ascii=False)
+                if not synthesis_notes:
+                    return json.dumps({
+                        "success": False,
+                        "error": "Etapa RESOLUTION requiere el campo obligatorio 'synthesis_notes'."
+                    }, indent=2, ensure_ascii=False)
+
                 res = self.bus.send_resolution(
                     project_uuid=project_uuid,
                     sender_node_uuid=sender_node_uuid,
                     session_id=session_id,
-                    final_decision=data.get("final_decision", "AGREED"),
-                    synthesis_notes=data.get("synthesis_notes", ""),
+                    final_decision=final_decision,
+                    synthesis_notes=synthesis_notes,
                     agreed_branch=data.get("agreed_branch"),
                     card_id=card_id
                 )
@@ -382,7 +443,29 @@ class MCPToolsHandler:
             if not proj:
                 return self._wrap_response(project_uuid, {"success": False, "error": "Proyecto no encontrado"})
 
-            scope = json.loads(files_scope_json) if files_scope_json else []
+            # Resolver scope limpiando cualquier doble-serialización accidental
+            scope = files_scope_json
+            while isinstance(scope, str):
+                s_strip = scope.strip()
+                if (s_strip.startswith("[") and s_strip.endswith("]")) or (s_strip.startswith('"') and s_strip.endswith('"')):
+                    try:
+                        scope = json.loads(s_strip)
+                    except Exception:
+                        break
+                else:
+                    break
+
+            if scope is None or scope == "":
+                scope = []
+            elif isinstance(scope, str):
+                scope = [scope]
+
+            if not isinstance(scope, list):
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"files_scope_json debe resolverse a una lista de rutas de archivos, recibido: {type(scope).__name__}"
+                })
+
             res = self.okf.manage_task_worktree(
                 code_repo_path=proj["code_repo_path"],
                 gov_base_path=proj["gov_repo_path"],
@@ -416,12 +499,36 @@ class MCPToolsHandler:
                 return self._wrap_response(project_uuid, {"success": False, "error": "Proyecto no encontrado"})
 
             gov_path = Path(proj["gov_repo_path"])
-            params = json.loads(params_json) if isinstance(params_json, str) else params_json
+            params = json.loads(params_json) if isinstance(params_json, str) else (params_json or {})
 
             if script_action == "scaffold_decision":
+                artifact_type = params.get("artifact_type")
+                if not artifact_type and params.get("item_id"):
+                    item_id_upper = str(params["item_id"]).upper()
+                    if item_id_upper.startswith("DEC"):
+                        artifact_type = "decision"
+                    elif item_id_upper.startswith("ADR"):
+                        artifact_type = "adr"
+                    elif item_id_upper.startswith("RF") or item_id_upper.startswith("RNF"):
+                        artifact_type = "requirement"
+                    elif item_id_upper.startswith("CONV"):
+                        artifact_type = "convention"
+
+                valid_types = ("decision", "adr", "requirement", "convention")
+                if not artifact_type or artifact_type not in valid_types:
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": f"artifact_type es requerido y debe ser uno de: {list(valid_types)}. Recibido: '{artifact_type}'"
+                    })
+                if not params.get("item_id") or not params.get("title") or not params.get("content"):
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": "scaffold_decision requiere los campos: 'item_id', 'title', 'content'."
+                    })
+
                 p = self.okf.scaffold_okf_artifact(
                     gov_base_path=gov_path,
-                    artifact_type=params.get("artifact_type", "decision"),
+                    artifact_type=artifact_type,
                     item_id=params["item_id"],
                     title=params["title"],
                     content=params["content"],
@@ -430,16 +537,35 @@ class MCPToolsHandler:
                 return self._wrap_response(project_uuid, {"success": True, "created_path": str(p)})
 
             elif script_action == "promote_decision":
+                if not params.get("decision_id"):
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": "promote_decision requiere el campo obligatorio 'decision_id'."
+                    })
+
+                target_state = params.get("target_state")
+                valid_states = ("approved", "discarded", "superseded")
+                if not target_state or target_state not in valid_states:
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": f"target_state es requerido en promote_decision y debe ser uno de: {list(valid_states)}. Recibido: '{target_state}'"
+                    })
+
                 p = self.okf.move_decision_lifecycle(
                     gov_base_path=gov_path,
                     dec_id=params["decision_id"],
-                    target_state=params.get("target_state", "approved"),
+                    target_state=target_state,
                     reason_or_consequences=params.get("resolution_notes", ""),
                     signature_block=params.get("signature_block")
                 )
                 return self._wrap_response(project_uuid, {"success": True, "promoted_path": str(p)})
 
             elif script_action == "update_card":
+                if not params.get("card_data"):
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": "update_card requiere el campo obligatorio 'card_data'."
+                    })
                 p = self.okf.write_card_yaml(gov_path, params["card_data"])
                 return self._wrap_response(project_uuid, {"success": True, "written_path": str(p)})
 
@@ -457,7 +583,7 @@ class MCPToolsHandler:
         project_uuid: str,
         sender_node_uuid: str,
         session_id: str,
-        distribution_plan_json: str,
+        distribution_plan_json: Any,
         apply_immediately: bool = False
     ) -> str:
         """
@@ -465,7 +591,19 @@ class MCPToolsHandler:
         Si apply_immediately es True, adquiere los leases en SQLite/YAML de inmediato.
         """
         try:
-            plan = json.loads(distribution_plan_json)
+            if isinstance(distribution_plan_json, (dict, list)):
+                plan = distribution_plan_json
+            elif isinstance(distribution_plan_json, str):
+                plan = json.loads(distribution_plan_json) if distribution_plan_json.strip() else {}
+            else:
+                plan = {}
+
+            if not session_id:
+                if isinstance(plan, dict):
+                    session_id = plan.get("session_id") or plan.get("sessionId")
+                if not session_id:
+                    session_id = f"session_dist_{uuid.uuid4().hex[:8]}"
+
             # Publicar en el bus dialéctico
             res = self.bus.post_dialogue_message(
                 project_uuid=project_uuid,
@@ -478,14 +616,22 @@ class MCPToolsHandler:
 
             applied_leases = []
             if apply_immediately:
-                # plan = {"TASK-01": "node_alpha", "TASK-02": "node_beta"}
-                for card_id, target_node in plan.items():
-                    if isinstance(target_node, str):
-                        claimed = self.db.claim_card_lease(project_uuid, card_id, target_node, duration_minutes=45)
-                        applied_leases.append(claimed)
+                tasks_map = plan
+                if isinstance(plan, dict):
+                    if "tasks" in plan and isinstance(plan["tasks"], dict):
+                        tasks_map = plan["tasks"]
+                    elif "plan" in plan and isinstance(plan["plan"], dict):
+                        tasks_map = plan["plan"]
+
+                if isinstance(tasks_map, dict):
+                    for card_id, target_node in tasks_map.items():
+                        if card_id not in ("session_id", "sessionId", "intent", "rationale") and isinstance(target_node, str):
+                            claimed = self.db.claim_card_lease(project_uuid, card_id, target_node, duration_minutes=45)
+                            applied_leases.append(claimed)
 
             return self._wrap_response(project_uuid, {
                 "success": True,
+                "session_id": session_id,
                 "message_event": res,
                 "applied_leases": applied_leases
             })
@@ -507,9 +653,12 @@ class MCPToolsHandler:
         NO aprueba directamente ni accede a la firma Ed25519 privada del desarrollador.
         """
         try:
-            valid_recs = ("RECOMMEND_ACCEPT", "RECOMMEND_CHANGES", "RECOMMEND_JURY")
+            valid_recs = ("RECOMMEND_ACCEPT", "RECOMMEND_CHANGES", "RECOMMEND_REJECT", "RECOMMEND_JURY")
             if recommendation not in valid_recs:
-                return self._wrap_response(project_uuid, {"success": False, "error": f"Recomendación no válida: {recommendation}"})
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"Recomendación no válida: '{recommendation}'. Valores permitidos: {list(valid_recs)}"
+                })
 
             # Encolar como mensaje dialéctico / evento HITL para visualización en UI
             event_res = self.bus.post_dialogue_message(
@@ -533,6 +682,42 @@ class MCPToolsHandler:
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 
+    def open_dispute_ticket(
+        self,
+        project_uuid: str,
+        title: str,
+        collision_reason: str,
+        contender_a_node: str,
+        contender_b_node: str,
+        proposal_a_ref: str,
+        proposal_b_ref: str,
+        card_id: Optional[str] = None,
+        ticket_id: Optional[str] = None,
+        proposal_c_ref: str = "",
+        num_evaluators: int = 3
+    ) -> str:
+        """
+        Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy.
+        Permite a los agentes o humanos escalar discrepancias dialécticas al Tribunal de Honor Borda.
+        """
+        try:
+            res = self.bus.open_dispute_ticket(
+                project_uuid=project_uuid,
+                title=title,
+                collision_reason=collision_reason,
+                contender_a_node=contender_a_node,
+                contender_b_node=contender_b_node,
+                proposal_a_ref=proposal_a_ref,
+                proposal_b_ref=proposal_b_ref,
+                card_id=card_id,
+                ticket_id=ticket_id,
+                proposal_c_ref=proposal_c_ref,
+                num_evaluators=num_evaluators
+            )
+            return self._wrap_response(project_uuid, {"success": True, "ticket": res})
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
     def submit_agent_jury_evaluation(
         self,
         project_uuid: str,
@@ -547,7 +732,7 @@ class MCPToolsHandler:
         y sus notas (kiss, performance, security, ux_hicks, testability).
         """
         try:
-            scores = json.loads(evaluations_json)
+            scores = json.loads(evaluations_json) if isinstance(evaluations_json, str) else (evaluations_json or {})
             res = self.bus.submit_agent_borda_evaluation(
                 ticket_id=ticket_id,
                 juror_agent_id=agent_id,

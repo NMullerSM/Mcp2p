@@ -1,9 +1,11 @@
 # Catálogo de Skills Compartidas del Proyecto OKF
 version: "1.0"
+status: "aspirational_roadmap"
+note: "Skills planificadas para fases posteriores de extensión. En la versión actual 2.0/2.1, estas capacidades son cubiertas nativamente por las herramientas MCP 'manage_task_worktree', 'claim_kanban_task' y 'audit_okf_drift'."
 skills:
   - name: "skill-kanban-guard"
-    path: "skills/skill-kanban-guard"
-    description: "Gestión determinista de tareas y verificación de leases."
+    status: "roadmap"
+    description: "Extensión futura para reglas dinámicas de negocio sobre transiciones Kanban."
   - name: "skill-ast-collision-checker"
-    path: "skills/skill-ast-collision-checker"
-    description: "Verificación estática de firmas y detección de colisiones de código."
+    status: "roadmap"
+    description: "Verificación AST profunda de firmas de funciones previa a fusiones automáticas."

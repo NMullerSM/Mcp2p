@@ -24,9 +24,19 @@ fi
 
 export PYTHONPATH="$DIR:$PYTHONPATH"
 
-# Compilar frontend React si aún no existe el build
-if [ ! -f "$DIR/frontend/dist/index.html" ] && [ -d "$DIR/frontend" ]; then
-    echo "[MCP2P] Compilando bundle de React (Vite)..."
+# Compilar frontend React si no existe el build o si el código fuente ha cambiado
+REBUILD_FRONTEND=false
+if [ ! -f "$DIR/frontend/dist/index.html" ]; then
+    REBUILD_FRONTEND=true
+elif [ -d "$DIR/frontend/src" ] && [ -n "$(find "$DIR/frontend/src" "$DIR/frontend/package.json" -newer "$DIR/frontend/dist/index.html" 2>/dev/null | head -n 1)" ]; then
+    REBUILD_FRONTEND=true
+fi
+
+if [ "$REBUILD_FRONTEND" = true ] && [ -d "$DIR/frontend" ]; then
+    echo "[MCP2P] Detectados cambios en el frontend o build ausente. Compilando bundle de React (Vite)..."
+    if [ ! -d "$DIR/frontend/node_modules" ]; then
+        (cd "$DIR/frontend" && npm install)
+    fi
     (cd "$DIR/frontend" && npm run build)
 fi
 

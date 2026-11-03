@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 
-DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", "mcp2p_local.db")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", str(PROJECT_ROOT / "mcp2p_local.db"))
 
 
 class DatabaseManager:
@@ -37,7 +38,7 @@ class DatabaseManager:
     @classmethod
     def get_instance(cls, db_path: str = DEFAULT_DB_PATH) -> DatabaseManager:
         with cls._lock:
-            if cls._instance is None:
+            if cls._instance is None or (db_path and str(cls._instance.db_path) != str(db_path)):
                 cls._instance = cls(db_path)
             return cls._instance
 
@@ -853,6 +854,12 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cur = conn.execute("SELECT * FROM swarm_nodes ORDER BY last_heartbeat DESC;")
             return [dict(row) for row in cur.fetchall()]
+
+    def get_node_by_uuid(self, node_uuid: str) -> Optional[Dict[str, Any]]:
+        """Obtiene la información de un nodo del enjambre por su UUID."""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM swarm_nodes WHERE node_uuid = ?;", (node_uuid,)).fetchone()
+            return dict(row) if row else None
 
     # ==========================
     # Mensajería A2A y Disputas

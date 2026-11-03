@@ -7,9 +7,10 @@ services:
       dockerfile: docker/Dockerfile
     container_name: mcp2p_app
     ports:
-      - "8080:8080"
+      - "42424:42424"
     volumes:
       - ..:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DISPLAY=${DISPLAY:-:0}
