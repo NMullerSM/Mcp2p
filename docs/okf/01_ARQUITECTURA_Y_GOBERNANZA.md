@@ -54,7 +54,7 @@ flowchart TD
 ### ADR-002: Interfaz de Escritorio en PyWebView con Arquitectura Monolítica Modular
 * **Contexto**: Evitar el peso y la latencia de microservicios o Electron.
 * **Decisión**: Se implementa PyWebView conectando el frontend mediante un puente nativo `js_api` asíncrono.
-* **Consecuencias**: Binario ligero (<50MB de RAM), ejecución nativa en Linux/Windows y soporte Docker para macOS.
+* **Consecuencias**: Binario ligero (<50MB de RAM), ejecución nativa en Linux, Windows y macOS (sin virtualización ni contenedores).
 
 ### ADR-003: Prevención de Colisiones mediante Leases Atómicos con Expiración
 * **Contexto**: Evitar que dos agentes tomen la misma tarea en la red P2P.

@@ -14,7 +14,7 @@
 * **Compatibilidad Multiplataforma**:
   * 🐧 **Linux**: Ejecución nativa mediante PyWebView (WebKitGTK 4.1 / 4.0).
   * 🪟 **Windows**: Ejecución nativa mediante PyWebView (WebView2).
-  * 🍎 **macOS / Docker**: Soporte dual nativo o en contenedor aislado multi-stage (`docker/Dockerfile`).
+  * 🍎 **macOS**: Soporte nativo mediante PyWebView (WebKit Cocoa / pyobjc).
 
 ---
 
@@ -34,9 +34,6 @@ Mcp2p/
 │   ├── mcp/                              # Servidor local Model Context Protocol (server.py y tools.py)
 │   ├── a2a/                              # Canal dialéctico Agente-a-Agente y motor de juicio Borda
 │   └── storage/                          # Base de datos SQLite (WAL) y adaptadores de memoria OKF
-├── docker/                               # Empaquetado en contenedor Docker aislado multi-stage
-│   ├── Dockerfile
-│   └── docker-compose.yml
 ├── run.sh                                # Lanzador automático para Linux / macOS (con auto-build de frontend)
 ├── run.bat                               # Lanzador automático para Windows (con auto-build de frontend)
 └── README.md                             # Este archivo

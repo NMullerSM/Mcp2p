@@ -340,3 +340,124 @@ async def test_mcp_strict_schema_validations_and_dispute_ticket(mcp_handler):
     assert "ticket_id" in ticket_out["ticket"]
     matrix = json.loads(ticket_out["ticket"]["jury_matrix_json"])
     assert len(matrix) == 3
+
+
+@pytest.mark.anyio
+async def test_mcp_v2_audited_edge_cases(mcp_handler, tmp_path):
+    """
+    Cubre los requerimientos V2.3, V2.4 y V2.5 del Plan de Reparación V2:
+    - V2.3: manage_task_worktree vía MCP con files_scope_json doblemente codificado.
+    - V2.4: send_coordination_rfc con campos faltantes o enums fuera de rango en COUNTER_PROPOSAL y RESOLUTION.
+    - V2.5: run_okf_micro_script con artifact_type inválido o campos faltantes en scaffold_decision.
+    """
+    handler, db = mcp_handler
+    server = create_mcp_server(db_path=db.db_path)
+
+    # Crear proyecto con git para probar manage_task_worktree
+    git_proj = db.create_project(
+        name="V2 Edge Cases Project",
+        base_path=str(tmp_path / "ws_v2_edge"),
+        init_git=True
+    )
+    p_uuid = git_proj["project_uuid"]
+
+    # --- V2.3: manage_task_worktree con scope doble-serializado ---
+    double_encoded_scope = json.dumps(json.dumps(["src/storage/*"]))
+    res_wt = await server.call_tool("manage_task_worktree", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-V2-01",
+        "node_uuid": "node_alpha",
+        "action": "create",
+        "files_scope_json": double_encoded_scope
+    })
+    wt_out = json.loads(res_wt.content[0].text)
+    assert wt_out["success"] is True
+    assert Path(wt_out["worktree_path"]).exists()
+
+    # Limpiar worktree
+    res_wt_clean = await server.call_tool("manage_task_worktree", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-V2-01",
+        "node_uuid": "node_alpha",
+        "action": "remove"
+    })
+    wt_clean_out = json.loads(res_wt_clean.content[0].text)
+    assert wt_clean_out["success"] is True
+
+    # --- V2.4: send_coordination_rfc validaciones de esquema estricto ---
+    # COUNTER_PROPOSAL sin critique
+    res_cp_no_crit = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": p_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "COUNTER_PROPOSAL",
+        "session_id": "sess_v2_1",
+        "payload_json": {"verdict_signal": "ACCEPT"}
+    })
+    err_cp_crit = json.loads(res_cp_no_crit.content[0].text)
+    assert err_cp_crit["success"] is False
+    assert "critique" in err_cp_crit["error"]
+
+    # COUNTER_PROPOSAL con verdict_signal inválido
+    res_cp_bad_signal = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": p_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "COUNTER_PROPOSAL",
+        "session_id": "sess_v2_1",
+        "payload_json": {"critique": "Revisar arquitectura", "verdict_signal": "MAYBE"}
+    })
+    err_cp_sig = json.loads(res_cp_bad_signal.content[0].text)
+    assert err_cp_sig["success"] is False
+    assert "verdict_signal" in err_cp_sig["error"]
+
+    # RESOLUTION sin synthesis_notes
+    res_res_no_synth = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": p_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "RESOLUTION",
+        "session_id": "sess_v2_1",
+        "payload_json": {"final_decision": "AGREED"}
+    })
+    err_res_synth = json.loads(res_res_no_synth.content[0].text)
+    assert err_res_synth["success"] is False
+    assert "synthesis_notes" in err_res_synth["error"]
+
+    # RESOLUTION con final_decision inválido
+    res_res_bad_dec = await server.call_tool("send_coordination_rfc", {
+        "project_uuid": p_uuid,
+        "sender_node_uuid": "node_alpha",
+        "stage": "RESOLUTION",
+        "session_id": "sess_v2_1",
+        "payload_json": {"final_decision": "UNDECIDED", "synthesis_notes": "No llegamos a acuerdo"}
+    })
+    err_res_dec = json.loads(res_res_bad_dec.content[0].text)
+    assert err_res_dec["success"] is False
+    assert "final_decision" in err_res_dec["error"]
+
+    # --- V2.5: run_okf_micro_script con artifact_type inválido o campos faltantes ---
+    res_scaffold_bad_type = await server.call_tool("run_okf_micro_script", {
+        "project_uuid": p_uuid,
+        "script_action": "scaffold_decision",
+        "params_json": {
+            "artifact_type": "invalid_type",
+            "item_id": "XYZ-01",
+            "title": "Prueba",
+            "content": "Contenido"
+        }
+    })
+    err_scaffold_type = json.loads(res_scaffold_bad_type.content[0].text)
+    assert err_scaffold_type["success"] is False
+    assert "artifact_type es requerido y debe ser uno de" in err_scaffold_type["error"]
+
+    res_scaffold_missing_content = await server.call_tool("run_okf_micro_script", {
+        "project_uuid": p_uuid,
+        "script_action": "scaffold_decision",
+        "params_json": {
+            "artifact_type": "decision",
+            "item_id": "DEC-V2-99",
+            "title": "Decisión Incompleta"
+        }
+    })
+    err_scaffold_content = json.loads(res_scaffold_missing_content.content[0].text)
+    assert err_scaffold_content["success"] is False
+    assert "scaffold_decision requiere los campos" in err_scaffold_content["error"]
+

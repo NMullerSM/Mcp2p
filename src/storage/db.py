@@ -37,9 +37,15 @@ class DatabaseManager:
 
     @classmethod
     def get_instance(cls, db_path: str = DEFAULT_DB_PATH) -> DatabaseManager:
+        """
+        Retorna la instancia singleton de DatabaseManager.
+        Si se especifica explícitamente una ruta distinta (p. ej. en suites de tests automatizados
+        con bases de datos temporales), se re-instancia el singleton para garantizar aislamiento.
+        """
         with cls._lock:
-            if cls._instance is None or (db_path and str(cls._instance.db_path) != str(db_path)):
-                cls._instance = cls(db_path)
+            resolved = Path(db_path).resolve() if db_path else None
+            if cls._instance is None or (resolved and cls._instance.db_path != resolved):
+                cls._instance = cls(str(resolved or db_path))
             return cls._instance
 
     @contextmanager

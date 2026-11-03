@@ -649,7 +649,7 @@ class MCPToolsHandler:
     ) -> str:
         """
         El agente lee la PR contra el OKF y genera una recomendación para el humano:
-        ('RECOMMEND_ACCEPT', 'RECOMMEND_CHANGES', 'RECOMMEND_JURY').
+        ('RECOMMEND_ACCEPT', 'RECOMMEND_CHANGES', 'RECOMMEND_REJECT', 'RECOMMEND_JURY').
         NO aprueba directamente ni accede a la firma Ed25519 privada del desarrollador.
         """
         try:
