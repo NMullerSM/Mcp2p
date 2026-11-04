@@ -544,3 +544,39 @@ async def test_mcp_v3_dispute_discovery_and_versioning(mcp_handler):
     assert found is True
 
 
+@pytest.mark.anyio
+async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
+    """
+    Valida el requerimiento V4.1 del Plan de Reparación V4:
+    - transport dinámico reportado según la configuración del servidor (stdio vs sse).
+    - tools_count calculado dinámicamente según las tools registradas en tiempo de ejecución.
+    - listado dinámico de herramientas en el payload sin literales hardcodeados.
+    """
+    handler, db = mcp_handler
+
+    # 1. Servidor iniciado con transport="sse"
+    server_sse = create_mcp_server(db_path=db.db_path, transport="sse")
+    res_sse = await server_sse.call_tool("get_server_version", {})
+    sse_out = json.loads(res_sse.content[0].text)
+    assert sse_out["success"] is True
+    assert sse_out["transport"] == "sse"
+    assert sse_out["tools_count"] == 23
+    assert isinstance(sse_out.get("tools"), list)
+    assert len(sse_out["tools"]) == 23
+
+    # 2. Servidor estándar con transport="stdio" por defecto
+    server_stdio = create_mcp_server(db_path=db.db_path)
+    res_stdio = await server_stdio.call_tool("get_server_version", {})
+    stdio_out = json.loads(res_stdio.content[0].text)
+    assert stdio_out["success"] is True
+    assert stdio_out["transport"] == "stdio"
+    assert stdio_out["tools_count"] == 23
+
+    # 3. Llamada directa a MCPToolsHandler.get_server_version() sin servidor envolvente
+    # Debe calcular tools_count inspeccionando los métodos de herramientas de la clase dinámicamente
+    direct_out = json.loads(handler.get_server_version())
+    assert direct_out["success"] is True
+    assert direct_out["tools_count"] >= 20
+
+
+

@@ -22,7 +22,7 @@ from src.storage.db import DatabaseManager
 SERVER_VERSION = "0.3.0"
 
 
-def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
+def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -> MCPServer:
     """Crea e inicializa el servidor MCP con todas las herramientas registradas."""
     if db_path:
         os.environ["MCP2P_DB_PATH"] = str(db_path)
@@ -619,9 +619,19 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
     def get_server_version() -> str:
         """
         Retorna la versión activa, commit de git y metadatos de runtime del servidor MCP2P.
-        Permite a los agentes validar si el proceso en ejecución está actualizado.
+        Calcula dinámicamente el transporte y el conteo de herramientas registradas en tiempo de ejecución.
         """
-        return handler.get_server_version()
+        tools_registered = []
+        if hasattr(server, "_tool_manager"):
+            try:
+                tools_registered = [t.name for t in server._tool_manager.list_tools()]
+            except Exception:
+                pass
+        return handler.get_server_version(
+            transport=transport,
+            tools_count=len(tools_registered) if tools_registered else None,
+            tools_list=tools_registered if tools_registered else None
+        )
 
     return server
 
@@ -632,7 +642,7 @@ def main() -> None:
     parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"], help="Tipo de transporte MCP")
     args = parser.parse_args()
 
-    server = create_mcp_server(db_path=args.db_path)
+    server = create_mcp_server(db_path=args.db_path, transport=args.transport)
     # Ejecutar sobre el transporte especificado
     server.run(transport=args.transport)
 

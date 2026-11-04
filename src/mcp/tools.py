@@ -7,6 +7,7 @@ Todas las operaciones son deterministas y se ejecutan a coste 0 de tokens sobre 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
@@ -936,10 +937,15 @@ class MCPToolsHandler:
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 
-    def get_server_version(self) -> str:
+    def get_server_version(
+        self,
+        transport: Optional[str] = None,
+        tools_count: Optional[int] = None,
+        tools_list: Optional[List[str]] = None
+    ) -> str:
         """
         Retorna la versión activa, commit de git y metadatos de runtime del servidor MCP2P.
-        Permite a los agentes validar automáticamente si están interactuando con la última versión del backend.
+        Calcula dinámicamente el transporte, conteo de herramientas y commit Git en tiempo de ejecución.
         """
         import subprocess
         git_hash = "unknown"
@@ -953,12 +959,30 @@ class MCPToolsHandler:
         except Exception:
             pass
 
-        return json.dumps({
+        resolved_transport = transport or os.environ.get("MCP2P_TRANSPORT", "stdio")
+
+        # Si no se pasó tools_count explícitamente desde el servidor MCP,
+        # calcular dinámicamente inspeccionando los métodos públicos de herramientas en MCPToolsHandler
+        if tools_count is None:
+            handler_tools = [
+                m for m in dir(self)
+                if not m.startswith("_") and callable(getattr(self, m))
+                and m not in ("bus", "db", "okf")
+            ]
+            count = len(handler_tools)
+        else:
+            count = tools_count
+
+        resp: Dict[str, Any] = {
             "success": True,
             "server_name": "mcp2p-server",
             "server_version": "0.3.0",
             "git_commit": git_hash,
-            "transport": "stdio",
-            "tools_count": 23,
+            "transport": resolved_transport,
+            "tools_count": count,
             "status": "ready"
-        }, indent=2, ensure_ascii=False)
+        }
+        if tools_list:
+            resp["tools"] = tools_list
+
+        return json.dumps(resp, indent=2, ensure_ascii=False)
