@@ -221,6 +221,19 @@ class DialecticJuryEngine:
     CONSENSUS_THRESHOLD: float = 0.80
 
     @classmethod
+    def adaptive_odd_juror_cap(cls, h_count: int) -> int:
+        """
+        Fórmula única de dimensionamiento adaptativo impar de jurados, compartida por
+        resolve_voter_universe() y generate_neutral_jury_matrix() para que ambas nunca
+        puedan desincronizarse: h=1 -> 3; h=2 -> 3; h=3 -> 5; h=4 -> 7; h>=5 -> 9 (techo 9).
+        """
+        h = max(1, int(h_count))
+        max_allowed = min(2 * h + 1, 9)
+        if max_allowed % 2 == 0:
+            max_allowed += 1
+        return max_allowed
+
+    @classmethod
     def resolve_voter_universe(
         cls,
         all_project_nodes: List[str],
@@ -252,8 +265,8 @@ class DialecticJuryEngine:
             exclusion_mode = "small_cluster_post_synthesis_voting"
 
         h_count = max(len(eligible_human_nodes), 1)
-        # Límite duro de subagentes para no saturar tokens ni desdibujar el pool
-        max_subagents = min(2 * h_count + 1, 5)
+        # Mismo tope adaptativo impar que usa generate_neutral_jury_matrix() (ver adaptive_odd_juror_cap)
+        max_subagents = cls.adaptive_odd_juror_cap(h_count)
 
         # Presupuesto total de puntos humanos vs máquinas (siempre 2.0*H vs 1.5*H -> 57.14% vs 42.86%)
         human_total_budget = round(h_count * cls.HUMAN_UNIT_WEIGHT, 4)
@@ -317,10 +330,8 @@ class DialecticJuryEngine:
         rng = random.Random(seed if seed is not None else ticket_id)
         h = max(1, int(eligible_humans_count))
 
-        # Fórmula de dimensionamiento adaptativo impar
-        max_allowed = min(2 * h + 1, 9)
-        if max_allowed % 2 == 0:
-            max_allowed += 1
+        # Fórmula de dimensionamiento adaptativo impar (ver adaptive_odd_juror_cap)
+        max_allowed = cls.adaptive_odd_juror_cap(h)
         calculated_m = max_allowed
 
         req_m = requested_jurors if requested_jurors is not None else num_evaluators
