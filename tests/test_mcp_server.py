@@ -480,7 +480,7 @@ async def test_mcp_v3_dispute_discovery_and_versioning(mcp_handler):
     ver_out = json.loads(res_ver.content[0].text)
     assert ver_out["success"] is True
     assert ver_out["server_version"] == "0.3.0"
-    assert ver_out["tools_count"] == 23
+    assert ver_out["tools_count"] == 25
 
     # 2. V3.2: Crear card, asignarla y transicionarla a disputed con creación automática de ticket
     card_id = "CARD-V3-DISPUTE"
@@ -560,9 +560,9 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     sse_out = json.loads(res_sse.content[0].text)
     assert sse_out["success"] is True
     assert sse_out["transport"] == "sse"
-    assert sse_out["tools_count"] == 23
+    assert sse_out["tools_count"] == 25
     assert isinstance(sse_out.get("tools"), list)
-    assert len(sse_out["tools"]) == 23
+    assert len(sse_out["tools"]) == 25
 
     # 2. Servidor estándar con transport="stdio" por defecto
     server_stdio = create_mcp_server(db_path=db.db_path)
@@ -570,13 +570,125 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     stdio_out = json.loads(res_stdio.content[0].text)
     assert stdio_out["success"] is True
     assert stdio_out["transport"] == "stdio"
-    assert stdio_out["tools_count"] == 23
+    assert stdio_out["tools_count"] == 25
 
     # 3. Llamada directa a MCPToolsHandler.get_server_version() sin servidor envolvente
     # Debe calcular tools_count inspeccionando los métodos de herramientas de la clase dinámicamente
     direct_out = json.loads(handler.get_server_version())
     assert direct_out["success"] is True
     assert direct_out["tools_count"] >= 20
+
+
+@pytest.mark.anyio
+async def test_mcp_dynamic_jury_and_orphan_memory(mcp_handler, tmp_path):
+    """
+    Valida las mejoras de Jurado Dinámico y Memoria Huérfana (Plan de Reparación Jurado Dinámico):
+    1. Catálogo extendido FOCUS_CATALOG (10 vectores técnicos con tags de dominio).
+    2. Apertura de disputa con cálculo de nodos reales y sesgo de dominio.
+    3. get_jury_evaluation_prompt retornando paquetes Clean-Room para subagentes evaluadores.
+    4. Ocultamiento de puntuaciones numéricas en get_dispute_ticket antes del voto humano (anti-sesgo cognitivo).
+    5. sync_coordination_memory volcando outbox events a la rama huérfana sin interfaz gráfica.
+    """
+    handler, db = mcp_handler
+    server = create_mcp_server(db_path=db.db_path)
+
+    # 1. Verificar catálogo FOCUS_CATALOG
+    from src.a2a.jury_engine import FOCUS_CATALOG
+    assert len(FOCUS_CATALOG) == 10
+    assert "TESTABILIDAD_Y_QA" in FOCUS_CATALOG
+    assert "UX_HICKS_LAW_ACCESIBILIDAD" in FOCUS_CATALOG
+    assert "INTEGRIDAD_DATOS_Y_ACID" in FOCUS_CATALOG
+    assert "testing" in FOCUS_CATALOG["TESTABILIDAD_Y_QA"]["domains"]
+
+    # Crear proyecto de prueba con git para soportar rama huérfana
+    git_proj = db.create_project(
+        name="Jury Dynamic Project",
+        base_path=str(tmp_path / "ws_jury_dyn"),
+        init_git=True
+    )
+    p_uuid = git_proj["project_uuid"]
+
+    # Registrar 3 colaboradores para activar regla de N>=3
+    db.add_or_request_collaborator(p_uuid, "node_alpha", role="owner")
+    db.approve_collaborator(p_uuid, "node_alpha")
+    db.add_or_request_collaborator(p_uuid, "node_beta", role="collaborator")
+    db.approve_collaborator(p_uuid, "node_beta")
+    db.add_or_request_collaborator(p_uuid, "node_gamma", role="collaborator")
+    db.approve_collaborator(p_uuid, "node_gamma")
+
+    # 2. Abrir disputa técnica sobre testing / QA
+    res_ticket = await server.call_tool("open_dispute_ticket", {
+        "project_uuid": p_uuid,
+        "title": "Disputa sobre fixtures y tests unitarios",
+        "collision_reason": "Desacuerdo en mockeo de red vs tests deterministas",
+        "contender_a_node": "node_alpha",
+        "contender_b_node": "node_beta",
+        "proposal_a_ref": "branch-alpha-unit-tests",
+        "proposal_b_ref": "branch-beta-integration"
+    })
+    ticket_out = json.loads(res_ticket.content[0].text)
+    assert ticket_out["success"] is True
+    t_id = ticket_out["ticket"]["ticket_id"]
+    matrix = json.loads(ticket_out["ticket"]["jury_matrix_json"])
+    assert len(matrix) >= 3
+
+    # 3. get_jury_evaluation_prompt
+    res_prompt = await server.call_tool("get_jury_evaluation_prompt", {
+        "project_uuid": p_uuid,
+        "ticket_id": t_id
+    })
+    prompt_out = json.loads(res_prompt.content[0].text)
+    assert prompt_out["success"] is True
+    assert prompt_out["evaluators_count"] == len(matrix)
+    first_pkg = prompt_out["evaluation_packages"][0]
+    assert "clean_room_system_prompt" in first_pkg
+    assert "anonymized_dispute" in first_pkg
+    assert first_pkg["anonymized_dispute"]["thesis_option_a"] == "branch-alpha-unit-tests"
+
+    # Emitir voto de agente jurado
+    await server.call_tool("submit_agent_jury_evaluation", {
+        "project_uuid": p_uuid,
+        "ticket_id": t_id,
+        "agent_id": first_pkg["juror_id"],
+        "evaluations_json": json.dumps({
+            "OPTION_A": {"kiss": 90, "performance": 85, "security": 80, "ux_hicks": 85, "testability": 95},
+            "OPTION_B": {"kiss": 70, "performance": 75, "security": 80, "ux_hicks": 70, "testability": 75},
+            "THIRD_WAY_C": {"kiss": 85, "performance": 80, "security": 85, "ux_hicks": 80, "testability": 90}
+        }),
+        "rationale": "La opción A tiene mayor testabilidad."
+    })
+
+    # 4. get_dispute_ticket con protección anti-sesgo (§2.6)
+    # Nodo gamma (humano que no ha votado) consulta el ticket abierto
+    res_get_unvoted = await server.call_tool("get_dispute_ticket", {
+        "project_uuid": p_uuid,
+        "ticket_id": t_id,
+        "caller_node_uuid": "node_gamma"
+    })
+    unvoted_out = json.loads(res_get_unvoted.content[0].text)
+    assert unvoted_out["success"] is True
+    # agent_scores numéricos deben estar ocultos
+    assert unvoted_out["votes_summary"]["scores_hidden_until_human_vote"] is True
+    assert len(unvoted_out["votes_summary"]["agent_scores"]) == 0
+    # Pero las discusiones mayéuticas cualitativas sí deben estar visibles
+    assert len(unvoted_out["mayeutic_discussions"]) >= 3
+
+    # 5. sync_coordination_memory (§2.9)
+    # Encolar un evento de outbox
+    db.enqueue_outbox_event(
+        event_uuid="evt_test_001",
+        project_uuid=p_uuid,
+        node_uuid="node_alpha",
+        event_type="DISPUTE_MESSAGE",
+        payload_raw=json.dumps({"msg": "Debate mayéutico"})
+    )
+    res_sync = await server.call_tool("sync_coordination_memory", {
+        "project_uuid": p_uuid
+    })
+    sync_out = json.loads(res_sync.content[0].text)
+    assert sync_out["success"] is True
+    assert sync_out["flushed_count"] >= 1
+    assert "orphan-conversa-memory" in sync_out["orphan_branch"]
 
 
 

@@ -36,6 +36,7 @@ FOCUS_CATALOG: Dict[str, Dict[str, Any]] = {
     "ESCALABILIDAD_CONCURRENCIA": {
         "id": "ESCALABILIDAD_CONCURRENCIA",
         "label": "Escalabilidad y Concurrencia",
+        "domains": ["backend", "core", "storage", "network", "performance"],
         "submetrics": [
             "concurrencia",
             "throughput",
@@ -51,6 +52,7 @@ FOCUS_CATALOG: Dict[str, Dict[str, Any]] = {
     "MANTENIBILIDAD_CLEAN_ARCH": {
         "id": "MANTENIBILIDAD_CLEAN_ARCH",
         "label": "Mantenibilidad y Clean Architecture",
+        "domains": ["architecture", "refactor", "core", "general", "backend", "frontend"],
         "submetrics": [
             "acoplamiento",
             "abstracciones",
@@ -66,6 +68,7 @@ FOCUS_CATALOG: Dict[str, Dict[str, Any]] = {
     "SEGURIDAD_RESILIENCIA": {
         "id": "SEGURIDAD_RESILIENCIA",
         "label": "Seguridad y Resiliencia",
+        "domains": ["security", "backend", "auth", "p2p", "storage"],
         "submetrics": [
             "tolerancia a fallos",
             "resiliencia",
@@ -81,6 +84,7 @@ FOCUS_CATALOG: Dict[str, Dict[str, Any]] = {
     "EFICIENCIA_COMPUTACIONAL": {
         "id": "EFICIENCIA_COMPUTACIONAL",
         "label": "Eficiencia Computacional e I/O",
+        "domains": ["performance", "core", "storage", "algorithm", "backend"],
         "submetrics": [
             "I/O de disco",
             "consumo de CPU",
@@ -91,6 +95,102 @@ FOCUS_CATALOG: Dict[str, Dict[str, Any]] = {
         "directive": (
             "Cuantifica el costo de I/O de disco, ciclos de CPU, complejidad algorítmica "
             "temporal/espacial y sobrecarga de serialización."
+        )
+    },
+    "TESTABILIDAD_Y_QA": {
+        "id": "TESTABILIDAD_Y_QA",
+        "label": "Testabilidad y Garantía de Calidad (QA)",
+        "domains": ["testing", "qa", "ci", "refactor", "general"],
+        "submetrics": [
+            "cobertura de ramas",
+            "aislamiento de fixtures",
+            "determinismo",
+            "prevención de flakiness",
+            "facilidad de mockeo"
+        ],
+        "directive": (
+            "Examina la facilidad para escribir tests unitarios puros, determinismo de suites, "
+            "ausencia de efectos secundarios no aislados y cobertura de caminos de error."
+        )
+    },
+    "UX_HICKS_LAW_ACCESIBILIDAD": {
+        "id": "UX_HICKS_LAW_ACCESIBILIDAD",
+        "label": "UX, Ley de Hick y Accesibilidad",
+        "domains": ["frontend", "ui", "ux", "accessibility", "design"],
+        "submetrics": [
+            "carga cognitiva (Ley de Hick)",
+            "heurísticas de Nielsen",
+            "contraste WCAG AAA",
+            "atajos de teclado",
+            "divulgación progresiva"
+        ],
+        "directive": (
+            "Evalúa la carga cognitiva del usuario (máximo 3 acciones primarias por vista), "
+            "adherencia a heurísticas de usabilidad, contraste visual accesible y ergonomía de interacción."
+        )
+    },
+    "INTEGRIDAD_DATOS_Y_ACID": {
+        "id": "INTEGRIDAD_DATOS_Y_ACID",
+        "label": "Integridad de Datos y Concurrencia ACID",
+        "domains": ["storage", "database", "sqlite", "migration", "backend"],
+        "submetrics": [
+            "transaccionalidad ACID",
+            "llaves foráneas",
+            "journal WAL",
+            "idempotencia de migración",
+            "prevención de corrupción"
+        ],
+        "directive": (
+            "Verifica la consistencia relacional en SQLite WAL, integridad referencial en cascada, "
+            "manejo de bloqueos por concurrencia y reversibilidad de migraciones DDL."
+        )
+    },
+    "INTEROPERABILIDAD_Y_CONTRATOS": {
+        "id": "INTEROPERABILIDAD_Y_CONTRATOS",
+        "label": "Interoperabilidad de Protocolos y Contratos",
+        "domains": ["mcp", "api", "protocols", "network", "schema"],
+        "submetrics": [
+            "compatibilidad JSON Schema",
+            "resiliencia snake_case/camelCase",
+            "versionado semántico",
+            "retrocompatibilidad",
+            "validación de payloads"
+        ],
+        "directive": (
+            "Audita el cumplimiento estricto de especificaciones MCP/A2A, compatibilidad cruzada "
+            "entre modelos LLM diversos y ausencia de suposiciones de transporte rígidas."
+        )
+    },
+    "I18N_LOCALIZACION_Y_TEXTO": {
+        "id": "I18N_LOCALIZACION_Y_TEXTO",
+        "label": "Localización, I18N y Claridad Terminológica",
+        "domains": ["frontend", "ui", "i18n", "documentation", "content"],
+        "submetrics": [
+            "desacoplamiento de textos",
+            "soporte multilingüe",
+            "consistencia terminológica",
+            "formato de fechas/números",
+            "prevención de textos truncados"
+        ],
+        "directive": (
+            "Revisa el desacoplamiento de cadenas de interfaz, consistencia de vocabulario técnico "
+            "y prevención de roturas visuales por longitud de textos o traducciones."
+        )
+    },
+    "OBSERVABILIDAD_Y_AUDITORIA": {
+        "id": "OBSERVABILIDAD_Y_AUDITORIA",
+        "label": "Observabilidad, Auditoría y Telemetría OKF",
+        "domains": ["telemetry", "logging", "okf", "governance", "monitoring"],
+        "submetrics": [
+            "trazabilidad de decisiones",
+            "precisión de logs",
+            "transparencia mayéutica",
+            "registro inmutable en git",
+            "diagnósticos de salud"
+        ],
+        "directive": (
+            "Analiza si cada transición del sistema deja rastro auditable, calidad diagnóstica "
+            "de las alertas y persistencia inmutable de dictámenes para precedentes futuros."
         )
     }
 }
@@ -201,26 +301,48 @@ class DialecticJuryEngine:
         temperature_mode: str = "hybrid",
         seed: Optional[Any] = None,
         ticket_id: Optional[str] = None,
-        num_evaluators: Optional[int] = None
+        num_evaluators: Optional[int] = None,
+        domain: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Genera dinámicamente la matriz de subagentes neutrales combinando:
-        1. Selección aleatoria de entre 0 y 4 características del catálogo FOCUS_CATALOG.
+        1. Selección de entre 0 y 4 características del catálogo FOCUS_CATALOG (con sesgo opcional por dominio).
         2. Temperatura de inferencia:
            - Rol 'SYNTHESIS_SEEKER': [0.6, 0.7] para búsqueda de Tercera Vía.
            - Rol 'HARD_METRICS_AUDITOR': [0.1, 0.2] para métricas duras.
            - Rol 'STOCHASTIC_JUROR' (o modo 'stochastic'): aleatoria entre [0.2, 0.9].
         3. Prompt de Navegación de Alianza (Clean-Room sin herencia del anfitrión).
+        4. Escalado impar adaptativo: h=1 -> 3; h=2 -> 3; h=3 -> 5; h=4 -> 7; h>=5 -> 9 (techo seguro de 9).
         """
         rng = random.Random(seed if seed is not None else ticket_id)
         h = max(1, int(eligible_humans_count))
-        max_allowed = min(2 * h + 1, 5)
+
+        # Fórmula de dimensionamiento adaptativo impar
+        max_allowed = min(2 * h + 1, 9)
+        if max_allowed % 2 == 0:
+            max_allowed += 1
+        calculated_m = max_allowed
+
         req_m = requested_jurors if requested_jurors is not None else num_evaluators
-        m = min(req_m, max_allowed) if req_m else max_allowed
+        if req_m is not None and req_m > 0:
+            m = min(int(req_m), 9)
+            if m % 2 == 0:
+                m = min(9, m + 1)
+        else:
+            m = calculated_m
         m = max(1, m)
 
         unit_weight = cls.calculate_effective_agent_weight(h, m)
         catalog_keys = list(FOCUS_CATALOG.keys())
+
+        # Identificar vectores prioritarios si se especifica un dominio
+        matching_keys: List[str] = []
+        if domain:
+            dom_norm = str(domain).strip().lower()
+            matching_keys = [
+                k for k, v in FOCUS_CATALOG.items()
+                if any(dom_norm in d.lower() or d.lower() in dom_norm for d in v.get("domains", []))
+            ]
 
         # Instanciar siempre el Subagente Sintetizador para la Fase 2 (Tercera Vía)
         synth_temp = round(rng.uniform(0.60, 0.70), 2)
@@ -239,9 +361,20 @@ class DialecticJuryEngine:
 
         jurors: List[Dict[str, Any]] = []
         for idx in range(m):
-            # Elegir aleatoriamente entre 0 y 4 características de foco
-            focus_count = rng.randint(0, len(catalog_keys))
-            selected_keys = rng.sample(catalog_keys, focus_count) if focus_count > 0 else []
+            # Elegir aleatoriamente entre 0 y 4 características de foco (con sesgo hacia el dominio si aplica)
+            focus_count = rng.randint(0, min(4, len(catalog_keys)))
+            if focus_count == 0:
+                selected_keys = []
+            elif matching_keys and rng.random() < 0.70:
+                # 70% de probabilidad de sesgar el foco hacia vectores del dominio
+                chosen_from_matching = rng.sample(matching_keys, min(focus_count, len(matching_keys)))
+                needed = focus_count - len(chosen_from_matching)
+                other_pool = [k for k in catalog_keys if k not in chosen_from_matching]
+                chosen_other = rng.sample(other_pool, min(needed, len(other_pool))) if needed > 0 else []
+                selected_keys = chosen_from_matching + chosen_other
+            else:
+                selected_keys = rng.sample(catalog_keys, focus_count)
+
             focus_details = [FOCUS_CATALOG[k] for k in selected_keys]
 
             # Asignar temperatura según el modo o rol

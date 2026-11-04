@@ -524,14 +524,47 @@ class A2ABus:
         card_id: Optional[str] = None,
         ticket_id: Optional[str] = None,
         proposal_c_ref: str = "",
-        num_evaluators: int = 3
+        num_evaluators: int = 3,
+        domain: Optional[str] = None
     ) -> Dict[str, Any]:
         """Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."""
         t_id = ticket_id or f"TICKET-{str(uuid.uuid4())[:8].upper()}"
+
+        # 1. Calcular universo real de nodos y humanos elegibles (§2.1 / §3.1)
+        collabs = self.db.get_project_collaborators(project_uuid)
+        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
+        if not all_nodes:
+            swarm = self.db.get_swarm_nodes()
+            all_nodes = [n["node_uuid"] for n in swarm] if swarm else [contender_a_node, contender_b_node]
+
+        contenders = [c for c in [contender_a_node, contender_b_node] if c]
+        universe = self.jury_engine.resolve_voter_universe(all_nodes, contenders)
+        eligible_voters = universe.get("eligible_voters", [])
+        eligible_count = len(eligible_voters) if eligible_voters else max(1, len(all_nodes))
+
+        # 2. Inferencia de dominio si no se pasa explícitamente (§2.2)
+        inferred_domain = domain
+        if not inferred_domain:
+            text_context = f"{title} {collision_reason} {proposal_a_ref} {proposal_b_ref}".lower()
+            if any(w in text_context for w in ("test", "qa", "cobertura", "mock")):
+                inferred_domain = "testing"
+            elif any(w in text_context for w in ("ui", "frontend", "hick", "nielsen", "css", "accesib")):
+                inferred_domain = "frontend"
+            elif any(w in text_context for w in ("sqlite", "wal", "db", "base de datos", "acid", "migrac")):
+                inferred_domain = "storage"
+            elif any(w in text_context for w in ("mcp", "protocol", "contrato", "schema", "rpc")):
+                inferred_domain = "mcp"
+            elif any(w in text_context for w in ("segur", "crypto", "ed25519", "auth", "token")):
+                inferred_domain = "security"
+            elif any(w in text_context for w in ("perf", "latenc", "concurren", "throughput", "cpu", "memoria")):
+                inferred_domain = "performance"
+
         matrix_info = self.jury_engine.generate_neutral_jury_matrix(
+            eligible_humans_count=eligible_count,
             ticket_id=t_id,
             num_evaluators=num_evaluators,
-            seed=t_id
+            seed=t_id,
+            domain=inferred_domain
         )
         synthesis_text = proposal_c_ref or (
             f"Síntesis (Tercera Vía C): Integrar los puntos de mayor resiliencia de Tesis ({proposal_a_ref[:60]}) "

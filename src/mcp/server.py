@@ -577,21 +577,26 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         project_uuid: Optional[str] = None,
         ticket_id: Optional[str] = None,
         card_id: Optional[str] = None,
+        caller_node_uuid: Optional[str] = None,
         projectUuid: Optional[str] = None,
         ticketId: Optional[str] = None,
-        cardId: Optional[str] = None
+        cardId: Optional[str] = None,
+        callerNodeUuid: Optional[str] = None
     ) -> str:
         """
         Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
         incluyendo la matriz neutral anti-sycophancy y las evaluaciones emitidas.
+        Aplica protección anti-sesgo: oculta puntuaciones numéricas si el humano no ha votado.
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_ticket = ticket_id or ticketId
         resolved_card = card_id or cardId
+        resolved_caller = caller_node_uuid or callerNodeUuid
         return handler.get_dispute_ticket(
             project_uuid=resolved_proj,
             ticket_id=resolved_ticket,
-            card_id=resolved_card
+            card_id=resolved_card,
+            caller_node_uuid=resolved_caller
         )
 
     # 22. Herramienta: Listar Tickets de Disputa
@@ -632,6 +637,42 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
             tools_count=len(tools_registered) if tools_registered else None,
             tools_list=tools_registered if tools_registered else None
         )
+
+    # 24. Herramienta: Obtener Paquete de Prompt para Subagente Jurado (Clean-Room)
+    @server.tool()
+    def get_jury_evaluation_prompt(
+        project_uuid: Optional[str] = None,
+        ticket_id: Optional[str] = None,
+        juror_id: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        ticketId: Optional[str] = None,
+        jurorId: Optional[str] = None
+    ) -> str:
+        """
+        Retorna el paquete de instrucciones en cámara limpia (Clean-Room) para los jurados de un ticket.
+        Permite a los agentes (Claude/Antigravity) orquestar subagentes evaluadores con sus propias herramientas.
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        resolved_ticket = ticket_id or ticketId or ""
+        resolved_juror = juror_id or jurorId
+        return handler.get_jury_evaluation_prompt(
+            project_uuid=resolved_proj,
+            ticket_id=resolved_ticket,
+            juror_id=resolved_juror
+        )
+
+    # 25. Herramienta: Sincronizar Memoria Conversacional en Rama Huérfana
+    @server.tool()
+    def sync_coordination_memory(
+        project_uuid: Optional[str] = None,
+        projectUuid: Optional[str] = None
+    ) -> str:
+        """
+        Vuelca eventos dialécticos y transacciones outbox en la rama huérfana de memoria
+        ('orphan-conversa-memory-{project_uuid}') sin requerir interacción manual con la UI.
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        return handler.sync_coordination_memory(project_uuid=resolved_proj)
 
     return server
 

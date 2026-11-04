@@ -1,7 +1,7 @@
 # Manifiesto de Herramientas MCP2P
-version: "2.1"
+version: "2.2"
 server_name: "mcp2p-server"
-description: "Servidor Model Context Protocol con 20 herramientas deterministas a coste 0 tokens para coordinación de enjambres P2P."
+description: "Servidor Model Context Protocol con 25 herramientas deterministas a coste 0 tokens para coordinación de enjambres P2P."
 tools:
   # 1-7: Proyectos, Kanban y Nodos
   - name: "list_projects"
@@ -81,3 +81,11 @@ tools:
   - name: "get_server_version"
     description: "Retorna la versión activa del servidor (0.3.0), commit git y recuento de herramientas registradas."
     parameters: []
+
+  # 24-25: Jurado Dinámico Clean-Room y Memoria Huérfana Headless
+  - name: "get_jury_evaluation_prompt"
+    description: "Empaqueta el prompt aislado Clean-Room con vectores asignados y directrices de voto para orquestar subagentes evaluadores."
+    parameters: [project_uuid, ticket_id, juror_id]
+  - name: "sync_coordination_memory"
+    description: "Vuelca la memoria conversacional y eventos outbox en la rama huérfana Git sin requerir la interfaz de escritorio."
+    parameters: [project_uuid]

@@ -6,7 +6,7 @@
 
 ## 📌 Estado del Sistema y Capacidades Clave
 
-* **Servidor MCP Local (23 Herramientas Deterministas a 0 Tokens)**: Expone herramientas deterministas para gestión de proyectos, leases de Kanban, worktrees aislados por tarea, micro-scripts de gobernanza OKF, canal dialéctico A2A, descubrimiento y arbitraje del Tribunal de Honor Borda e introspección de runtime.
+* **Servidor MCP Local (25 Herramientas Deterministas a 0 Tokens)**: Expone herramientas deterministas para gestión de proyectos, leases de Kanban, worktrees aislados por tarea, micro-scripts de gobernanza OKF, canal dialéctico A2A, descubrimiento y arbitraje del Tribunal de Honor Borda con jurado dinámico (10 vectores focales estocásticos), prompts clean-room, sincronización de memoria huérfana e introspección de runtime.
 * **Resiliencia Bidireccional de Esquema**: Soporte nativo para convenciones `camelCase` / `snake_case`, payloads estructurados (`dict`/`list`) y cadenas JSON, eliminando errores de validación entre agentes heterogéneos.
 * **Control Estricto de Concurrencia**: Bloqueo atómico de tarjetas Kanban con TTL dinámico y detección de colisiones de alcance de archivos (`files_scope`) en Git Worktrees.
 * **Tribunal de Honor Borda Anti-Sycophancy**: Resolución algorítmica de disputas técnicas y arquitectónicas entre agentes con ponderación imparcial (peso 1.5).
@@ -79,4 +79,4 @@ Para conectar Claude Desktop, Cursor o Antigravity IDE:
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 ```
-Suite exhaustiva con 69+ pruebas unitarias y de integración cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor y las 20 herramientas MCP.
+Suite exhaustiva con 73+ pruebas unitarias y de integración cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico y las 25 herramientas MCP.

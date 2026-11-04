@@ -997,29 +997,29 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       Fase 1 — Exposición de Propuestas y Síntesis (Tercera Vía)
                     </h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.35)', backgroundColor: 'rgba(56, 189, 248, 0.06)' }}>
+                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.35)', backgroundColor: 'rgba(56, 189, 248, 0.06)', minWidth: 0, overflow: 'hidden' }}>
                         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', marginBottom: '6px' }}>
                           TESIS (OPCIÓN A) — {inspectedItem.data.contender_a_node}
                         </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)' }}>
+                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           {inspectedItem.data.proposal_a_ref}
                         </p>
                       </div>
 
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(168, 85, 247, 0.35)', backgroundColor: 'rgba(168, 85, 247, 0.06)' }}>
+                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(168, 85, 247, 0.35)', backgroundColor: 'rgba(168, 85, 247, 0.06)', minWidth: 0, overflow: 'hidden' }}>
                         <div style={{ fontSize: '11px', fontWeight: 700, color: '#c084fc', marginBottom: '6px' }}>
                           ANTÍTESIS (OPCIÓN B) — {inspectedItem.data.contender_b_node}
                         </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)' }}>
+                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           {inspectedItem.data.proposal_b_ref}
                         </p>
                       </div>
 
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.35)', backgroundColor: 'rgba(16, 185, 129, 0.06)' }}>
+                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.35)', backgroundColor: 'rgba(16, 185, 129, 0.06)', minWidth: 0, overflow: 'hidden' }}>
                         <div style={{ fontSize: '11px', fontWeight: 700, color: '#10b981', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                           <Sparkles size={12} /> SÍNTESIS / TERCERA VÍA (OPCIÓN C)
                         </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)' }}>
+                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                           {inspectedItem.data.proposal_c_ref}
                         </p>
                       </div>

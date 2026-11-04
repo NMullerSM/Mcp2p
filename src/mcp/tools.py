@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
@@ -757,11 +758,14 @@ class MCPToolsHandler:
         self,
         project_uuid: str,
         ticket_id: Optional[str] = None,
-        card_id: Optional[str] = None
+        card_id: Optional[str] = None,
+        caller_node_uuid: Optional[str] = None
     ) -> str:
         """
         Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
         incluyendo la matriz neutral anti-sycophancy y el resumen de votos emitidos.
+        Protección Anti-Sesgo Cognitivo (§2.6): Si el ticket está abierto y el nodo consultante
+        no ha emitido su voto humano, las puntuaciones numéricas de los agentes permanecen ocultas.
         """
         try:
             ticket = None
@@ -784,10 +788,196 @@ class MCPToolsHandler:
             t_id = ticket["ticket_id"]
             votes_summary = self.db.get_jury_votes_summary(t_id)
 
+            # Protección Anti-Sesgo Cognitivo (§2.6)
+            is_open = ticket.get("status") == "open"
+            has_voted = False
+            if caller_node_uuid:
+                has_voted = any(hv.get("node_uuid") == caller_node_uuid for hv in votes_summary.get("human_votes", []))
+
+            # Si el ticket está abierto y no ha votado, ocultar puntajes numéricos de subagentes
+            redact_scores = is_open and not has_voted
+            if redact_scores:
+                delivered_summary = {
+                    "human_votes": votes_summary.get("human_votes", []),
+                    "agent_scores": [],
+                    "scores_hidden_until_human_vote": True,
+                    "notice": "Las puntuaciones numéricas de los subagentes están ocultas hasta que el humano emita su voto para prevenir sesgo de complacencia (anti-sycophancy)."
+                }
+            else:
+                delivered_summary = {
+                    "human_votes": votes_summary.get("human_votes", []),
+                    "agent_scores": votes_summary.get("agent_scores", []),
+                    "scores_hidden_until_human_vote": False
+                }
+
+            # Extraer lista de discusión mayéutica cualitativa (siempre visible para debate constructivo)
+            raw_matrix = ticket.get("jury_matrix_json") or "[]"
+            try:
+                matrix_list = json.loads(raw_matrix) if raw_matrix else []
+            except Exception:
+                matrix_list = []
+
+            mayeutic_discussions = []
+            grouped_agent_scores: Dict[str, List[Dict[str, Any]]] = {}
+            for sc in votes_summary.get("agent_scores", []):
+                grouped_agent_scores.setdefault(sc.get("juror_id", "subagent_neutral"), []).append(sc)
+
+            for idx, m_spec in enumerate(matrix_list):
+                j_id = m_spec.get("juror_id", f"neutral_juror_{idx+1:02d}")
+                j_evals = grouped_agent_scores.get(j_id, [])
+                rationale_text = ""
+                for ev in j_evals:
+                    if ev.get("rationale_summary"):
+                        rationale_text = ev["rationale_summary"]
+                        break
+
+                entry: Dict[str, Any] = {
+                    "juror_id": j_id,
+                    "role": m_spec.get("role", "NEUTRAL_MATRIX_JUROR"),
+                    "temperature": m_spec.get("temperature", 0.2),
+                    "focus_vectors": m_spec.get("focus_vectors", []),
+                    "mayeutic_argument": rationale_text or "Pendiente de evaluación por el subagente jurado."
+                }
+                if not redact_scores and j_evals:
+                    entry["scores"] = j_evals
+                mayeutic_discussions.append(entry)
+
             return self._wrap_response(project_uuid, {
                 "success": True,
                 "ticket": ticket,
-                "votes_summary": votes_summary
+                "mayeutic_discussions": mayeutic_discussions,
+                "votes_summary": delivered_summary
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def get_jury_evaluation_prompt(
+        self,
+        project_uuid: str,
+        ticket_id: str,
+        juror_id: Optional[str] = None
+    ) -> str:
+        """
+        Retorna el paquete de instrucciones y directivas en cámara limpia (Clean-Room)
+        para uno o todos los jurados asignados en la Matriz Neutral de un ticket de disputa.
+        Permite a agentes y subagentes emitir evaluaciones mayéuticas independientes
+        bajo el foco y temperatura asignados.
+        """
+        try:
+            ticket = self.db.get_dispute_ticket(ticket_id)
+            if not ticket:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"Ticket de disputa '{ticket_id}' no encontrado"
+                })
+
+            raw_matrix = ticket.get("jury_matrix_json") or "[]"
+            try:
+                matrix_list = json.loads(raw_matrix) if raw_matrix else []
+            except Exception:
+                matrix_list = []
+
+            if not matrix_list:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"El ticket '{ticket_id}' no posee una matriz neutral generada"
+                })
+
+            selected_evaluators = matrix_list
+            if juror_id:
+                selected_evaluators = [m for m in matrix_list if m.get("juror_id") == juror_id]
+                if not selected_evaluators:
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": f"Jurado '{juror_id}' no encontrado en la matriz del ticket '{ticket_id}'"
+                    })
+
+            evaluation_packages = []
+            for spec in selected_evaluators:
+                evaluation_packages.append({
+                    "juror_id": spec.get("juror_id"),
+                    "role": spec.get("role"),
+                    "temperature": spec.get("temperature"),
+                    "focus_vectors": spec.get("focus_vectors", []),
+                    "focus_labels": spec.get("focus_labels", []),
+                    "clean_room_system_prompt": spec.get("prompt"),
+                    "anonymized_dispute": {
+                        "collision_reason": ticket.get("collision_reason"),
+                        "thesis_option_a": ticket.get("proposal_a_ref"),
+                        "antithesis_option_b": ticket.get("proposal_b_ref"),
+                        "synthesis_third_way_c": ticket.get("proposal_c_ref")
+                    },
+                    "submission_instructions": {
+                        "target_tool": "submit_agent_jury_evaluation",
+                        "scoring_dimensions": ["kiss", "performance", "security", "ux_hicks", "testability"],
+                        "score_range": "0 a 100",
+                        "evaluated_options": ["OPTION_A", "OPTION_B", "THIRD_WAY_C"]
+                    }
+                })
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "ticket_id": ticket_id,
+                "project_uuid": project_uuid,
+                "evaluators_count": len(evaluation_packages),
+                "evaluation_packages": evaluation_packages
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def sync_coordination_memory(self, project_uuid: str) -> str:
+        """
+        Vuelca eventos dialécticos y transacciones del outbox en la rama huérfana de memoria
+        ('orphan-conversa-memory-{project_uuid}'), permitiendo a los agentes sincronizar
+        la memoria conversacional sin depender de la UI.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Proyecto {project_uuid} no encontrado"})
+
+            gov_repo_path = proj.get("gov_repo_path")
+            if not gov_repo_path or not Path(gov_repo_path).exists():
+                return self._wrap_response(project_uuid, {"success": False, "error": "Repositorio de gobernanza inexistente o inválido"})
+
+            pending_events = self.db.get_pending_outbox_events(project_uuid, limit=500)
+            flushed_ids = []
+            events_data = []
+            for ev in pending_events:
+                flushed_ids.append(ev["event_uuid"])
+                events_data.append({
+                    "event_uuid": ev["event_uuid"],
+                    "event_type": ev["event_type"],
+                    "node_uuid": ev["node_uuid"],
+                    "created_at": ev.get("created_at"),
+                    "payload": ev.get("payload_raw")
+                })
+
+            # Guardar snapshot de memoria en rama huérfana
+            snapshot_res = self.okf.write_orphan_memory_snapshot(
+                gov_base_path=Path(gov_repo_path),
+                project_uuid=project_uuid,
+                snapshot_data={
+                    "last_synced_at": datetime.now(timezone.utc).isoformat(),
+                    "total_flushed_events": len(flushed_ids),
+                    "events": events_data
+                },
+                commit_message=f"sync: consolidar memoria de {len(flushed_ids)} eventos dialécticos en rama huérfana"
+            )
+
+            # Marcar eventos como sincronizados
+            for eid in flushed_ids:
+                try:
+                    self.db.mark_outbox_event_status(eid, "flushed_to_branch")
+                except Exception:
+                    pass
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "project_uuid": project_uuid,
+                "flushed_count": len(flushed_ids),
+                "orphan_branch": self.okf.get_orphan_branch_name(project_uuid),
+                "snapshot": snapshot_res
             })
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})

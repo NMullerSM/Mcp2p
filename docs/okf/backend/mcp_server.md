@@ -14,7 +14,7 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 
 ---
 
-## 2. Herramientas Expuestas a los Agentes (20 Herramientas)
+## 2. Herramientas Expuestas a los Agentes (25 Herramientas)
 
 ### Grupo A: Proyectos, Tablero Kanban y Leases Atómicos
 | Herramienta | Parámetros Clave | Descripción |
@@ -33,6 +33,7 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 | `send_coordination_rfc` | `project_uuid`, `sender_node_uuid`, `stage`, `session_id`, `payload_json`, `card_id` | Envía turno dialéctico (`PROPOSAL`, `COUNTER_PROPOSAL`, `RESOLUTION`) con validación estricta de campos obligatorios. |
 | `get_coordination_session` | `project_uuid`, `session_id` | Consulta la secuencia cronológica de turnos dialécticos intercambiados en una sesión. |
 | `inspect_okf_governance` | `project_uuid` | Audita la integridad de la gobernanza OKF y la memoria huérfana. |
+| `sync_coordination_memory` | `project_uuid` | Vuelca eventos outbox y memoria conversacional de la base de datos a la rama huérfana Git sin requerir la UI de escritorio. |
 
 ### Grupo C: Worktrees Aislados, Micro-scripts y Distribución
 | Herramienta | Parámetros Clave | Descripción |
@@ -46,9 +47,10 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 | Herramienta | Parámetros Clave | Descripción |
 | :--- | :--- | :--- |
 | `inspect_pr_and_recommend` | `project_uuid`, `pr_id_or_branch`, `reviewer_node_uuid`, `recommendation`, `analysis_summary`, `suggested_reply` | Cruza PR contra OKF y deja recomendación humana (`RECOMMEND_ACCEPT`, `RECOMMEND_CHANGES`, `RECOMMEND_REJECT`, `RECOMMEND_JURY`). |
-| `open_dispute_ticket` | `project_uuid`, `title`, `collision_reason`, `contender_a_node`, `contender_b_node`, `proposal_a_ref`, `proposal_b_ref` | Abre formalmente un ticket de juicio técnico en disputa e inicializa la Matriz Neutral Anti-Sycophancy. |
-| `get_dispute_ticket` | `project_uuid`, `ticket_id`, `card_id` | Consulta los detalles de una disputa, su matriz neutral y los votos emitidos por ticket_id o card_id. |
+| `open_dispute_ticket` | `project_uuid`, `title`, `collision_reason`, `contender_a_node`, `contender_b_node`, `proposal_a_ref`, `proposal_b_ref` | Abre formalmente un ticket de juicio técnico en disputa e inicializa la Matriz Neutral Anti-Sycophancy con escalado impar dinámico ($3 \le m \le 9$) y 10 vectores focales estocásticos. |
+| `get_dispute_ticket` | `project_uuid`, `ticket_id`, `card_id`, `caller_node_uuid` | Consulta los detalles de una disputa, su matriz neutral y evaluaciones. Oculta puntajes numéricos (`agent_scores`) a humanos pre-voto para evitar sesgo de anclaje. |
 | `list_dispute_tickets` | `project_uuid`, `status`, `card_id` | Lista todos los tickets de disputa registrados en el proyecto con filtros opcionales. |
+| `get_jury_evaluation_prompt` | `project_uuid`, `ticket_id`, `juror_id` | Genera el prompt empaquetado Clean-Room con vectores asignados y temperatura para orquestar subagentes evaluadores externos. |
 | `submit_agent_jury_evaluation` | `project_uuid`, `ticket_id`, `agent_id`, `evaluations_json`, `rationale` | Emite evaluación técnica ponderada (peso 1.5) en 5 dimensiones (KISS, Performance, Seguridad, Hicks, Testabilidad). |
 
 ### Grupo E: Onboarding, Auditoría de Deriva y Runtime
@@ -57,7 +59,7 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 | `scan_and_bootstrap_okf` | `project_uuid` | Escanea exhaustivamente código y docs existentes generando el Dossier Unificado de Alineación OKF. |
 | `get_alignment_dossier` | `project_uuid` | Recupera el Dossier de Alineación para revisión del humano o agentes inspectores. |
 | `audit_okf_drift` | `project_uuid` | Compara el código real en `app/` contra el OKF ratificado y reporta derivas arquitectónicas. |
-| `get_server_version` | Ninguno | Retorna versión del servidor (`0.3.0`), commit hash, recuento de herramientas (23) y estado operativo. |
+| `get_server_version` | Ninguno | Retorna versión del servidor (`0.3.0`), commit hash, recuento real de herramientas (25) y estado operativo. |
 
 ---
 
