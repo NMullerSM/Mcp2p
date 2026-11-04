@@ -495,6 +495,40 @@ graph TD
     # Micro-Scripts ("Manos del Agente"): Kanban YAML <-> SQLite
     # ==========================================
 
+    def commit_gov_file(
+        self,
+        gov_base_path: str | Path,
+        file_path: str | Path,
+        commit_message: str
+    ) -> bool:
+        """
+        Comitea atómicamente un archivo concreto del repositorio de gobernanza (rama main),
+        evitando disputas huérfanas y cards/rulings sin historial de versionado real.
+        El mensaje de commit debe incluir siempre el título y el contenido/razón de la
+        tarjeta o ticket que originó el cambio, para que `git log` sea el historial legible
+        de decisiones del proyecto.
+        """
+        base = Path(gov_base_path)
+        if not (base / ".git").is_dir():
+            return False
+        try:
+            rel = Path(file_path)
+            rel = rel.relative_to(base) if rel.is_absolute() else rel
+        except ValueError:
+            rel = file_path
+        try:
+            subprocess.run(["git", "add", str(rel)], cwd=str(base), capture_output=True, check=False)
+            result = subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                cwd=str(base),
+                capture_output=True,
+                check=False
+            )
+            return result.returncode == 0
+        except Exception as e:
+            logger.debug(f"Git commit de gobernanza omitido o fallido para {file_path}: {e}")
+            return False
+
     def write_card_yaml(
         self,
         gov_base_path: str | Path,

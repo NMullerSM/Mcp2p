@@ -687,6 +687,14 @@ class A2ABus:
                     neutral_matrix=matrix_list
                 )
                 ruling_yaml_path = str(ruling_path)
+
+                from src.storage.okf_adapter import OKFAdapter
+                title = (ticket.get("title") or "").strip()
+                collision_reason = (ticket.get("collision_reason") or "").strip()
+                commit_message = f"ratify(jury): {ticket_id} [{winning_option}] {title}"
+                if collision_reason:
+                    commit_message += f"\n\n{collision_reason}"
+                OKFAdapter().commit_gov_file(proj["gov_repo_path"], ruling_path, commit_message)
             except Exception as e:
                 logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket_id, e)
 

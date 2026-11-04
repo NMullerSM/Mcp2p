@@ -592,7 +592,9 @@ class DatabaseManager:
     # ==========================
 
     def _sync_card_to_okf_yaml(self, project_uuid: str, card_data: Dict[str, Any]) -> None:
-        """Sincroniza atómicamente la tarjeta modificada al archivo YAML en governance/kanban/cards/."""
+        """Sincroniza atómicamente la tarjeta modificada al archivo YAML en governance/kanban/cards/
+        y comitea el cambio a git con un mensaje que lleva el título y la descripción de la
+        tarjeta, para que el historial de gobernanza quede versionado y no huérfano."""
         try:
             proj = self.get_project_by_uuid(project_uuid)
             if not proj or not proj.get("gov_repo_path"):
@@ -602,7 +604,16 @@ class DatabaseManager:
                 return
             from src.storage.okf_adapter import OKFAdapter
             okf = OKFAdapter()
-            okf.write_card_yaml(gov_dir, card_data)
+            yaml_path = okf.write_card_yaml(gov_dir, card_data)
+
+            card_id = card_data.get("card_id") or card_data.get("id") or "UNKNOWN"
+            status = card_data.get("status", "")
+            title = (card_data.get("title") or "").strip()
+            description = (card_data.get("description") or "").strip()
+            commit_message = f"sync(kanban): {card_id} [{status}] {title}"
+            if description:
+                commit_message += f"\n\n{description}"
+            okf.commit_gov_file(gov_dir, yaml_path, commit_message)
         except Exception as exc:
             logger.warning(f"Error sincronizando tarjeta {card_data.get('card_id')} a YAML OKF: {exc}")
 
