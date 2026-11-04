@@ -122,11 +122,17 @@ class MCPToolsHandler:
         card_id: str,
         node_uuid: str,
         target_status: str = "in_review",
-        branch_ref: Optional[str] = None
+        branch_ref: Optional[str] = None,
+        dispute_reason: Optional[str] = None,
+        contender_node_uuid: Optional[str] = None,
+        auto_open_ticket: bool = True
     ) -> str:
         """
         Transiciona una tarea a 'in_review', 'merged' o la libera nuevamente a 'backlog'.
         Permite adjuntar la referencia de rama o commit en el repositorio de código (app/).
+        Si se escala a 'disputed', dispara automáticamente la apertura de un ticket de juicio
+        técnico en el Tribunal de Honor Borda (salvo que auto_open_ticket=False), vinculando la tarea
+        y evitando disputas huérfanas sin arbitraje.
         """
         try:
             valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged")
@@ -156,11 +162,39 @@ class MCPToolsHandler:
                 new_status=target_status,
                 branch_ref=branch_ref
             )
-            return json.dumps({
+
+            ticket = None
+            if target_status == "disputed" and auto_open_ticket:
+                existing = self.db.get_dispute_ticket_by_card(project_uuid, card_id)
+                if existing and existing.get("status") == "open":
+                    ticket = existing
+                else:
+                    reason = dispute_reason or f"Tarea {card_id} escalada a 'disputed' por el revisor {node_uuid}"
+                    contender_a = card.get("assignee_node_uuid") or "unassigned"
+                    contender_b = contender_node_uuid or node_uuid
+                    prop_a = branch_ref or card.get("branch_ref") or f"branch_{card_id}"
+                    prop_b = f"review_dispute_{card_id}_{node_uuid}"
+                    title = f"Disputa en {card_id}: {card.get('title', 'Tarea')}"
+                    ticket = self.bus.open_dispute_ticket(
+                        project_uuid=project_uuid,
+                        title=title,
+                        collision_reason=reason,
+                        contender_a_node=contender_a,
+                        contender_b_node=contender_b,
+                        proposal_a_ref=prop_a,
+                        proposal_b_ref=prop_b,
+                        card_id=card_id
+                    )
+
+            resp: Dict[str, Any] = {
                 "success": True,
-                "message": f"Tarea {card_id} actualizada a estado '{target_status}'",
+                "message": f"Tarea {card_id} actualizada a estado '{target_status}'" + (f" con ticket de arbitraje {ticket['ticket_id']}" if ticket else ""),
                 "card": updated
-            }, indent=2, ensure_ascii=False)
+            }
+            if ticket:
+                resp["dispute_ticket"] = ticket
+
+            return json.dumps(resp, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -718,6 +752,64 @@ class MCPToolsHandler:
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 
+    def get_dispute_ticket(
+        self,
+        project_uuid: str,
+        ticket_id: Optional[str] = None,
+        card_id: Optional[str] = None
+    ) -> str:
+        """
+        Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
+        incluyendo la matriz neutral anti-sycophancy y el resumen de votos emitidos.
+        """
+        try:
+            ticket = None
+            if ticket_id:
+                ticket = self.db.get_dispute_ticket(ticket_id)
+            elif card_id:
+                ticket = self.db.get_dispute_ticket_by_card(project_uuid, card_id)
+            else:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": "Debe especificar 'ticket_id' o 'card_id' para consultar la disputa."
+                })
+
+            if not ticket:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"No se encontró ticket de disputa para ticket_id='{ticket_id}' / card_id='{card_id}'."
+                })
+
+            t_id = ticket["ticket_id"]
+            votes_summary = self.db.get_jury_votes_summary(t_id)
+
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "ticket": ticket,
+                "votes_summary": votes_summary
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def list_dispute_tickets(
+        self,
+        project_uuid: str,
+        status: Optional[str] = None,
+        card_id: Optional[str] = None
+    ) -> str:
+        """
+        Lista los tickets de arbitraje técnico de un proyecto, con filtros opcionales de estado o card_id.
+        """
+        try:
+            tickets = self.db.list_dispute_tickets(project_uuid, status=status, card_id=card_id)
+            return self._wrap_response(project_uuid, {
+                "success": True,
+                "tickets": tickets,
+                "count": len(tickets)
+            })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
     def submit_agent_jury_evaluation(
         self,
         project_uuid: str,
@@ -843,3 +935,30 @@ class MCPToolsHandler:
             })
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def get_server_version(self) -> str:
+        """
+        Retorna la versión activa, commit de git y metadatos de runtime del servidor MCP2P.
+        Permite a los agentes validar automáticamente si están interactuando con la última versión del backend.
+        """
+        import subprocess
+        git_hash = "unknown"
+        try:
+            repo_root = Path(__file__).resolve().parent.parent.parent
+            git_hash = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(repo_root),
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            pass
+
+        return json.dumps({
+            "success": True,
+            "server_name": "mcp2p-server",
+            "server_version": "0.3.0",
+            "git_commit": git_hash,
+            "transport": "stdio",
+            "tools_count": 23,
+            "status": "ready"
+        }, indent=2, ensure_ascii=False)

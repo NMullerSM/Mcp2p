@@ -461,3 +461,86 @@ async def test_mcp_v2_audited_edge_cases(mcp_handler, tmp_path):
     assert err_scaffold_content["success"] is False
     assert "scaffold_decision requiere los campos" in err_scaffold_content["error"]
 
+
+@pytest.mark.anyio
+async def test_mcp_v3_dispute_discovery_and_versioning(mcp_handler):
+    """
+    Valida los requerimientos del Plan de Reparación V3:
+    - V3.2: release_kanban_task(target_status="disputed") dispara automáticamente open_dispute_ticket.
+    - V3.3: Herramientas de descubrimiento: get_dispute_ticket (por ticket_id y card_id) y list_dispute_tickets.
+    - V3.4: get_server_version retorna versión, build y herramientas registradas.
+    """
+    handler, db = mcp_handler
+    server = create_mcp_server(db_path=db.db_path)
+    projects = db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+
+    # 1. V3.4: get_server_version
+    res_ver = await server.call_tool("get_server_version", {})
+    ver_out = json.loads(res_ver.content[0].text)
+    assert ver_out["success"] is True
+    assert ver_out["server_version"] == "0.3.0"
+    assert ver_out["tools_count"] == 23
+
+    # 2. V3.2: Crear card, asignarla y transicionarla a disputed con creación automática de ticket
+    card_id = "CARD-V3-DISPUTE"
+    await server.call_tool("create_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": card_id,
+        "title": "Refactor de Conexiones P2P"
+    })
+    await server.call_tool("claim_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": card_id,
+        "node_uuid": "node_alpha"
+    })
+
+    # Nodo revisor (node_beta) escala a 'disputed' con motivo
+    res_dispute = await server.call_tool("release_kanban_task", {
+        "project_uuid": proj_uuid,
+        "card_id": card_id,
+        "node_uuid": "node_beta",
+        "target_status": "disputed",
+        "dispute_reason": "Divergencia entre WebRTC vs HTTP polling"
+    })
+    disp_out = json.loads(res_dispute.content[0].text)
+    assert disp_out["success"] is True
+    assert disp_out["card"]["status"] == "disputed"
+    assert "dispute_ticket" in disp_out
+    ticket_data = disp_out["dispute_ticket"]
+    t_id = ticket_data["ticket_id"]
+    assert ticket_data["card_id"] == card_id
+    assert "Divergencia entre WebRTC vs HTTP polling" in ticket_data["collision_reason"]
+
+    # 3. V3.3: Descubrimiento con get_dispute_ticket por card_id
+    res_get_by_card = await server.call_tool("get_dispute_ticket", {
+        "project_uuid": proj_uuid,
+        "card_id": card_id
+    })
+    card_ticket_out = json.loads(res_get_by_card.content[0].text)
+    assert card_ticket_out["success"] is True
+    assert card_ticket_out["ticket"]["ticket_id"] == t_id
+    assert card_ticket_out["ticket"]["contender_a_node"] == "node_alpha"
+    assert card_ticket_out["ticket"]["contender_b_node"] == "node_beta"
+
+    # 4. V3.3: Descubrimiento con get_dispute_ticket por ticket_id
+    res_get_by_id = await server.call_tool("get_dispute_ticket", {
+        "project_uuid": proj_uuid,
+        "ticket_id": t_id
+    })
+    id_ticket_out = json.loads(res_get_by_id.content[0].text)
+    assert id_ticket_out["success"] is True
+    assert id_ticket_out["ticket"]["card_id"] == card_id
+
+    # 5. V3.3: list_dispute_tickets
+    res_list = await server.call_tool("list_dispute_tickets", {
+        "project_uuid": proj_uuid,
+        "status": "open"
+    })
+    list_out = json.loads(res_list.content[0].text)
+    assert list_out["success"] is True
+    assert list_out["count"] >= 1
+    found = any(t["ticket_id"] == t_id for t in list_out["tickets"])
+    assert found is True
+
+

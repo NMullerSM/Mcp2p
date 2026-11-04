@@ -1133,6 +1133,45 @@ class DatabaseManager:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def list_dispute_tickets(
+        self,
+        project_uuid: str,
+        status: Optional[str] = None,
+        card_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lista tickets de disputa para un proyecto, con filtros opcionales de estado o card_id."""
+        query = "SELECT * FROM dispute_tickets WHERE project_uuid = ?"
+        params: List[Any] = [project_uuid]
+        if status and status != "all":
+            query += " AND status = ?"
+            params.append(status)
+        if card_id:
+            query += " AND card_id = ?"
+            params.append(card_id)
+        query += " ORDER BY created_at DESC;"
+
+        with self.get_connection() as conn:
+            cur = conn.execute(query, tuple(params))
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_dispute_ticket_by_card(
+        self,
+        project_uuid: str,
+        card_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Recupera el ticket de disputa más reciente asociado a una tarjeta Kanban."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT * FROM dispute_tickets 
+                WHERE project_uuid = ? AND card_id = ?
+                ORDER BY created_at DESC LIMIT 1;
+                """,
+                (project_uuid, card_id)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def add_jury_borda_score(
         self,
         vote_uuid: str,

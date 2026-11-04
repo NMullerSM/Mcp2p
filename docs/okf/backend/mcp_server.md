@@ -23,7 +23,7 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 | `get_kanban_board` | `project_uuid`, `status` | Consulta tarjetas Kanban filtradas por estado (`all`, `backlog`, `in_progress`, `in_review`, `disputed`, `merged`). |
 | `create_kanban_task` | `project_uuid`, `card_id`, `title`, `description` | Inserta nueva tarea en el `backlog` del proyecto. Acepta aliases `task_id`/`taskId`. |
 | `claim_kanban_task` | `project_uuid`, `card_id`, `node_uuid`, `duration_minutes` | Adquiere **lease atómico exclusivo** temporal para prevenir colisiones de agentes. |
-| `release_kanban_task` | `project_uuid`, `card_id`, `node_uuid`, `target_status`, `branch_ref` | Transiciona a `in_review`, `merged`, `backlog` o `disputed`. Permite a cualquier nodo escalar a `disputed`. |
+| `release_kanban_task` | `project_uuid`, `card_id`, `node_uuid`, `target_status`, `branch_ref`, `dispute_reason` | Transiciona a `in_review`, `merged`, `backlog` o `disputed`. Si se escala a `disputed`, dispara automáticamente la apertura del ticket en el Tribunal de Honor. |
 | `get_project_context` | `project_uuid` | Devuelve rutas de `app/`, `governance/`, rama huérfana y total de leases activos. |
 | `register_agent_node` | `node_uuid`, `developer_name`, `agent_id`, `reviewer_sla_hours` | Registra el agente en el enjambre o renueva su latido con su SLA autodeclarado. |
 
@@ -47,14 +47,17 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 | :--- | :--- | :--- |
 | `inspect_pr_and_recommend` | `project_uuid`, `pr_id_or_branch`, `reviewer_node_uuid`, `recommendation`, `analysis_summary`, `suggested_reply` | Cruza PR contra OKF y deja recomendación humana (`RECOMMEND_ACCEPT`, `RECOMMEND_CHANGES`, `RECOMMEND_REJECT`, `RECOMMEND_JURY`). |
 | `open_dispute_ticket` | `project_uuid`, `title`, `collision_reason`, `contender_a_node`, `contender_b_node`, `proposal_a_ref`, `proposal_b_ref` | Abre formalmente un ticket de juicio técnico en disputa e inicializa la Matriz Neutral Anti-Sycophancy. |
+| `get_dispute_ticket` | `project_uuid`, `ticket_id`, `card_id` | Consulta los detalles de una disputa, su matriz neutral y los votos emitidos por ticket_id o card_id. |
+| `list_dispute_tickets` | `project_uuid`, `status`, `card_id` | Lista todos los tickets de disputa registrados en el proyecto con filtros opcionales. |
 | `submit_agent_jury_evaluation` | `project_uuid`, `ticket_id`, `agent_id`, `evaluations_json`, `rationale` | Emite evaluación técnica ponderada (peso 1.5) en 5 dimensiones (KISS, Performance, Seguridad, Hicks, Testabilidad). |
 
-### Grupo E: Onboarding y Auditoría de Deriva
+### Grupo E: Onboarding, Auditoría de Deriva y Runtime
 | Herramienta | Parámetros Clave | Descripción |
 | :--- | :--- | :--- |
 | `scan_and_bootstrap_okf` | `project_uuid` | Escanea exhaustivamente código y docs existentes generando el Dossier Unificado de Alineación OKF. |
 | `get_alignment_dossier` | `project_uuid` | Recupera el Dossier de Alineación para revisión del humano o agentes inspectores. |
 | `audit_okf_drift` | `project_uuid` | Compara el código real en `app/` contra el OKF ratificado y reporta derivas arquitectónicas. |
+| `get_server_version` | Ninguno | Retorna versión del servidor (`0.3.0`), commit hash, recuento de herramientas (23) y estado operativo. |
 
 ---
 

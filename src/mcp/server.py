@@ -19,6 +19,9 @@ from src.mcp.tools import MCPToolsHandler
 from src.storage.db import DatabaseManager
 
 
+SERVER_VERSION = "0.3.0"
+
+
 def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
     """Crea e inicializa el servidor MCP con todas las herramientas registradas."""
     if db_path:
@@ -28,7 +31,7 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
         db = DatabaseManager.get_instance()
     handler = MCPToolsHandler(db_manager=db)
 
-    server = MCPServer("mcp2p-server")
+    server = MCPServer("mcp2p-server", version=SERVER_VERSION)
 
     # 1. Herramienta: Listar Proyectos
     @server.tool()
@@ -110,28 +113,41 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
         node_uuid: Optional[str] = None,
         target_status: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged"]] = "in_review",
         branch_ref: Optional[str] = None,
+        dispute_reason: Optional[str] = None,
+        contender_node_uuid: Optional[str] = None,
+        auto_open_ticket: bool = True,
         projectUuid: Optional[str] = None,
         cardId: Optional[str] = None,
         task_id: Optional[str] = None,
         taskId: Optional[str] = None,
         nodeUuid: Optional[str] = None,
         targetStatus: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged"]] = None,
-        branchRef: Optional[str] = None
+        branchRef: Optional[str] = None,
+        disputeReason: Optional[str] = None,
+        contenderNodeUuid: Optional[str] = None,
+        autoOpenTicket: Optional[bool] = None
     ) -> str:
         """
         Transiciona una tarea a 'in_review', 'merged' o la libera a 'backlog' adjuntando la rama del código.
+        Si se escala a 'disputed', dispara automáticamente la apertura de un ticket en el Tribunal de Honor Borda.
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_card = card_id or cardId or task_id or taskId or ""
         resolved_node = node_uuid or nodeUuid or ""
         resolved_status = targetStatus or target_status
         resolved_branch = branchRef or branch_ref
+        resolved_reason = disputeReason if disputeReason is not None else dispute_reason
+        resolved_contender = contenderNodeUuid if contenderNodeUuid is not None else contender_node_uuid
+        resolved_auto = autoOpenTicket if autoOpenTicket is not None else auto_open_ticket
         return handler.release_kanban_task(
             project_uuid=resolved_proj,
             card_id=resolved_card,
             node_uuid=resolved_node,
             target_status=resolved_status,
-            branch_ref=resolved_branch
+            branch_ref=resolved_branch,
+            dispute_reason=resolved_reason,
+            contender_node_uuid=resolved_contender,
+            auto_open_ticket=resolved_auto
         )
 
     # 6. Herramienta: Obtener Contexto del Proyecto
@@ -554,6 +570,58 @@ def create_mcp_server(db_path: Optional[str] = None) -> MCPServer:
         """
         resolved_proj = project_uuid or projectUuid or ""
         return handler.audit_okf_drift(project_uuid=resolved_proj)
+
+    # 21. Herramienta: Consultar Ticket de Disputa
+    @server.tool()
+    def get_dispute_ticket(
+        project_uuid: Optional[str] = None,
+        ticket_id: Optional[str] = None,
+        card_id: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        ticketId: Optional[str] = None,
+        cardId: Optional[str] = None
+    ) -> str:
+        """
+        Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
+        incluyendo la matriz neutral anti-sycophancy y las evaluaciones emitidas.
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        resolved_ticket = ticket_id or ticketId
+        resolved_card = card_id or cardId
+        return handler.get_dispute_ticket(
+            project_uuid=resolved_proj,
+            ticket_id=resolved_ticket,
+            card_id=resolved_card
+        )
+
+    # 22. Herramienta: Listar Tickets de Disputa
+    @server.tool()
+    def list_dispute_tickets(
+        project_uuid: Optional[str] = None,
+        status: Optional[str] = None,
+        card_id: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        cardId: Optional[str] = None
+    ) -> str:
+        """
+        Lista los tickets de arbitraje técnico de un proyecto, opcionalmente filtrados por status o card_id.
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        resolved_card = card_id or cardId
+        return handler.list_dispute_tickets(
+            project_uuid=resolved_proj,
+            status=status,
+            card_id=resolved_card
+        )
+
+    # 23. Herramienta: Consultar Versión del Servidor
+    @server.tool()
+    def get_server_version() -> str:
+        """
+        Retorna la versión activa, commit de git y metadatos de runtime del servidor MCP2P.
+        Permite a los agentes validar si el proceso en ejecución está actualizado.
+        """
+        return handler.get_server_version()
 
     return server
 

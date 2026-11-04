@@ -51,18 +51,24 @@ tools:
     description: "Negociación y reparto de tareas del backlog entre nodos con adquisición atómica opcional."
     parameters: [project_uuid, sender_node_uuid, session_id, distribution_plan_json, apply_immediately]
 
-  # 15-17: HITL Guardrail y Tribunal de Honor Borda
+  # 15-19: HITL Guardrail y Tribunal de Honor Borda
   - name: "inspect_pr_and_recommend"
     description: "Cruza PR contra OKF y emite recomendación para el humano (RECOMMEND_ACCEPT, RECOMMEND_CHANGES, RECOMMEND_REJECT, RECOMMEND_JURY)."
     parameters: [project_uuid, pr_id_or_branch, reviewer_node_uuid, recommendation, analysis_summary, suggested_reply]
   - name: "open_dispute_ticket"
     description: "Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."
     parameters: [project_uuid, title, collision_reason, contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref, card_id, ticket_id, proposal_c_ref, num_evaluators]
+  - name: "get_dispute_ticket"
+    description: "Consulta los detalles de una disputa técnica, su matriz neutral y evaluaciones por ticket_id o card_id."
+    parameters: [project_uuid, ticket_id, card_id]
+  - name: "list_dispute_tickets"
+    description: "Lista todos los tickets de disputa registrados para un proyecto, con filtros opcionales."
+    parameters: [project_uuid, status, card_id]
   - name: "submit_agent_jury_evaluation"
     description: "Emite la evaluación ponderada (peso 1.5) de un jurado en 5 dimensiones (KISS, Performance, Seguridad, Hicks, Testabilidad)."
     parameters: [project_uuid, ticket_id, agent_id, evaluations_json, rationale]
 
-  # 18-20: Bootstrap OKF y Auditoría de Deriva
+  # 20-23: Bootstrap OKF, Auditoría de Deriva e Introspección
   - name: "scan_and_bootstrap_okf"
     description: "Escanea exhaustivamente código y documentación existente generando el Dossier Unificado de Alineación OKF."
     parameters: [project_uuid]
@@ -72,3 +78,6 @@ tools:
   - name: "audit_okf_drift"
     description: "Compara código real en app/ contra gobernanza ratificada y reporta discrepancias."
     parameters: [project_uuid]
+  - name: "get_server_version"
+    description: "Retorna la versión activa del servidor (0.3.0), commit git y recuento de herramientas registradas."
+    parameters: []
