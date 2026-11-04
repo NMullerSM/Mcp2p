@@ -1494,7 +1494,6 @@ class ApiBridge:
                         gen_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
                             eligible_humans_count=len(all_nodes),
                             ticket_id=t["ticket_id"],
-                            num_evaluators=3,
                             seed=t["ticket_id"]
                         )
                         if not matrix_list:
