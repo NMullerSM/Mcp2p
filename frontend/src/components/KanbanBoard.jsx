@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, User, GitBranch, CheckSquare, ExternalLink } from 'lucide-react';
+import { Lock, User, GitBranch, CheckSquare, ExternalLink, Maximize2, Minimize2 } from 'lucide-react';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Por Hacer', dotColor: '#94a3b8' },
@@ -11,6 +11,7 @@ const COLUMNS = [
 export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
   const [draggedCardId, setDraggedCardId] = useState(null);
   const [dragOverCol, setDragOverCol] = useState(null);
+  const [expandedCol, setExpandedCol] = useState(null);
 
   const handleDragStart = (e, cardId) => {
     setDraggedCardId(cardId);
@@ -67,6 +68,21 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
         });
 
         const isDragOver = dragOverCol === col.id;
+        const isExpanded = expandedCol === col.id;
+        const isAnyExpanded = Boolean(expandedCol);
+
+        let flexStyle = '1 1 270px';
+        let minWidthStyle = '250px';
+        let maxWidthStyle = '380px';
+        if (isExpanded) {
+          flexStyle = '3 1 540px';
+          minWidthStyle = '380px';
+          maxWidthStyle = 'none';
+        } else if (isAnyExpanded) {
+          flexStyle = '0 0 170px';
+          minWidthStyle = '150px';
+          maxWidthStyle = '190px';
+        }
 
         return (
           <div
@@ -75,16 +91,17 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
             onDragLeave={(e) => handleDragLeave(e, col.id)}
             onDrop={(e) => handleDrop(e, col.id)}
             style={{
-              flex: '1 1 270px',
-              minWidth: '250px',
-              maxWidth: '380px',
+              flex: flexStyle,
+              minWidth: minWidthStyle,
+              maxWidth: maxWidthStyle,
               backgroundColor: isDragOver ? 'var(--bg-subtle)' : 'var(--bg-card)',
               border: isDragOver ? '2px dashed var(--accent-primary)' : '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-lg)',
               display: 'flex',
               flexDirection: 'column',
-              padding: '14px',
-              transition: 'var(--transition)'
+              padding: isAnyExpanded && !isExpanded ? '10px' : '14px',
+              transition: 'var(--transition)',
+              opacity: isAnyExpanded && !isExpanded ? 0.8 : 1
             }}
           >
             {/* Column Header */}
@@ -96,26 +113,56 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
               paddingBottom: '10px',
               borderBottom: '1px solid var(--border-subtle)'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
                 <span style={{
                   width: '8px',
                   height: '8px',
                   borderRadius: '50%',
-                  backgroundColor: col.dotColor
+                  backgroundColor: col.dotColor,
+                  flexShrink: 0
                 }} />
-                <span style={{ fontSize: '13px', fontWeight: 600 }}>{col.title}</span>
+                <span style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}>
+                  {col.title}
+                </span>
               </div>
-              <span style={{
-                fontSize: '11px',
-                fontFamily: 'var(--font-mono)',
-                backgroundColor: 'var(--bg-subtle)',
-                padding: '2px 7px',
-                borderRadius: 'var(--radius-sm)',
-                fontWeight: 600,
-                color: 'var(--text-muted)'
-              }}>
-                {colCards.length}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                <span style={{
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  padding: '2px 7px',
+                  borderRadius: 'var(--radius-sm)',
+                  fontWeight: 600,
+                  color: 'var(--text-muted)'
+                }}>
+                  {colCards.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setExpandedCol(isExpanded ? null : col.id)}
+                  title={isExpanded ? "Restaurar tamaño normal de columnas" : "Expandir columna para lectura amplia"}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: isExpanded ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                    border: 'none',
+                    color: isExpanded ? 'var(--accent-primary)' : 'var(--text-muted)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '3px 4px',
+                    cursor: 'pointer',
+                    transition: 'var(--transition)'
+                  }}
+                >
+                  {isExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                </button>
+              </div>
             </div>
 
             {/* Cards List */}

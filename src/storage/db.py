@@ -7,6 +7,7 @@ Subsistema Multi-Proyecto con Aislamiento Estricto de Doble Repositorio (app y g
 from __future__ import annotations
 
 import os
+import json
 import platform
 import sqlite3
 import subprocess
@@ -88,7 +89,7 @@ class DatabaseManager:
                         if "related_ids_json" not in cols:
                             conn.execute("ALTER TABLE kanban_cards ADD COLUMN related_ids_json TEXT DEFAULT '[]';")
                         sql_schema = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='kanban_cards';").fetchone()[0]
-                        if "'discarded'" not in sql_schema:
+                        if "'discarded'" not in sql_schema or "'rejected'" not in sql_schema:
                             conn.executescript("""
                             CREATE TABLE IF NOT EXISTS kanban_cards_dg_tmp (
                                 card_id TEXT NOT NULL,
@@ -96,7 +97,7 @@ class DatabaseManager:
                                 title TEXT NOT NULL,
                                 description TEXT DEFAULT '',
                                 acceptance_criteria TEXT DEFAULT '',
-                                status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded')) NOT NULL DEFAULT 'backlog',
+                                status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded', 'rejected')) NOT NULL DEFAULT 'backlog',
                                 assignee_node_uuid TEXT,
                                 lease_expires_at DATETIME,
                                 branch_ref TEXT,
@@ -153,6 +154,8 @@ class DatabaseManager:
                             conn.execute("ALTER TABLE dispute_tickets ADD COLUMN proposal_c_ref TEXT DEFAULT '';")
                         if "jury_matrix_json" not in dt_cols:
                             conn.execute("ALTER TABLE dispute_tickets ADD COLUMN jury_matrix_json TEXT DEFAULT '[]';")
+                        if "escalation_recommendation" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN escalation_recommendation TEXT DEFAULT '';")
 
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
@@ -191,7 +194,7 @@ class DatabaseManager:
                     title TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     acceptance_criteria TEXT DEFAULT '',
-                    status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded')) NOT NULL DEFAULT 'backlog',
+                    status TEXT CHECK(status IN ('backlog', 'in_progress', 'in_review', 'disputed', 'merged', 'consolidated', 'discarded', 'rejected')) NOT NULL DEFAULT 'backlog',
                     assignee_node_uuid TEXT,
                     lease_expires_at DATETIME,
                     branch_ref TEXT,
@@ -229,6 +232,7 @@ class DatabaseManager:
                     proposal_a_ref TEXT NOT NULL,
                     proposal_b_ref TEXT NOT NULL,
                     proposal_c_ref TEXT DEFAULT '',
+                    escalation_recommendation TEXT DEFAULT '',
                     jury_matrix_json TEXT DEFAULT '[]',
                     status TEXT CHECK(status IN ('open', 'provisional_ruling', 'ratified', 'challenged', 'resolved_hitl')) NOT NULL DEFAULT 'open',
                     winning_quadrant TEXT CHECK(winning_quadrant IN ('OPTION_A', 'OPTION_B', 'ASYMMETRIC_HYBRID', 'THIRD_WAY_C')),
@@ -613,7 +617,8 @@ class DatabaseManager:
             commit_message = f"sync(kanban): {card_id} [{status}] {title}"
             if description:
                 commit_message += f"\n\n{description}"
-            okf.commit_gov_file(gov_dir, yaml_path, commit_message)
+            should_push = status != "in_review"
+            okf.commit_gov_file(gov_dir, yaml_path, commit_message, push_now=should_push)
         except Exception as exc:
             logger.warning(f"Error sincronizando tarjeta {card_data.get('card_id')} a YAML OKF: {exc}")
 
@@ -1047,6 +1052,16 @@ class DatabaseManager:
                 )
                 return cur.rowcount > 0
 
+    def remove_collaborator(self, project_uuid: str, node_uuid: str) -> bool:
+        """Remueve a un colaborador o nodo del proyecto."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "DELETE FROM project_collaborators WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                )
+                return cur.rowcount > 0
+
     # ==========================
     # Configuraciones Locales (App Settings)
     # ==========================
@@ -1097,10 +1112,12 @@ class DatabaseManager:
         proposal_b_ref: str,
         card_id: Optional[str] = None,
         proposal_c_ref: str = "",
-        jury_matrix_json: str = "[]"
+        jury_matrix_json: str = "[]",
+        escalation_recommendation: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Crea un nuevo ticket de arbitraje técnico con soporte para Tercera Vía (Síntesis) y Matriz Neutral."""
+        """Crea un nuevo ticket de arbitraje técnico con soporte para Tercera Vía (Síntesis), Matriz Neutral y recomendación de escalamiento."""
         now_str = datetime.now(timezone.utc).isoformat()
+        esc_rec = escalation_recommendation or ""
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
@@ -1108,12 +1125,12 @@ class DatabaseManager:
                     INSERT INTO dispute_tickets (
                         ticket_id, project_uuid, card_id, title, collision_reason,
                         contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
-                        proposal_c_ref, jury_matrix_json, status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?);
+                        proposal_c_ref, jury_matrix_json, status, escalation_recommendation, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?);
                     """,
                     (ticket_id, project_uuid, card_id, title, collision_reason,
                      contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
-                     proposal_c_ref, jury_matrix_json, now_str)
+                     proposal_c_ref, jury_matrix_json, esc_rec, now_str)
                 )
         return self.get_dispute_ticket(ticket_id) or {}
 

@@ -75,10 +75,12 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
     const { itemType, itemId, decision } = confirmRequest;
     const defaultNote =
       itemType === 'jury_vote'
-        ? `Voto humano confirmado (${decision}) con peso 2.0 y supremacía humana.`
+        ? `Voto decisorio con firma criptográfica humana (${decision}).`
         : itemType === 'pr_merge'
         ? decision === 'APPROVED'
           ? 'Revisión aprobada y fusionada mediante doble confirmación HITL.'
+          : decision === 'REJECTED'
+          ? 'Entrega rechazada mediante revisión HITL.'
           : 'Devuelto a En Proceso tras revisión HITL.'
         : itemType === 'bootstrap_dossier'
         ? 'Ratificación consciente de Dossier de Alineación Inicial OKF v2 con firma Ed25519.'
@@ -135,7 +137,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             Bandeja HITL — Inspección Dialéctica y Firma Humana
           </h2>
           <p style={{ fontSize: '12px', margin: '3px 0 0', color: 'var(--text-secondary)' }}>
-            Haz clic en cualquier tarjeta para desplegar las propuestas completas, el proceso de <strong>Mayéutica de Subagentes</strong> y los criterios de aceptación antes de emitir tu firma <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>Ed25519</span>.
+            Haz clic en cualquier tarjeta para desplegar las propuestas completas, el proceso de <strong>Mayéutica de Subagentes</strong> y los criterios de aceptación antes de emitir tu firma.
           </p>
         </div>
 
@@ -189,8 +191,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 Dossier Unificado de Ingesta y Alineación Inicial OKF v2
               </span>
             </div>
-            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
-              Firma Ed25519 Requerida
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+              Ratificación Requerida
             </span>
           </div>
 
@@ -228,7 +230,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 itemId: 'ALIGNMENT_DOSSIER',
                 decision: 'APPROVED',
                 title: 'Ratificar Dossier de Alineación Inicial OKF v2',
-                summaryText: `Se estampará tu firma Ed25519 sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado ALIGNED_OKF y se poblará docs/okf/ sin modificar tu código fuente.`,
+                summaryText: `Se estampará tu firma sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado alineado (ALIGNED_OKF) y se inicializará la gobernanza documental sin modificar tu código fuente.`,
                 badgeLabel: 'RATIFICAR OKF',
                 badgeColor: '#10b981'
               })}
@@ -246,7 +248,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 cursor: 'pointer'
               }}
             >
-              <CheckCircle2 size={13} /> Ratificar con Firma Ed25519
+              <CheckCircle2 size={13} /> Ratificar Alineación
             </button>
           </div>
         </div>
@@ -334,8 +336,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
               Decisiones Arquitectónicas ({approvals.pending_decisions.length})
             </span>
-            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
-              docs/okf/decisions/
+            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+              Decisiones arquitectónicas
             </span>
           </div>
 
@@ -413,7 +415,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       itemId: dec.item_id,
                       decision: 'APPROVED',
                       title: `Aprobar y Promover a ADR: ${dec.item_id}`,
-                      summaryText: `Vas a firmar criptográficamente con Ed25519 la decisión "${dec.title}" y promoverla al registro inmutable docs/okf/architecture/adrs/.`,
+                      summaryText: `Vas a firmar criptográficamente con Ed25519 la decisión "${dec.title}" y promoverla al Registro de decisiones de arquitectura ADR.`,
                       badgeLabel: 'PROMOVER A ADR',
                       badgeColor: 'var(--accent-primary)'
                     })}
@@ -442,7 +444,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       itemId: dec.item_id,
                       decision: 'DISCARDED',
                       title: `Descartar Decisión: ${dec.item_id}`,
-                      summaryText: `Vas a descartar formalmente la propuesta "${dec.title}" y archivarla en docs/okf/architecture/discarded/.`,
+                      summaryText: `Vas a descartar formalmente la propuesta "${dec.title}" y archivarla en Propuestas descartadas.`,
                       badgeLabel: 'DESCARTAR',
                       badgeColor: 'var(--accent-danger)'
                     })}
@@ -478,8 +480,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
               Juicios de Honor Abiertos ({approvals.open_disputes.length})
             </span>
-            <span style={{ fontSize: '11px', color: '#a855f7', fontWeight: 600 }}>
-              Humano 2.0 pts (57.1%) · Umbral 80%
+            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              status: open
             </span>
           </div>
 
@@ -507,29 +509,76 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                   <span style={{ fontWeight: 700, fontSize: '12.5px', color: 'var(--text-primary)' }}>
                     {dispute.title}
                   </span>
-                  <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', flexShrink: 0 }}>
+                  <span style={{
+                    fontSize: '10px',
+                    fontFamily: 'var(--font-mono)',
+                    color: '#c084fc',
+                    backgroundColor: 'var(--bg-surface)',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    border: '1px solid var(--border-subtle)',
+                    flexShrink: 0
+                  }}>
                     {dispute.ticket_id}
                   </span>
                 </div>
 
-                <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   <strong>Colisión:</strong> {dispute.collision_reason}
                 </p>
 
-                {/* Resumen compacto de las 3 Vías Dialécticas en la tarjeta */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', backgroundColor: 'var(--bg-surface)', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <strong style={{ color: 'var(--accent-primary)' }}>Tesis (A):</strong> {dispute.proposal_a_ref}
+                {dispute.is_outdated_matrix && (
+                  <div style={{
+                    fontSize: '11px',
+                    color: '#eab308',
+                    backgroundColor: 'rgba(234, 179, 8, 0.1)',
+                    border: '1px solid rgba(234, 179, 8, 0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '5px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}>
+                    <Clock size={12} />
+                    <span>{dispute.matrix_warning || 'Matriz de jurado generada con versión previa del motor (sin directivas de cámara limpia 2.0.0).'}</span>
                   </div>
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <strong style={{ color: '#c084fc' }}>Antítesis (B):</strong> {dispute.proposal_b_ref}
-                  </div>
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <strong style={{ color: '#10b981' }}>Síntesis (C):</strong> {dispute.proposal_c_ref || 'Tercera vía híbrida sintetizada por jurado neutral'}
-                  </div>
-                </div>
+                )}
 
-                {/* Enlace a Mayéutica + Tarjeta Kanban asociada */}
+                {dispute.escalation_recommendation && (
+                  <div style={{
+                    fontSize: '11px',
+                    color: 'var(--accent-warning)',
+                    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '5px 8px'
+                  }}>
+                    <strong>Recomendación del agente:</strong> {dispute.escalation_recommendation}
+                  </div>
+                )}
+
+                {/* Las 3 Vías Dialécticas: colapsadas por defecto (Ley de Hick — reduce la
+                    información simultánea en la vista de lista, igual que la tarjeta de
+                    "En revisión" solo muestra una descripción acotada en reposo). */}
+                <details style={{ fontSize: '11px', color: 'var(--text-secondary)' }} onClick={(e) => e.stopPropagation()}>
+                  <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    Ver las 3 propuestas en disputa (A / B / C)
+                  </summary>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', backgroundColor: 'var(--bg-surface)', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', marginTop: '6px' }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: 'var(--accent-primary)' }}>Tesis (A):</strong> {dispute.proposal_a_ref}
+                    </div>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: '#c084fc' }}>Antítesis (B):</strong> {dispute.proposal_b_ref}
+                    </div>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: '#10b981' }}>Síntesis (C):</strong> {dispute.proposal_c_ref || 'Tercera vía híbrida sintetizada por jurado neutral'}
+                    </div>
+                  </div>
+                </details>
+
+                {/* Enlace a Mayéutica + Tarjeta Kanban asociada (mismo patrón que "Inspeccionar
+                    entrega y criterios" + "Ver rama" de la tarjeta de En Revisión) */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
@@ -547,7 +596,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       cursor: 'pointer'
                     }}
                   >
-                    <Eye size={13} /> Ver Mayéutica ({dispute.mayeutic_discussions?.length || 3} subagentes) y Propuestas
+                    <Eye size={13} /> Inspeccionar mayéutica ({dispute.mayeutic_discussions?.length || 3} subagentes)
                   </button>
 
                   {dispute.card_id && onOpenCard && (
@@ -572,85 +621,97 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 </div>
 
                 {/* 3 Botones de Votación: Tesis (A), Antítesis (B) y Síntesis / Tercera Vía (C) */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '4px' }} onClick={(e) => e.stopPropagation()}>
-                  <button
-                    disabled={actionInProgress === dispute.ticket_id || dispute.has_voted}
-                    onClick={() => requestDoubleConfirmation({
-                      itemType: 'jury_vote',
-                      itemId: dispute.ticket_id,
-                      decision: 'OPTION_A',
-                      title: `Votar por Tesis (Opción A) en ${dispute.ticket_id}`,
-                      summaryText: `Propuesta A: ${dispute.proposal_a_ref}\n\nTu voto humano aporta 2.0 puntos directos con supremacía decisoria sobre el pool de subagentes.`,
-                      badgeLabel: 'VOTAR TESIS (A)',
-                      badgeColor: 'var(--accent-primary)'
-                    })}
-                    style={{
-                      padding: '6px 4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      backgroundColor: 'rgba(56, 189, 248, 0.15)',
-                      color: 'var(--accent-primary)',
-                      border: '1px solid rgba(56, 189, 248, 0.35)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: dispute.has_voted ? 'default' : 'pointer'
-                    }}
-                  >
-                    Tesis (A)
-                  </button>
-                  <button
-                    disabled={actionInProgress === dispute.ticket_id || dispute.has_voted}
-                    onClick={() => requestDoubleConfirmation({
-                      itemType: 'jury_vote',
-                      itemId: dispute.ticket_id,
-                      decision: 'OPTION_B',
-                      title: `Votar por Antítesis (Opción B) en ${dispute.ticket_id}`,
-                      summaryText: `Propuesta B: ${dispute.proposal_b_ref}\n\nTu voto humano aporta 2.0 puntos directos con supremacía decisoria sobre el pool de subagentes.`,
-                      badgeLabel: 'VOTAR ANTÍTESIS (B)',
-                      badgeColor: '#a855f7'
-                    })}
-                    style={{
-                      padding: '6px 4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                      color: '#c084fc',
-                      border: '1px solid rgba(168, 85, 247, 0.35)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: dispute.has_voted ? 'default' : 'pointer'
-                    }}
-                  >
-                    Antítesis (B)
-                  </button>
-                  <button
-                    disabled={actionInProgress === dispute.ticket_id || dispute.has_voted}
-                    onClick={() => requestDoubleConfirmation({
-                      itemType: 'jury_vote',
-                      itemId: dispute.ticket_id,
-                      decision: 'THIRD_WAY_C',
-                      title: `Votar por Síntesis (Tercera Vía C) en ${dispute.ticket_id}`,
-                      summaryText: `Síntesis C: ${dispute.proposal_c_ref}\n\nTu voto humano aporta 2.0 puntos directos con supremacía decisoria sobre el pool de subagentes.`,
-                      badgeLabel: 'VOTAR SÍNTESIS (C)',
-                      badgeColor: '#10b981'
-                    })}
-                    style={{
-                      padding: '6px 4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                      color: '#10b981',
-                      border: '1px solid rgba(16, 185, 129, 0.35)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: dispute.has_voted ? 'default' : 'pointer'
-                    }}
-                  >
-                    Síntesis (C)
-                  </button>
-                </div>
-
-                {dispute.has_voted && (
-                  <span style={{ fontSize: '10px', color: '#10b981', textAlign: 'center', marginTop: '2px' }}>
-                    ✓ Ya has emitido tu voto humano de 2.0 puntos en este ticket.
-                  </span>
+                {dispute.has_voted ? (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    padding: '8px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    color: 'var(--accent-success)',
+                    fontSize: '11px',
+                    fontWeight: 600
+                  }}>
+                    <CheckCircle2 size={13} /> Voto decisorio registrado para este ticket
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '4px' }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      disabled={actionInProgress === dispute.ticket_id}
+                      onClick={() => requestDoubleConfirmation({
+                        itemType: 'jury_vote',
+                        itemId: dispute.ticket_id,
+                        decision: 'OPTION_A',
+                        title: `Votar por Tesis (Opción A) en ${dispute.ticket_id}`,
+                        summaryText: `Propuesta A: ${dispute.proposal_a_ref}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
+                        badgeLabel: 'VOTAR TESIS (A)',
+                        badgeColor: 'var(--accent-primary)'
+                      })}
+                      style={{
+                        padding: '7px 4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                        color: 'var(--accent-primary)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Tesis (A)
+                    </button>
+                    <button
+                      disabled={actionInProgress === dispute.ticket_id}
+                      onClick={() => requestDoubleConfirmation({
+                        itemType: 'jury_vote',
+                        itemId: dispute.ticket_id,
+                        decision: 'OPTION_B',
+                        title: `Votar por Antítesis (Opción B) en ${dispute.ticket_id}`,
+                        summaryText: `Propuesta B: ${dispute.proposal_b_ref}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
+                        badgeLabel: 'VOTAR ANTÍTESIS (B)',
+                        badgeColor: '#a855f7'
+                      })}
+                      style={{
+                        padding: '7px 4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                        color: '#c084fc',
+                        border: '1px solid rgba(168, 85, 247, 0.35)',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Antítesis (B)
+                    </button>
+                    <button
+                      disabled={actionInProgress === dispute.ticket_id}
+                      onClick={() => requestDoubleConfirmation({
+                        itemType: 'jury_vote',
+                        itemId: dispute.ticket_id,
+                        decision: 'THIRD_WAY_C',
+                        title: `Votar por Síntesis (Tercera Vía C) en ${dispute.ticket_id}`,
+                        summaryText: `Síntesis C: ${dispute.proposal_c_ref || 'Tercera vía sintetizada'}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
+                        badgeLabel: 'VOTAR SÍNTESIS (C)',
+                        badgeColor: '#10b981'
+                      })}
+                      style={{
+                        padding: '7px 4px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                        color: '#10b981',
+                        border: '1px solid rgba(16, 185, 129, 0.35)',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Síntesis (C)
+                    </button>
+                  </div>
                 )}
               </div>
             ))
@@ -766,6 +827,34 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     onClick={() => requestDoubleConfirmation({
                       itemType: 'pr_merge',
                       itemId: pr.card_id,
+                      decision: 'REJECTED',
+                      title: `Rechazar Tarea ${pr.card_id}: ${pr.title}`,
+                      summaryText: `Rama asociada: ${pr.branch_ref || 'main'}\n\nLa entrega será rechazada formalmente y la tarjeta pasará a estado Rechazado (rejected).`,
+                      badgeLabel: 'RECHAZAR ENTREGA',
+                      badgeColor: '#ef4444'
+                    })}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px',
+                      backgroundColor: 'transparent',
+                      color: 'var(--accent-danger)',
+                      border: '1px solid rgba(239, 68, 68, 0.4)',
+                      padding: '7px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={12} /> Rechazar
+                  </button>
+                  <button
+                    disabled={actionInProgress === pr.card_id}
+                    onClick={() => requestDoubleConfirmation({
+                      itemType: 'pr_merge',
+                      itemId: pr.card_id,
                       decision: 'APPROVED',
                       title: `Aprobar y Fusionar Tarea ${pr.card_id}: ${pr.title}`,
                       summaryText: `Rama asociada: ${pr.branch_ref || 'main'}\nCriterios verificados: ${pr.acceptance_criteria || 'Estándar OKF'}\n\nSe fusionará la rama y la tarjeta pasará a estado Consolidado (merged) bajo tu firma Ed25519.`,
@@ -816,7 +905,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 Trazabilidad Histórica: Precedentes y Juicios Ratificados ({approvals.history_precedents.length})
               </span>
               <p style={{ margin: '3px 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
-                Registro inmutable de dictámenes y ADRs almacenados en <code style={{ fontFamily: 'var(--font-mono)' }}>docs/okf/architecture/precedents_index.yaml</code> y <code style={{ fontFamily: 'var(--font-mono)' }}>rulings/*.yaml</code>.
+                Registro inmutable de dictámenes y actas de juicio en la gobernanza OKF.
               </p>
             </div>
             <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', fontWeight: 600 }}>
@@ -1085,7 +1174,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     gap: '10px'
                   }}>
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      Fase 3 — Emisión de Voto Humano Decisorio (Peso 2.0 pts vs Cap 1.5 de Subagentes · Umbral 80%)
+                      Fase 3 — Emisión de Voto Humano Decisorio con Firma Criptográfica
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                       <button
@@ -1266,53 +1355,89 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
-                    <button
-                      onClick={() => requestDoubleConfirmation({
-                        itemType: 'pr_merge',
-                        itemId: inspectedItem.data.card_id,
-                        decision: 'DISCARDED',
-                        title: `Devolver ${inspectedItem.data.card_id} a En Proceso`,
-                        summaryText: `La tarea "${inspectedItem.data.title}" volverá a la columna En Proceso (in_progress) para iteración adicional.`,
-                        badgeLabel: 'SOLICITAR CAMBIOS',
-                        badgeColor: 'var(--accent-danger)'
-                      })}
-                      style={{
-                        padding: '8px 14px',
-                        fontSize: '12px',
-                        fontWeight: 600,
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-subtle)',
-                        backgroundColor: 'transparent',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Devolver a En Proceso
-                    </button>
-                    <button
-                      onClick={() => requestDoubleConfirmation({
-                        itemType: 'pr_merge',
-                        itemId: inspectedItem.data.card_id,
-                        decision: 'APPROVED',
-                        title: `Aprobar y Fusionar ${inspectedItem.data.card_id}: ${inspectedItem.data.title}`,
-                        summaryText: `Rama asociada: ${inspectedItem.data.branch_ref || 'main'}\n\nSe fusionará la entrega y la tarjeta pasará a estado Consolidado (merged) con tu firma Ed25519.`,
-                        badgeLabel: 'APROBAR Y FUSIONAR',
-                        badgeColor: '#10b981'
-                      })}
-                      style={{
-                        padding: '8px 18px',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        borderRadius: 'var(--radius-sm)',
-                        border: 'none',
-                        backgroundColor: '#10b981',
-                        color: '#ffffff',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Aprobar y Fusionar Entrega
-                    </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                      <button
+                        type="button"
+                        onClick={() => requestDoubleConfirmation({
+                          itemType: 'pr_merge',
+                          itemId: inspectedItem.data.card_id,
+                          decision: 'REJECTED',
+                          title: `Rechazar Entrega ${inspectedItem.data.card_id}: ${inspectedItem.data.title}`,
+                          summaryText: `Rama asociada: ${inspectedItem.data.branch_ref || 'main'}\n\nLa entrega será rechazada formalmente y la tarjeta pasará a estado Rechazado (rejected).`,
+                          badgeLabel: 'RECHAZAR ENTREGA',
+                          badgeColor: '#ef4444'
+                        })}
+                        style={{
+                          padding: '8px 16px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid rgba(239, 68, 68, 0.4)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          color: '#ef4444',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Rechazar Entrega
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => requestDoubleConfirmation({
+                          itemType: 'pr_merge',
+                          itemId: inspectedItem.data.card_id,
+                          decision: 'APPROVED',
+                          title: `Aprobar y Fusionar ${inspectedItem.data.card_id}: ${inspectedItem.data.title}`,
+                          summaryText: `Rama asociada: ${inspectedItem.data.branch_ref || 'main'}\n\nSe fusionará la entrega y la tarjeta pasará a estado Consolidado (merged) con tu firma Ed25519.`,
+                          badgeLabel: 'APROBAR Y FUSIONAR',
+                          badgeColor: '#10b981'
+                        })}
+                        style={{
+                          padding: '8px 18px',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          borderRadius: 'var(--radius-sm)',
+                          border: 'none',
+                          backgroundColor: '#10b981',
+                          color: '#ffffff',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Aprobar y Fusionar Entrega
+                      </button>
+                    </div>
+
+                    <details style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)' }}>
+                        Opciones avanzadas
+                      </summary>
+                      <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          onClick={() => requestDoubleConfirmation({
+                            itemType: 'pr_merge',
+                            itemId: inspectedItem.data.card_id,
+                            decision: 'DISCARDED',
+                            title: `Devolver ${inspectedItem.data.card_id} a En Proceso`,
+                            summaryText: `La tarea "${inspectedItem.data.title}" volverá a la columna En Proceso (in_progress) para iteración adicional.`,
+                            badgeLabel: 'SOLICITAR CAMBIOS',
+                            badgeColor: 'var(--accent-warning)'
+                          })}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '11px',
+                            fontWeight: 500,
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-subtle)',
+                            backgroundColor: 'transparent',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Devolver a En Proceso (Solicitar cambios)
+                        </button>
+                      </div>
+                    </details>
                   </div>
                 </>
               )}
@@ -1413,7 +1538,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                         itemId: inspectedItem.data.item_id,
                         decision: 'DISCARDED',
                         title: `Descartar Decisión ${inspectedItem.data.item_id}`,
-                        summaryText: `Se moverá "${inspectedItem.data.title}" a docs/okf/architecture/discarded/ con tu firma de rechazo.`,
+                        summaryText: `Se moverá "${inspectedItem.data.title}" a Propuestas descartadas con tu firma de rechazo.`,
                         badgeLabel: 'DESCARTAR',
                         badgeColor: 'var(--accent-danger)'
                       })}
@@ -1436,7 +1561,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                         itemId: inspectedItem.data.item_id,
                         decision: 'APPROVED',
                         title: `Aprobar y Promover a ADR: ${inspectedItem.data.item_id}`,
-                        summaryText: `Se promoverá "${inspectedItem.data.title}" a un Architecture Decision Record oficial en docs/okf/architecture/adrs/ firmado con tu llave Ed25519.`,
+                        summaryText: `Se promoverá "${inspectedItem.data.title}" al Registro de decisiones de arquitectura ADR firmado con tu llave Ed25519.`,
                         badgeLabel: 'PROMOVER A ADR',
                         badgeColor: 'var(--accent-primary)'
                       })}
@@ -1486,7 +1611,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           itemId: 'ALIGNMENT_DOSSIER',
                           decision: 'APPROVED',
                           title: 'Ratificar Dossier de Alineación Inicial OKF v2',
-                          summaryText: `Se estampará tu firma Ed25519 sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado ALIGNED_OKF y se poblará docs/okf/ sin modificar tu código fuente.`,
+                          summaryText: `Se estampará tu firma sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado alineado (ALIGNED_OKF) y se inicializará la gobernanza documental sin modificar tu código fuente.`,
                           badgeLabel: 'RATIFICAR OKF',
                           badgeColor: '#10b981'
                         })}
@@ -1504,7 +1629,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           gap: '6px'
                         }}
                       >
-                        <CheckCircle2 size={14} /> Ratificar con Firma Ed25519
+                        <CheckCircle2 size={14} /> Ratificar Alineación
                       </button>
                     </div>
                   )}
@@ -1629,7 +1754,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 style={{ marginTop: '2px', cursor: 'pointer' }}
               />
               <span>
-                Sí, acepto y confirmo conscientemente esta decisión bajo mi firma criptográfica <code style={{ fontFamily: 'var(--font-mono)' }}>Ed25519</code>.
+                Sí, acepto y confirmo conscientemente esta decisión bajo mi firma criptográfica.
               </span>
             </label>
 
@@ -1665,7 +1790,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                   transition: 'var(--transition)'
                 }}
               >
-                {actionInProgress ? 'Firmando...' : 'Sí, Acepto y Firmar Ed25519'}
+                {actionInProgress ? 'Firmando...' : 'Sí, Acepto y Confirmo'}
               </button>
             </div>
           </div>

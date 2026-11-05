@@ -480,7 +480,8 @@ async def test_mcp_v3_dispute_discovery_and_versioning(mcp_handler):
     ver_out = json.loads(res_ver.content[0].text)
     assert ver_out["success"] is True
     assert ver_out["server_version"] == "0.3.0"
-    assert ver_out["tools_count"] == 25
+    assert ver_out["tools_count"] == 26
+    assert "edit_kanban_task" in ver_out["tools"]
 
     # 2. V3.2: Crear card, asignarla y transicionarla a disputed con creación automática de ticket
     card_id = "CARD-V3-DISPUTE"
@@ -560,9 +561,10 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     sse_out = json.loads(res_sse.content[0].text)
     assert sse_out["success"] is True
     assert sse_out["transport"] == "sse"
-    assert sse_out["tools_count"] == 25
+    assert sse_out["tools_count"] == 26
+    assert "edit_kanban_task" in sse_out["tools"]
     assert isinstance(sse_out.get("tools"), list)
-    assert len(sse_out["tools"]) == 25
+    assert len(sse_out["tools"]) == 26
 
     # 2. Servidor estándar con transport="stdio" por defecto
     server_stdio = create_mcp_server(db_path=db.db_path)
@@ -570,7 +572,7 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     stdio_out = json.loads(res_stdio.content[0].text)
     assert stdio_out["success"] is True
     assert stdio_out["transport"] == "stdio"
-    assert stdio_out["tools_count"] == 25
+    assert stdio_out["tools_count"] == 26
 
     # 3. Llamada directa a MCPToolsHandler.get_server_version() sin servidor envolvente
     # Debe calcular tools_count inspeccionando los métodos de herramientas de la clase dinámicamente
@@ -642,6 +644,11 @@ async def test_mcp_dynamic_jury_and_orphan_memory(mcp_handler, tmp_path):
     assert prompt_out["evaluators_count"] == len(matrix)
     first_pkg = prompt_out["evaluation_packages"][0]
     assert "clean_room_system_prompt" in first_pkg
+    assert first_pkg["clean_room_system_prompt"] is not None
+    assert len(first_pkg["clean_room_system_prompt"].strip()) > 0
+    for pkg in prompt_out["evaluation_packages"]:
+        assert pkg.get("clean_room_system_prompt") is not None
+        assert "CÁMARA LIMPIA" in pkg["clean_room_system_prompt"].upper() or "CAMARA LIMPIA" in pkg["clean_room_system_prompt"].upper()
     assert "anonymized_dispute" in first_pkg
     assert first_pkg["anonymized_dispute"]["thesis_option_a"] == "branch-alpha-unit-tests"
 

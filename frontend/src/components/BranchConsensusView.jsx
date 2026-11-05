@@ -324,39 +324,54 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
     return data?.cards || [];
   }, [data]);
 
-  // Algoritmo de Trazado SVG inspirado en SourceGit (git-graph-plus)
+  // Algoritmo de Trazado SVG inspirado en SourceGit (git-graph-plus), con reciclaje de
+  // carriles: cuando una rama termina (se funde o no tiene más padres pendientes), su
+  // carril queda libre para que una rama posterior en la lista lo reuse, en vez de crecer
+  // para siempre hacia la derecha a medida que se abren y cierran ramas con el tiempo.
   const { commitsWithLanes, connections, maxLane } = useMemo(() => {
     const rawCommits = activeGit.commits || [];
     if (rawCommits.length === 0) {
       return { commitsWithLanes: [], connections: [], maxLane: 0 };
     }
 
-    const commitLanes = {};
-    let currentLaneCount = 0;
+    const commitLanes = {};     // hash -> carril ya asignado y dibujado
+    const laneSlots = [];       // índice = carril; valor = hash que ese carril está esperando, o null si está libre
+    let maxLaneUsed = 0;
+
+    const claimFreeOrNewLane = () => {
+      const free = laneSlots.indexOf(null);
+      if (free !== -1) return free;
+      laneSlots.push(null);
+      return laneSlots.length - 1;
+    };
 
     const assigned = rawCommits.map((c, idx) => {
-      let lane = 0;
-      if (commitLanes[c.hash] !== undefined) {
-        lane = commitLanes[c.hash];
-      } else {
-        lane = currentLaneCount;
-        commitLanes[c.hash] = lane;
-        currentLaneCount++;
+      let lane = laneSlots.indexOf(c.hash);
+      if (lane === -1) {
+        lane = claimFreeOrNewLane();
       }
+      laneSlots[lane] = null; // se consume la espera; se reserva de nuevo abajo si corresponde
+      commitLanes[c.hash] = lane;
+      maxLaneUsed = Math.max(maxLaneUsed, lane);
 
-      // Propagar carril a los padres
+      // Propagar/reservar carriles para los padres
       if (c.parents && c.parents.length > 0) {
         const firstParent = c.parents[0];
-        if (commitLanes[firstParent] === undefined) {
-          commitLanes[firstParent] = lane;
+        // Si ningún otro carril ya espera a este padre, seguimos ocupando el mismo carril.
+        // Si ya lo espera otro carril (reconvergencia, p.ej. fusión a main), este carril
+        // queda libre aquí mismo para que una rama más antigua lo reuse.
+        if (laneSlots.indexOf(firstParent) === -1 && commitLanes[firstParent] === undefined) {
+          laneSlots[lane] = firstParent;
         }
         for (let pIdx = 1; pIdx < c.parents.length; pIdx++) {
           const parentHash = c.parents[pIdx];
-          if (commitLanes[parentHash] === undefined) {
-            commitLanes[parentHash] = currentLaneCount++;
+          if (laneSlots.indexOf(parentHash) === -1 && commitLanes[parentHash] === undefined) {
+            const newLane = claimFreeOrNewLane();
+            laneSlots[newLane] = parentHash;
           }
         }
       }
+      // Commit raíz (sin padres): el carril ya quedó libre arriba, nada más que hacer.
 
       const color = PALETTE[lane % PALETTE.length];
 
@@ -401,14 +416,18 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
 
     return {
       commitsWithLanes: assigned,
+      // maxLane es el carril real más alto que de verdad se usó (con reciclaje ya aplicado
+      // arriba), no un tope artificial desconectado de las posiciones reales de los puntos
+      // — ese desacople era la causa de que los puntos de más carriles se dibujaran más a
+      // la derecha de donde el texto asumía que terminaba el grafo, tapándolo.
       connections: conns,
-      maxLane: Math.min(Math.max(currentLaneCount, 1), 6)
+      maxLane: Math.max(maxLaneUsed, 0)
     };
   }, [activeGit, projectCards]);
 
-  const ROW_HEIGHT = 48;
-  const LANE_WIDTH = 22;
-  const SVG_PADDING_LEFT = 20;
+  const ROW_HEIGHT = 44;
+  const LANE_WIDTH = 16;
+  const SVG_PADDING_LEFT = 16;
 
   if (loading && !data) {
     return (
@@ -421,6 +440,10 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
 
   const branchesList = activeGit.branches || [activeGit.current_branch || 'main'];
   const originUrl = activeGit.origin_url;
+  const isCurrentBranchPublished = Boolean(activeGit.is_tracking && activeGit.unpushed_count === 0);
+  const gitAppOrigin = data?.git_app?.origin_url || (repoTarget === 'app' ? originUrl : null);
+  const gitGovOrigin = data?.git_gov?.origin_url || (repoTarget === 'gov' ? originUrl : null);
+  const bothOriginsConfigured = Boolean(gitAppOrigin && gitGovOrigin);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', gap: '14px', overflowY: 'auto', paddingRight: '4px' }}>
@@ -504,7 +527,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
             }}>
               <button
                 onClick={() => setRepoTarget('app')}
-                title="Ver código fuente de desarrollo y ramas de la app"
+                title="Ver código fuente y ramas de desarrollo"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -519,12 +542,12 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   cursor: 'pointer'
                 }}
               >
-                <FileCode size={12} /> Código de la App (app/)
+                <FileCode size={12} /> Repositorio de desarrollo
               </button>
 
               <button
                 onClick={() => setRepoTarget('gov')}
-                title="Ver documentación OKF y rama huérfana inmutable"
+                title="Ver documentación OKF y ramas de gobernanza"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -539,7 +562,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   cursor: 'pointer'
                 }}
               >
-                <FolderTree size={12} /> Gobernanza OKF (Rama Huérfana)
+                <FolderTree size={12} /> Repositorio de documentación
               </button>
             </div>
           </div>
@@ -596,6 +619,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                 <select
                   value={selectedBranch}
                   onChange={(e) => setSelectedBranch(e.target.value)}
+                  title={selectedBranch}
                   style={{
                     backgroundColor: 'var(--bg-app)',
                     border: '1px solid var(--border-subtle)',
@@ -606,7 +630,14 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     padding: '5px 10px',
                     borderRadius: 'var(--radius-sm)',
                     outline: 'none',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    // Tope de ancho fijo para que una rama con nombre largo (p.ej. las
+                    // "orphan-conversa-memory-..." del repo de gobernanza) no estire esta
+                    // fila y desalinee la barra de botones respecto al modo de desarrollo.
+                    maxWidth: '200px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
                   }}
                 >
                   {branchesList.map(b => (
@@ -642,7 +673,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               <button
                 onClick={handleSyncThreeTiers}
                 disabled={actionLoading}
-                title="Sincroniza la memoria huérfana de agentes, reconcilia OKF y comprueba referencias del código"
+                title="Sincroniza el enjambre P2P en memoria, metadatos y git"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -663,7 +694,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               <button
                 onClick={handleFetch}
                 disabled={actionLoading}
-                title="Sincronizar referencias remotas (git fetch)"
+                title="Traer referencias del remoto sin fusionar (git fetch)"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -678,13 +709,13 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   cursor: actionLoading ? 'wait' : 'pointer'
                 }}
               >
-                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Fetch
+                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Traer cambios
               </button>
 
               <button
                 onClick={handlePull}
                 disabled={actionLoading}
-                title="Traer cambios del remoto (git pull)"
+                title="Traer cambios del remoto a la rama local (git pull)"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -699,13 +730,13 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   cursor: actionLoading ? 'wait' : 'pointer'
                 }}
               >
-                <Download size={13} /> Pull
+                <Download size={13} /> Actualizar rama
               </button>
 
               <button
                 onClick={handleMerge}
                 disabled={actionLoading || selectedBranch === 'main'}
-                title="Fusionar rama en 'main'"
+                title="Fusionar cambios de la rama seleccionada a main"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -720,30 +751,32 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
                 }}
               >
-                <GitMerge size={13} /> Fusionar en Main
+                <GitMerge size={13} /> Fusionar a main
               </button>
 
-              <button
-                onClick={handlePush}
-                disabled={actionLoading}
-                title="Publicar rama al repositorio remoto (git push -u origin)"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
-                  color: '#ffffff',
-                  cursor: actionLoading ? 'wait' : 'pointer',
-                  boxShadow: 'var(--shadow-sm)'
-                }}
-              >
-                <Upload size={13} /> Publicar Rama
-              </button>
+              {!isCurrentBranchPublished && (
+                <button
+                  onClick={handlePush}
+                  disabled={actionLoading}
+                  title="Publicar rama al repositorio remoto (git push -u origin)"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    borderRadius: 'var(--radius-sm)',
+                    border: 'none',
+                    backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    color: '#ffffff',
+                    cursor: actionLoading ? 'wait' : 'pointer',
+                    boxShadow: 'var(--shadow-sm)'
+                  }}
+                >
+                  <Upload size={13} /> Publicar Rama
+                </button>
+              )}
             </div>
           </div>
 
@@ -803,32 +836,9 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <button
-                onClick={() => handleAutoPublish('both')}
-                disabled={actionLoading}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  backgroundColor: '#6366f1',
-                  color: '#ffffff',
-                  cursor: actionLoading ? 'wait' : 'pointer',
-                  boxShadow: 'var(--shadow-sm)'
-                }}
-                title="Crea y publica automáticamente ambos repositorios (App y OKF) y empuja la memoria conversacional huérfana"
-              >
-                <Upload size={13} className={actionLoading ? 'spin' : ''} />
-                <span>⚡ Publicar Ambos (App + OKF + Huérfana)</span>
-              </button>
-
-              {!originUrl && (
+              {!bothOriginsConfigured && (
                 <button
-                  onClick={() => handleAutoPublish(repoTarget)}
+                  onClick={() => handleAutoPublish('both')}
                   disabled={actionLoading}
                   style={{
                     display: 'inline-flex',
@@ -839,34 +849,61 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     fontWeight: 600,
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
-                    backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    backgroundColor: '#6366f1',
                     color: '#ffffff',
                     cursor: actionLoading ? 'wait' : 'pointer',
                     boxShadow: 'var(--shadow-sm)'
                   }}
-                  title={`Crea y publica solo el repositorio ${repoTarget.toUpperCase()} en GitHub`}
+                  title="Crea y publica automáticamente ambos repositorios (Desarrollo y Documentación OKF) y empuja la memoria conversacional"
                 >
                   <Upload size={13} className={actionLoading ? 'spin' : ''} />
-                  <span>Publicar Solo {repoTarget.toUpperCase()}</span>
+                  <span>⚡ Publicar Ambos (Desarrollo + Documentación)</span>
                 </button>
               )}
-              <button
-                onClick={() => setIsRemoteModalOpen(true)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  padding: '5px 10px',
-                  fontSize: '11px',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
-              >
-                {originUrl ? 'Configurar Origin' : 'Vincular URL Manualmente'}
-              </button>
+
+              {!originUrl && (
+                <>
+                  <button
+                    onClick={() => handleAutoPublish(repoTarget)}
+                    disabled={actionLoading}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 14px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: actionLoading ? 'wait' : 'pointer',
+                      boxShadow: 'var(--shadow-sm)'
+                    }}
+                    title={`Crea y publica solo el repositorio ${repoTarget.toUpperCase()} en GitHub`}
+                  >
+                    <Upload size={13} className={actionLoading ? 'spin' : ''} />
+                    <span>Publicar Solo {repoTarget.toUpperCase()}</span>
+                  </button>
+                  <button
+                    onClick={() => setIsRemoteModalOpen(true)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '5px 10px',
+                      fontSize: '11px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Configurar en Origin
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -885,7 +922,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <GitCommit size={18} color={repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)'} />
                 <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
-                  {repoTarget === 'app' ? 'Grafo de Commits de la Aplicación' : 'Grafo de Gobernanza & Rama Huérfana'}
+                  {repoTarget === 'app' ? 'Grafo de Commits del Repositorio de Desarrollo' : 'Grafo del Repositorio de Documentación'}
                 </h3>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   ({commitsWithLanes.length} commits)
@@ -993,15 +1030,15 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                         <div
                           style={{
                             position: 'absolute',
-                            left: `${nodeX - 7}px`,
-                            top: `${nodeY - 7}px`,
-                            width: '14px',
-                            height: '14px',
+                            left: `${nodeX - 5}px`,
+                            top: `${nodeY - 5}px`,
+                            width: '10px',
+                            height: '10px',
                             borderRadius: '50%',
                             backgroundColor: 'var(--bg-app)',
-                            border: `3px solid ${c.color}`,
+                            border: `2.5px solid ${c.color}`,
                             boxShadow: (isHovered || c.is_head) ? `0 0 10px ${c.color}` : 'none',
-                            transform: isHovered ? 'scale(1.25)' : 'scale(1)',
+                            transform: isHovered ? 'scale(1.3)' : 'scale(1)',
                             transition: 'transform 0.15s, box-shadow 0.15s',
                             zIndex: 10
                           }}

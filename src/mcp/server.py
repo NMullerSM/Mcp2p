@@ -76,6 +76,35 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
             description=description
         )
 
+    # Herramienta: Editar Tarea Kanban (sin tocar lease ni estado)
+    @server.tool()
+    def edit_kanban_task(
+        project_uuid: Optional[str] = None,
+        card_id: Optional[str] = None,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        acceptance_criteria: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        cardId: Optional[str] = None,
+        task_id: Optional[str] = None,
+        taskId: Optional[str] = None,
+        acceptanceCriteria: Optional[str] = None
+    ) -> str:
+        """
+        Edita el título, descripción o criterios de aceptación de una tarea existente sin
+        alterar su lease ni su estado/columna en el tablero. Sincroniza a SQLite y OKF.
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        resolved_card = card_id or cardId or task_id or taskId or ""
+        resolved_crit = acceptance_criteria if acceptance_criteria is not None else acceptanceCriteria
+        return handler.edit_kanban_task(
+            project_uuid=resolved_proj,
+            card_id=resolved_card,
+            title=title,
+            description=description,
+            acceptance_criteria=resolved_crit
+        )
+
     # 4. Herramienta: Adquirir Tarea con Lease Atómico
     @server.tool()
     def claim_kanban_task(
@@ -111,7 +140,7 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         project_uuid: Optional[str] = None,
         card_id: Optional[str] = None,
         node_uuid: Optional[str] = None,
-        target_status: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged"]] = "in_review",
+        target_status: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged", "rejected", "discarded"]] = "in_review",
         branch_ref: Optional[str] = None,
         dispute_reason: Optional[str] = None,
         contender_node_uuid: Optional[str] = None,
@@ -121,7 +150,7 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         task_id: Optional[str] = None,
         taskId: Optional[str] = None,
         nodeUuid: Optional[str] = None,
-        targetStatus: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged"]] = None,
+        targetStatus: Optional[Literal["backlog", "in_progress", "in_review", "disputed", "merged", "rejected", "discarded"]] = None,
         branchRef: Optional[str] = None,
         disputeReason: Optional[str] = None,
         contenderNodeUuid: Optional[str] = None,
@@ -459,6 +488,7 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         ticket_id: Optional[str] = None,
         proposal_c_ref: str = "",
         num_evaluators: int = 3,
+        escalation_recommendation: Optional[str] = None,
         projectUuid: Optional[str] = None,
         collisionReason: Optional[str] = None,
         contenderANode: Optional[str] = None,
@@ -468,11 +498,13 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         cardId: Optional[str] = None,
         ticketId: Optional[str] = None,
         proposalCRef: Optional[str] = None,
-        numEvaluators: Optional[int] = None
+        numEvaluators: Optional[int] = None,
+        escalationRecommendation: Optional[str] = None
     ) -> str:
         """
         Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy.
         Permite a los agentes o humanos someter discrepancias de arquitectura/código al Tribunal de Honor.
+        Permite sugerir si amerita o no despliegue de jurado (escalation_recommendation).
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_title = title or "Disputa Técnica de Arquitectura"
@@ -485,6 +517,7 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         resolved_ticket = ticket_id or ticketId
         resolved_pc = proposal_c_ref if proposal_c_ref else (proposalCRef or "")
         resolved_num = numEvaluators if numEvaluators is not None else num_evaluators
+        resolved_esc = escalation_recommendation if escalation_recommendation is not None else escalationRecommendation
         return handler.open_dispute_ticket(
             project_uuid=resolved_proj,
             title=resolved_title,
@@ -496,7 +529,8 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
             card_id=resolved_card,
             ticket_id=resolved_ticket,
             proposal_c_ref=resolved_pc,
-            num_evaluators=resolved_num
+            num_evaluators=resolved_num,
+            escalation_recommendation=resolved_esc
         )
 
     # 17. Herramienta: Emitir Evaluación de Agente en Juicio de Honor (1.5)
@@ -578,25 +612,30 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         ticket_id: Optional[str] = None,
         card_id: Optional[str] = None,
         caller_node_uuid: Optional[str] = None,
+        upgrade_if_outdated: bool = False,
         projectUuid: Optional[str] = None,
         ticketId: Optional[str] = None,
         cardId: Optional[str] = None,
-        callerNodeUuid: Optional[str] = None
+        callerNodeUuid: Optional[str] = None,
+        upgradeIfOutdated: Optional[bool] = None
     ) -> str:
         """
         Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
         incluyendo la matriz neutral anti-sycophancy y las evaluaciones emitidas.
         Aplica protección anti-sesgo: oculta puntuaciones numéricas si el humano no ha votado.
+        Si upgrade_if_outdated es True y el ticket está abierto sin votos, actualiza la matriz si era obsoleta.
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_ticket = ticket_id or ticketId
         resolved_card = card_id or cardId
         resolved_caller = caller_node_uuid or callerNodeUuid
+        resolved_upgrade = upgrade_if_outdated if upgradeIfOutdated is None else upgradeIfOutdated
         return handler.get_dispute_ticket(
             project_uuid=resolved_proj,
             ticket_id=resolved_ticket,
             card_id=resolved_card,
-            caller_node_uuid=resolved_caller
+            caller_node_uuid=resolved_caller,
+            upgrade_if_outdated=resolved_upgrade
         )
 
     # 22. Herramienta: Listar Tickets de Disputa

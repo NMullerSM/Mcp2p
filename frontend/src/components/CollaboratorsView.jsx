@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Terminal, Radio, Sparkles } from 'lucide-react';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Terminal, Radio, Sparkles, Trash2 } from 'lucide-react';
 
 export function CollaboratorsView({ project, api }) {
   const [collaborators, setCollaborators] = useState([]);
@@ -58,6 +58,21 @@ export function CollaboratorsView({ project, api }) {
       loadData();
     } else {
       alert("Error rechazando colaborador: " + res.error);
+    }
+  };
+
+  const handleRemove = async (nodeUuid) => {
+    if (!api || !project) return;
+    if (!window.confirm("¿Estás seguro de que deseas desvincular a este colaborador del proyecto?")) return;
+    try {
+      const res = await api.remove_collaborator(project.project_uuid, nodeUuid);
+      if (res.success) {
+        loadData();
+      } else {
+        alert("Error removiendo colaborador: " + (res.error || "Error desconocido"));
+      }
+    } catch (err) {
+      alert("Error removiendo colaborador: " + (err.message || String(err)));
     }
   };
 
@@ -267,19 +282,43 @@ export function CollaboratorsView({ project, api }) {
                       </button>
                     </div>
                   ) : (
-                    <span style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '11px',
-                      color: 'var(--accent-success)',
-                      backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                      padding: '4px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      fontWeight: 600
-                    }}>
-                      <Check size={12} /> Aprobado
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '11px',
+                        color: c.status === 'rejected' ? 'var(--accent-danger)' : 'var(--accent-success)',
+                        backgroundColor: c.status === 'rejected' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                        padding: '4px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        fontWeight: 600
+                      }}>
+                        {c.status === 'rejected' ? <X size={12} /> : <Check size={12} />}
+                        {c.status === 'rejected' ? 'Rechazado' : 'Aprobado'}
+                      </span>
+                      {!isOwner && (
+                        <button
+                          onClick={() => handleRemove(c.node_uuid)}
+                          title="Remover colaborador del proyecto"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '4px 8px',
+                            fontSize: '11px',
+                            fontWeight: 500,
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            backgroundColor: 'transparent',
+                            color: 'var(--accent-danger)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Trash2 size={12} /> Remover
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

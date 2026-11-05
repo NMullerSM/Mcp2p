@@ -2,14 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { X, CheckCircle2, GitBranch, User, CheckSquare, Save, Clock } from 'lucide-react';
 
 export function ModalOverlay({ isOpen, onClose, title, maxWidth = '500px', children }) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onClose && onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   return (
     <div
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose && onClose();
+        }
+      }}
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        backgroundColor: 'rgba(0, 0, 0, 0.65)',
         backdropFilter: 'blur(3px)',
         display: 'flex',
         alignItems: 'center',
@@ -20,6 +35,7 @@ export function ModalOverlay({ isOpen, onClose, title, maxWidth = '500px', child
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
         style={{
           backgroundColor: 'var(--bg-surface)',
           border: '1px solid var(--border-subtle)',
@@ -38,7 +54,9 @@ export function ModalOverlay({ isOpen, onClose, title, maxWidth = '500px', child
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{title}</h3>
           <button
+            type="button"
             onClick={onClose}
+            title="Cerrar modal (Esc)"
             style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '4px' }}
           >
             <X size={18} />
@@ -531,25 +549,29 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
             </strong>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ color: 'var(--text-secondary)' }}>Estado:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Estado:</span>
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               style={{
-                backgroundColor: 'var(--bg-card)',
+                backgroundColor: 'var(--bg-surface)',
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '2px 8px',
+                padding: '4px 8px',
                 fontSize: '12px',
-                fontWeight: 600
+                fontWeight: 600,
+                outline: 'none',
+                cursor: 'pointer'
               }}
             >
-              <option value="backlog">Por Hacer (Backlog)</option>
-              <option value="in_progress">En Proceso</option>
-              <option value="in_review">En Revisión</option>
-              <option value="merged">Fusionado / Consolidado</option>
+              <option value="backlog" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>Por Hacer (Backlog)</option>
+              <option value="in_progress" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>En Proceso</option>
+              <option value="in_review" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>En Revisión</option>
+              <option value="disputed" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>En Disputa</option>
+              <option value="merged" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>Fusionado / Consolidado</option>
+              <option value="rejected" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>Rechazado</option>
             </select>
           </div>
         </div>
@@ -730,11 +752,11 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
                 cursor: 'pointer'
               }}
             >
-              <CheckCircle2 size={14} /> Aceptar y Consolidar (HITL)
+              <CheckCircle2 size={14} /> Aprobar Tarea
             </button>
           ) : (
             <div style={{ fontSize: '12px', color: 'var(--accent-success)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <CheckCircle2 size={14} /> Tarea Aceptada / Consolidada
+              <CheckCircle2 size={14} /> Tarea Aprobada
             </div>
           )}
 

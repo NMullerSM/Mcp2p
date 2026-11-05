@@ -422,6 +422,14 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def remove_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
+        """Elimina o revoca la membresía de un colaborador o agente del proyecto."""
+        try:
+            res = self.db.remove_collaborator(project_uuid, node_uuid)
+            return {"success": res}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def update_project_sla(self, project_uuid: str, sla_hours: int) -> Dict[str, Any]:
         """Actualiza el período de revisión SLA por defecto del proyecto."""
         try:
@@ -1551,6 +1559,13 @@ class ApiBridge:
                     contenders = [c for c in [t.get("contender_a_node"), t.get("contender_b_node")] if c]
                     voter_universe = self.bus.jury_engine.resolve_voter_universe(all_nodes, contenders)
 
+                    has_matrix_version = any(m.get("matrix_version") == "2.0.0" for m in matrix_list)
+                    has_clean_room = all("clean_room_prompt" in m for m in matrix_list)
+                    is_outdated = bool(matrix_list and not (has_matrix_version and has_clean_room))
+                    t["is_outdated_matrix"] = is_outdated
+                    if is_outdated:
+                        t["matrix_warning"] = "Matriz de jurado generada con versión previa del motor (sin directivas de cámara limpia 2.0.0)."
+
                     t["has_voted"] = has_voted
                     t["proposal_c_ref"] = proposal_c
                     t["jury_matrix"] = matrix_list
@@ -1861,7 +1876,17 @@ class ApiBridge:
                     decision=decision
                 )
                 card = self.db.get_card_by_id(project_uuid, item_id)
-                if decision == "DISCARDED":
+                if decision in ("REJECTED", "REJECT"):
+                    if card:
+                        self.db.update_card_status(project_uuid, item_id, "rejected")
+                    return {
+                        "success": True,
+                        "merged": False,
+                        "rejected": True,
+                        "item_id": item_id,
+                        "signature": sig_block
+                    }
+                elif decision in ("DISCARDED", "RETURN_TO_PROGRESS"):
                     if card:
                         self.db.update_card_status(project_uuid, item_id, "in_progress")
                     return {

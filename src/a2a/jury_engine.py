@@ -422,6 +422,8 @@ class DialecticJuryEngine:
             jurors.append({
                 "juror_id": f"neutral_juror_{idx + 1:02d}",
                 "role": role,
+                "matrix_version": "2.0.0",
+                "engine_version": "2.0-dynamic-10vectors",
                 "temperature": temp,
                 "temperature_profile": role.lower(),
                 "focus_count": focus_count,
@@ -433,6 +435,8 @@ class DialecticJuryEngine:
             })
 
         return {
+            "matrix_version": "2.0.0",
+            "engine_version": "2.0-dynamic-10vectors",
             "eligible_humans_count": h,
             "jurors_count": m,
             "max_allowed_jurors": max_allowed,

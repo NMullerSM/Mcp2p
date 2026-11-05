@@ -85,6 +85,41 @@ class MCPToolsHandler:
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
+    def edit_kanban_task(
+        self,
+        project_uuid: str,
+        card_id: str,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        acceptance_criteria: Optional[str] = None
+    ) -> str:
+        """
+        Edita el título, descripción o criterios de aceptación de una tarjeta Kanban existente
+        sin alterar su estado de asignación (lease) ni su columna/estado en el tablero.
+        Sincroniza atómicamente con la base viva SQLite y el repositorio de gobernanza OKF.
+        """
+        try:
+            card = self.db.get_card_by_id(project_uuid, card_id)
+            if not card:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Tarjeta '{card_id}' no encontrada en el proyecto '{project_uuid}'."
+                }, indent=2, ensure_ascii=False)
+
+            updated = self.db.update_card_details(
+                project_uuid=project_uuid,
+                card_id=card_id,
+                title=title,
+                description=description,
+                acceptance_criteria=acceptance_criteria
+            )
+            return json.dumps({
+                "success": True,
+                "card": updated
+            }, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+
     def claim_kanban_task(
         self,
         project_uuid: str,
@@ -137,7 +172,7 @@ class MCPToolsHandler:
         y evitando disputas huérfanas sin arbitraje.
         """
         try:
-            valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged")
+            valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged", "rejected", "discarded")
             if target_status not in valid_statuses:
                 return json.dumps({
                     "success": False,
@@ -597,13 +632,46 @@ class MCPToolsHandler:
                 return self._wrap_response(project_uuid, {"success": True, "promoted_path": str(p)})
 
             elif script_action == "update_card":
-                if not params.get("card_data"):
+                card_data = params.get("card_data")
+                if not card_data or not isinstance(card_data, dict):
                     return self._wrap_response(project_uuid, {
                         "success": False,
-                        "error": "update_card requiere el campo obligatorio 'card_data'."
+                        "error": "update_card requiere el campo obligatorio 'card_data' como objeto dict."
                     })
-                p = self.okf.write_card_yaml(gov_path, params["card_data"])
-                return self._wrap_response(project_uuid, {"success": True, "written_path": str(p)})
+                card_id = card_data.get("card_id") or card_data.get("id")
+                if not card_id:
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "error": "card_data debe contener un identificador 'card_id' o 'id'."
+                    })
+
+                existing = self.db.get_card_by_id(project_uuid, card_id)
+                if existing:
+                    updated = self.db.update_card_details(
+                        project_uuid=project_uuid,
+                        card_id=card_id,
+                        title=card_data.get("title"),
+                        description=card_data.get("description"),
+                        acceptance_criteria=card_data.get("acceptance_criteria"),
+                        status=card_data.get("status"),
+                        branch_ref=card_data.get("branch_ref")
+                    )
+                else:
+                    updated = self.db.create_card(
+                        project_uuid=project_uuid,
+                        card_id=card_id,
+                        title=card_data.get("title") or "Sin título",
+                        description=card_data.get("description", ""),
+                        acceptance_criteria=card_data.get("acceptance_criteria", "")
+                    )
+                written_path = gov_path / "docs" / "okf" / "kanban" / ("discarded" if updated.get("status") in ("discarded", "rejected") else "cards") / f"{card_id}.yaml"
+                if not written_path.exists():
+                    written_path = self.okf.write_card_yaml(gov_path, updated)
+                return self._wrap_response(project_uuid, {
+                    "success": True,
+                    "written_path": str(written_path),
+                    "card": updated
+                })
 
             elif script_action == "reconcile_kanban":
                 rec = self.okf.reconcile_kanban_from_okf(gov_path, project_uuid, self.db)
@@ -730,11 +798,13 @@ class MCPToolsHandler:
         card_id: Optional[str] = None,
         ticket_id: Optional[str] = None,
         proposal_c_ref: str = "",
-        num_evaluators: int = 3
+        num_evaluators: int = 3,
+        escalation_recommendation: Optional[str] = None
     ) -> str:
         """
         Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy.
         Permite a los agentes o humanos escalar discrepancias dialécticas al Tribunal de Honor Borda.
+        Permite incluir una 'escalation_recommendation' ('sugiero jurado' o 'no amerita jurado' con motivo).
         """
         try:
             res = self.bus.open_dispute_ticket(
@@ -748,7 +818,8 @@ class MCPToolsHandler:
                 card_id=card_id,
                 ticket_id=ticket_id,
                 proposal_c_ref=proposal_c_ref,
-                num_evaluators=num_evaluators
+                num_evaluators=num_evaluators,
+                escalation_recommendation=escalation_recommendation
             )
             return self._wrap_response(project_uuid, {"success": True, "ticket": res})
         except Exception as e:
@@ -759,7 +830,8 @@ class MCPToolsHandler:
         project_uuid: str,
         ticket_id: Optional[str] = None,
         card_id: Optional[str] = None,
-        caller_node_uuid: Optional[str] = None
+        caller_node_uuid: Optional[str] = None,
+        upgrade_if_outdated: bool = False
     ) -> str:
         """
         Recupera los detalles de un ticket de arbitraje técnico por ticket_id o por card_id,
@@ -842,12 +914,57 @@ class MCPToolsHandler:
                     entry["scores"] = j_evals
                 mayeutic_discussions.append(entry)
 
-            return self._wrap_response(project_uuid, {
+            # Detección y actualización de matriz desactualizada (Gap #2 Plan Unificado)
+            is_outdated_matrix = False
+            if matrix_list:
+                has_matrix_version = any(m.get("matrix_version") == "2.0.0" for m in matrix_list)
+                has_clean_room = all("clean_room_prompt" in m for m in matrix_list)
+                if not (has_matrix_version and has_clean_room):
+                    is_outdated_matrix = True
+
+            if is_outdated_matrix and upgrade_if_outdated and is_open and not votes_summary.get("human_votes") and not votes_summary.get("agent_scores"):
+                all_nodes = self.db.get_swarm_nodes()
+                fresh_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
+                    eligible_humans_count=len(all_nodes),
+                    ticket_id=t_id,
+                    seed=t_id
+                )
+                matrix_list = fresh_matrix.get("evaluators", [])
+                proposal_c = (
+                    f"Síntesis Híbrida (Tercera Vía C): Adoptar la arquitectura base de Tesis ({ticket.get('proposal_a_ref', '')[:80]}) "
+                    f"incorporando las salvaguardas de rendimiento y aislamiento propuestas en Antítesis ({ticket.get('proposal_b_ref', '')[:80]}), "
+                    f"mediante un adaptador desacoplado verificable con contratos de interfaz."
+                )
+                ticket = self.db.update_dispute_synthesis_and_matrix(
+                    ticket_id=t_id,
+                    proposal_c_ref=ticket.get("proposal_c_ref") or proposal_c,
+                    jury_matrix=matrix_list
+                )
+                is_outdated_matrix = False
+                mayeutic_discussions = []
+                for idx, m_spec in enumerate(matrix_list):
+                    j_id = m_spec.get("juror_id", f"neutral_juror_{idx+1:02d}")
+                    mayeutic_discussions.append({
+                        "juror_id": j_id,
+                        "role": m_spec.get("role", "NEUTRAL_MATRIX_JUROR"),
+                        "temperature": m_spec.get("temperature", 0.2),
+                        "focus_vectors": m_spec.get("focus_vectors", []),
+                        "mayeutic_argument": "Matriz neutral actualizada con directivas de cámara limpia 2.0.0."
+                    })
+
+            res_payload = {
                 "success": True,
                 "ticket": ticket,
                 "mayeutic_discussions": mayeutic_discussions,
-                "votes_summary": delivered_summary
-            })
+                "votes_summary": delivered_summary,
+                "is_outdated_matrix": is_outdated_matrix,
+                "escalation_recommendation": ticket.get("escalation_recommendation", "")
+            }
+            if is_outdated_matrix:
+                res_payload["matrix_status"] = "outdated"
+                res_payload["matrix_warning"] = "Esta matriz de jurado fue generada con una versión previa del motor y carece de las directivas actuales de cámara limpia."
+
+            return self._wrap_response(project_uuid, res_payload)
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 
@@ -900,7 +1017,7 @@ class MCPToolsHandler:
                     "temperature": spec.get("temperature"),
                     "focus_vectors": spec.get("focus_vectors", []),
                     "focus_labels": spec.get("focus_labels", []),
-                    "clean_room_system_prompt": spec.get("prompt"),
+                    "clean_room_system_prompt": spec.get("clean_room_prompt") or spec.get("prompt"),
                     "anonymized_dispute": {
                         "collision_reason": ticket.get("collision_reason"),
                         "thesis_option_a": ticket.get("proposal_a_ref"),

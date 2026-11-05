@@ -465,6 +465,24 @@ class GitHubSyncManager:
             remotes = rem_p.stdout.strip().splitlines() if rem_p.returncode == 0 else []
             origin_url = self.get_remote_url(path, "origin")
 
+            # 5. Estado de rastreo remoto y commits no publicados
+            upstream_p = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", f"{current_branch}@{{u}}"],
+                cwd=path, capture_output=True, text=True, timeout=5
+            )
+            is_tracking = (upstream_p.returncode == 0 and bool(upstream_p.stdout.strip()))
+            unpushed_count = 0
+            if is_tracking:
+                unp_p = subprocess.run(
+                    ["git", "rev-list", f"{current_branch}@{{u}}..HEAD", "--count"],
+                    cwd=path, capture_output=True, text=True, timeout=5
+                )
+                if unp_p.returncode == 0:
+                    try:
+                        unpushed_count = int(unp_p.stdout.strip())
+                    except ValueError:
+                        unpushed_count = 0
+
             return {
                 "success": True,
                 "current_branch": current_branch,
@@ -472,7 +490,9 @@ class GitHubSyncManager:
                 "commits": commits,
                 "has_remotes": len(remotes) > 0,
                 "remotes": remotes,
-                "origin_url": origin_url
+                "origin_url": origin_url,
+                "is_tracking": is_tracking,
+                "unpushed_count": unpushed_count
             }
         except Exception as e:
             return {"success": False, "error": f"Error inspeccionando Git: {str(e)}", "branches": [], "commits": []}

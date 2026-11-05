@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
@@ -17,6 +17,9 @@ export function ProjectWorkspace({
 }) {
   const [cards, setCards] = useState([]);
   const [selectedCard, setSelectedCard] = useState(null);
+  const selectedCardRef = useRef(selectedCard);
+  selectedCardRef.current = selectedCard;
+
   const [targetBranch, setTargetBranch] = useState('');
   const [gitPulseTrigger, setGitPulseTrigger] = useState(0);
 
@@ -27,16 +30,17 @@ export function ProjectWorkspace({
       if (res.success) {
         const fetchedCards = res.cards || [];
         setCards(fetchedCards);
-        // Si hay una tarjeta abierta en el modal, actualizar sus datos en vivo
-        if (selectedCard) {
-          const fresh = fetchedCards.find(c => c.card_id === selectedCard.card_id);
+        // Si hay una tarjeta abierta en el modal, actualizar sus datos en vivo sin revivirla si fue cerrada
+        const currentSelected = selectedCardRef.current;
+        if (currentSelected) {
+          const fresh = fetchedCards.find(c => c.card_id === currentSelected.card_id);
           if (fresh) setSelectedCard(fresh);
         }
       }
     } catch (e) {
       console.error("Error loading cards:", e);
     }
-  }, [api, project, selectedCard]);
+  }, [api, project]);
 
   useEffect(() => {
     loadCards();
@@ -61,6 +65,16 @@ export function ProjectWorkspace({
         const res = await api.claim_task_lease(cardId, node, 30);
         if (!res.success) {
           alert("Aviso: " + (res.error || "Colisión de lease"));
+        }
+      } else if (targetStatus === 'merged') {
+        // Al arrastrar directamente a Hecho/Merged, fusionar y consolidar con sign_and_approve_item
+        if (project && api.sign_and_approve_item) {
+          const res = await api.sign_and_approve_item(project.project_uuid, 'pr_merge', cardId, 'APPROVED');
+          if (!res.success) {
+            await api.update_task_status(cardId, targetStatus);
+          }
+        } else {
+          await api.update_task_status(cardId, targetStatus);
         }
       } else {
         const res = await api.update_task_status(cardId, targetStatus);
@@ -99,6 +113,20 @@ export function ProjectWorkspace({
   const handleAcceptCard = async (cardData) => {
     if (!api) return;
     try {
+      if (project && api.sign_and_approve_item) {
+        const res = await api.sign_and_approve_item(
+          project.project_uuid,
+          'pr_merge',
+          cardData.card_id,
+          'APPROVED',
+          'Aprobación directa desde tarjeta Kanban'
+        );
+        if (res.success) {
+          setSelectedCard(null);
+          await loadCards();
+          return;
+        }
+      }
       const res = await api.update_kanban_card_details(
         cardData.card_id,
         cardData.title,
@@ -111,7 +139,7 @@ export function ProjectWorkspace({
         setSelectedCard(null);
         await loadCards();
       } else {
-        alert("Error al consolidar tarea: " + res.error);
+        alert("Error al aprobar tarea: " + res.error);
       }
     } catch (e) {
       alert("Error de comunicación: " + e);

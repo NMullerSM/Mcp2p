@@ -495,38 +495,79 @@ graph TD
     # Micro-Scripts ("Manos del Agente"): Kanban YAML <-> SQLite
     # ==========================================
 
-    def commit_gov_file(
-        self,
-        gov_base_path: str | Path,
-        file_path: str | Path,
-        commit_message: str
-    ) -> bool:
+    def push_gov_repo(self, gov_base_path: str | Path, remote: str = "origin") -> bool:
         """
-        Comitea atómicamente un archivo concreto del repositorio de gobernanza (rama main),
-        evitando disputas huérfanas y cards/rulings sin historial de versionado real.
-        El mensaje de commit debe incluir siempre el título y el contenido/razón de la
-        tarjeta o ticket que originó el cambio, para que `git log` sea el historial legible
-        de decisiones del proyecto.
+        Publica los commits locales del repositorio de gobernanza hacia su remoto origin configurado.
+        Si no hay remoto configurado o falla la conexión, retorna False sin interrumpir la operación.
         """
         base = Path(gov_base_path)
         if not (base / ".git").is_dir():
             return False
         try:
-            rel = Path(file_path)
-            rel = rel.relative_to(base) if rel.is_absolute() else rel
-        except ValueError:
-            rel = file_path
+            from src.storage.github_sync import GitHubSyncManager
+            sync = GitHubSyncManager()
+            if not sync.has_remote(base, remote):
+                return False
+            # Detectar rama activa o fallback a main
+            res = subprocess.run(["git", "branch", "--show-current"], cwd=str(base), capture_output=True, text=True, check=False)
+            branch = res.stdout.strip() if res.returncode == 0 else ""
+            if not branch:
+                branch = "main"
+            push_res = sync.git_push_branch(base, branch=branch, remote=remote)
+            return bool(push_res.get("success"))
+        except Exception as e:
+            logger.debug(f"Git push de gobernanza omitido o fallido: {e}")
+            return False
+
+    def commit_gov_file(
+        self,
+        gov_base_path: str | Path,
+        file_path: str | Path | Any,
+        commit_message: str,
+        push_now: bool = False
+    ) -> bool:
+        """
+        Comitea atómicamente uno o varios archivos del repositorio de gobernanza (rama main),
+        evitando disputas huérfanas y cards/rulings sin historial de versionado real.
+        El mensaje de commit debe incluir siempre el título y el contenido/razón de la
+        tarjeta o ticket que originó el cambio, para que `git log` sea el historial legible
+        de decisiones del proyecto.
+        Si push_now es True, empuja automáticamente los commits locales hacia origin.
+        """
+        base = Path(gov_base_path)
+        if not (base / ".git").is_dir():
+            return False
+
+        files = [file_path] if isinstance(file_path, (str, Path)) else list(file_path)
+        rel_paths = []
+        for f in files:
+            if not f:
+                continue
+            try:
+                p = Path(f)
+                rel = p.relative_to(base) if p.is_absolute() else p
+                rel_paths.append(str(rel))
+            except ValueError:
+                rel_paths.append(str(f))
+
+        if not rel_paths:
+            return False
+
         try:
-            subprocess.run(["git", "add", str(rel)], cwd=str(base), capture_output=True, check=False)
+            for r in rel_paths:
+                subprocess.run(["git", "add", r], cwd=str(base), capture_output=True, check=False)
             result = subprocess.run(
                 ["git", "commit", "-m", commit_message],
                 cwd=str(base),
                 capture_output=True,
                 check=False
             )
-            return result.returncode == 0
+            success = result.returncode == 0
+            if success and push_now:
+                self.push_gov_repo(base)
+            return success
         except Exception as e:
-            logger.debug(f"Git commit de gobernanza omitido o fallido para {file_path}: {e}")
+            logger.debug(f"Git commit de gobernanza omitido o fallido para {rel_paths}: {e}")
             return False
 
     def write_card_yaml(
@@ -582,7 +623,7 @@ graph TD
         active_file = cards_dir / f"{card_id}.yaml"
         discarded_file = discarded_dir / f"{card_id}.yaml"
 
-        if status == "discarded":
+        if status in ("discarded", "rejected"):
             if active_file.exists():
                 try:
                     active_file.unlink()
@@ -633,7 +674,7 @@ graph TD
                         cid = data.get("id") or data.get("card_id") or f.stem
                         p_uuid = data.get("project_uuid") or project_uuid
                         status = data.get("status", "backlog")
-                        if status == "discarded":
+                        if status in ("discarded", "rejected"):
                             status = "backlog"
                         db_manager.upsert_card_from_okf(
                             project_uuid=p_uuid,

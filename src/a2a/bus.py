@@ -15,6 +15,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import msgpack
@@ -525,7 +526,8 @@ class A2ABus:
         ticket_id: Optional[str] = None,
         proposal_c_ref: str = "",
         num_evaluators: int = 3,
-        domain: Optional[str] = None
+        domain: Optional[str] = None,
+        escalation_recommendation: Optional[str] = None
     ) -> Dict[str, Any]:
         """Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."""
         t_id = ticket_id or f"TICKET-{str(uuid.uuid4())[:8].upper()}"
@@ -581,7 +583,8 @@ class A2ABus:
             proposal_b_ref=proposal_b_ref,
             card_id=card_id,
             proposal_c_ref=synthesis_text,
-            jury_matrix_json=json.dumps(matrix_info.get("evaluators", []), ensure_ascii=False)
+            jury_matrix_json=json.dumps(matrix_info.get("evaluators", []), ensure_ascii=False),
+            escalation_recommendation=escalation_recommendation
         )
 
     def submit_agent_borda_evaluation(
@@ -611,7 +614,7 @@ class A2ABus:
                 score_security=float(scores.get("security", 70)),
                 score_ux_hicks=float(scores.get("ux_hicks", 70)),
                 score_testability=float(scores.get("testability", 70)),
-                rationale_summary=rationale
+                rationale_summary=(scores.get("rationale") or scores.get("rationale_summary") or rationale)
             )
             results.append({"option": opt, **res})
         return results
@@ -722,12 +725,21 @@ class A2ABus:
                 ruling_yaml_path = str(ruling_path)
 
                 from src.storage.okf_adapter import OKFAdapter
+                okf_adapter = OKFAdapter()
+                files_to_commit = [ruling_path]
+                try:
+                    prec_path = okf_adapter.export_precedents_index(proj["gov_repo_path"])
+                    if prec_path and Path(prec_path).exists():
+                        files_to_commit.append(prec_path)
+                except Exception as prec_err:
+                    logger.debug("Omitida exportación de precedentes en ruling: %s", prec_err)
+
                 title = (ticket.get("title") or "").strip()
                 collision_reason = (ticket.get("collision_reason") or "").strip()
                 commit_message = f"ratify(jury): {ticket_id} [{winning_option}] {title}"
                 if collision_reason:
                     commit_message += f"\n\n{collision_reason}"
-                OKFAdapter().commit_gov_file(proj["gov_repo_path"], ruling_path, commit_message)
+                okf_adapter.commit_gov_file(proj["gov_repo_path"], files_to_commit, commit_message, push_now=True)
             except Exception as e:
                 logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket_id, e)
 
