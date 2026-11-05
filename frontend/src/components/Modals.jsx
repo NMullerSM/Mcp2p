@@ -213,20 +213,36 @@ export function NewProjectModal({ isOpen, onClose, onSubmit }) {
   );
 }
 
-export function NewTaskModal({ isOpen, onClose, onSubmit }) {
+export function NewTaskModal({ isOpen, onClose, onSubmit, api, project }) {
   const [title, setTitle] = useState('');
   const [desc, setDesc] = useState('');
   const [criteria, setCriteria] = useState('');
   const [cardId, setCardId] = useState(`CARD-${Math.floor(100 + Math.random() * 900)}`);
+  const [assigneeNodeUuid, setAssigneeNodeUuid] = useState('');
+  const [collaborators, setCollaborators] = useState([]);
+
+  // Agentes/nodos principales conectados por MCP, para asignar la tarea ya desde su
+  // creación. Nunca incluye subagentes de jurado (no son colaboradores del proyecto).
+  useEffect(() => {
+    if (!isOpen || !api || !project) return;
+    let cancelled = false;
+    api.get_project_collaborators(project.project_uuid).then((res) => {
+      if (!cancelled && res.success) {
+        setCollaborators((res.collaborators || []).filter(c => c.status === 'approved'));
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [isOpen, api, project]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!title.trim() || !cardId.trim()) return;
-    onSubmit(cardId.trim(), title.trim(), desc.trim(), criteria.trim());
+    onSubmit(cardId.trim(), title.trim(), desc.trim(), criteria.trim(), assigneeNodeUuid);
     setTitle('');
     setDesc('');
     setCriteria('');
     setCardId(`CARD-${Math.floor(100 + Math.random() * 900)}`);
+    setAssigneeNodeUuid('');
   };
 
   return (
@@ -321,6 +337,41 @@ export function NewTaskModal({ isOpen, onClose, onSubmit }) {
             }}
           />
         </div>
+
+        {collaborators.length > 0 && (
+          <div>
+            <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <User size={13} color="var(--accent-primary)" /> Asignar a (opcional)
+              </span>
+            </label>
+            <select
+              value={assigneeNodeUuid}
+              onChange={(e) => setAssigneeNodeUuid(e.target.value)}
+              style={{
+                WebkitAppearance: 'none',
+                MozAppearance: 'none',
+                appearance: 'none',
+                width: '100%',
+                backgroundColor: 'var(--bg-app)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-primary)',
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '13px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="" style={{ backgroundColor: 'var(--bg-app)', color: 'var(--text-primary)' }}>Sin asignar (queda en Backlog)</option>
+              {collaborators.map(c => (
+                <option key={c.node_uuid} value={c.node_uuid} style={{ backgroundColor: 'var(--bg-app)', color: 'var(--text-primary)' }}>
+                  {c.developer_name || c.node_uuid}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
           <button
@@ -484,12 +535,14 @@ export function DeleteProjectModal({ isOpen, project, onClose, onConfirm }) {
   );
 }
 
-export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, onNavigateToBranch, onNavigateToHitl }) {
+export function CardDetailModal({ isOpen, card, api, project, onClose, onSave, onAcceptTask, onNavigateToBranch, onNavigateToHitl }) {
   const [title, setTitle] = useState(card?.title || '');
   const [desc, setDesc] = useState(card?.description || '');
   const [criteria, setCriteria] = useState(card?.acceptance_criteria || '');
   const [branchRef, setBranchRef] = useState(card?.branch_ref || '');
   const [status, setStatus] = useState(card?.status || 'backlog');
+  const [assigneeNodeUuid, setAssigneeNodeUuid] = useState(card?.assignee_node_uuid || '');
+  const [collaborators, setCollaborators] = useState([]);
 
   useEffect(() => {
     if (card) {
@@ -498,8 +551,22 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
       setCriteria(card.acceptance_criteria || '');
       setBranchRef(card.branch_ref || '');
       setStatus(card.status || 'backlog');
+      setAssigneeNodeUuid(card.assignee_node_uuid || '');
     }
   }, [card]);
+
+  // Lista de agentes/nodos principales conectados por MCP, asignables desde el humano.
+  // Nunca incluye subagentes de jurado: esos son efímeros y no viven en project_collaborators.
+  useEffect(() => {
+    if (!isOpen || !api || !project) return;
+    let cancelled = false;
+    api.get_project_collaborators(project.project_uuid).then((res) => {
+      if (!cancelled && res.success) {
+        setCollaborators((res.collaborators || []).filter(c => c.status === 'approved'));
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [isOpen, api, project]);
 
   if (!isOpen || !card) return null;
 
@@ -511,7 +578,8 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
       description: desc.trim(),
       acceptance_criteria: criteria.trim(),
       branch_ref: branchRef.trim(),
-      status
+      status,
+      assignee_node_uuid: assigneeNodeUuid
     });
   };
 
@@ -544,9 +612,41 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <User size={13} color="var(--text-secondary)" />
             <span style={{ color: 'var(--text-secondary)' }}>Asignado a:</span>
-            <strong style={{ fontFamily: 'var(--font-mono)' }}>
-              {card.assignee_node_uuid || 'Sin asignar'}
-            </strong>
+            <select
+              value={assigneeNodeUuid}
+              onChange={(e) => setAssigneeNodeUuid(e.target.value)}
+              title="Reasignar manualmente a un agente/nodo principal conectado por MCP"
+              style={{
+                WebkitAppearance: 'none',
+                MozAppearance: 'none',
+                appearance: 'none',
+                backgroundColor: 'var(--bg-surface)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '3px 7px',
+                fontSize: '12px',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                outline: 'none',
+                cursor: 'pointer',
+                maxWidth: '180px'
+              }}
+            >
+              <option value="" style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>Sin asignar</option>
+              {/* Si la tarjeta ya está asignada a un nodo que ya no es colaborador (removido), se
+                  conserva como opción para no perder el valor actual al abrir el modal. */}
+              {assigneeNodeUuid && !collaborators.some(c => c.node_uuid === assigneeNodeUuid) && (
+                <option value={assigneeNodeUuid} style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
+                  {assigneeNodeUuid} (ya no es colaborador)
+                </option>
+              )}
+              {collaborators.map(c => (
+                <option key={c.node_uuid} value={c.node_uuid} style={{ backgroundColor: 'var(--bg-surface)', color: 'var(--text-primary)' }}>
+                  {c.developer_name || c.node_uuid}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -555,6 +655,15 @@ export function CardDetailModal({ isOpen, card, onClose, onSave, onAcceptTask, o
               value={status}
               onChange={(e) => setStatus(e.target.value)}
               style={{
+                // El cuadro cerrado del <select> usa el widget nativo del sistema (en Linux,
+                // el tema GTK) que ignora el backgroundColor del autor salvo que se le quite
+                // la apariencia nativa — por eso en modo oscuro se veía blanco cerrado pero
+                // la lista desplegada (dibujada por el navegador, no por el widget nativo) sí
+                // respetaba el color. Con appearance:none el cuadro cerrado también usa estos
+                // estilos.
+                WebkitAppearance: 'none',
+                MozAppearance: 'none',
+                appearance: 'none',
                 backgroundColor: 'var(--bg-surface)',
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border-subtle)',

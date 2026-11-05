@@ -181,10 +181,10 @@ export default function App() {
     }
   };
 
-  const handleCreateTask = async (cardId, title, desc, criteria = '') => {
+  const handleCreateTask = async (cardId, title, desc, criteria = '', assigneeNodeUuid = '') => {
     if (!api) return;
     try {
-      const res = await api.create_kanban_card(cardId, title, desc, criteria);
+      const res = await api.create_kanban_card(cardId, title, desc, criteria, assigneeNodeUuid);
       if (res.success) {
         setIsNewTaskOpen(false);
         setTaskTrigger(prev => prev + 1);
@@ -277,6 +277,8 @@ export default function App() {
         isOpen={isNewTaskOpen}
         onClose={() => setIsNewTaskOpen(false)}
         onSubmit={handleCreateTask}
+        api={api}
+        project={activeProject}
       />
 
       <JoinP2PModal

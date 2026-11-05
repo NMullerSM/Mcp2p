@@ -91,12 +91,17 @@ class MCPToolsHandler:
         card_id: str,
         title: Optional[str] = None,
         description: Optional[str] = None,
-        acceptance_criteria: Optional[str] = None
+        acceptance_criteria: Optional[str] = None,
+        assignee_node_uuid: Optional[str] = None
     ) -> str:
         """
         Edita el título, descripción o criterios de aceptación de una tarjeta Kanban existente
-        sin alterar su estado de asignación (lease) ni su columna/estado en el tablero.
-        Sincroniza atómicamente con la base viva SQLite y el repositorio de gobernanza OKF.
+        sin alterar su columna/estado en el tablero. Opcionalmente también permite reasignarla
+        a otro colaborador (assignee_node_uuid: None no la toca, '' la desasigna, cualquier
+        otro valor se verifica contra los colaboradores aprobados reales del proyecto antes
+        de escribir — nunca se puede asignar a un subagente efímero del jurado, porque esos
+        nunca quedan registrados como colaborador). Sincroniza atómicamente con la base viva
+        SQLite y el repositorio de gobernanza OKF.
         """
         try:
             card = self.db.get_card_by_id(project_uuid, card_id)
@@ -111,7 +116,8 @@ class MCPToolsHandler:
                 card_id=card_id,
                 title=title,
                 description=description,
-                acceptance_criteria=acceptance_criteria
+                acceptance_criteria=acceptance_criteria,
+                assignee_node_uuid=assignee_node_uuid
             )
             return json.dumps({
                 "success": True,

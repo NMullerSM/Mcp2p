@@ -84,25 +84,32 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         title: Optional[str] = None,
         description: Optional[str] = None,
         acceptance_criteria: Optional[str] = None,
+        assignee_node_uuid: Optional[str] = None,
         projectUuid: Optional[str] = None,
         cardId: Optional[str] = None,
         task_id: Optional[str] = None,
         taskId: Optional[str] = None,
-        acceptanceCriteria: Optional[str] = None
+        acceptanceCriteria: Optional[str] = None,
+        assigneeNodeUuid: Optional[str] = None
     ) -> str:
         """
         Edita el título, descripción o criterios de aceptación de una tarea existente sin
-        alterar su lease ni su estado/columna en el tablero. Sincroniza a SQLite y OKF.
+        alterar su lease ni su estado/columna en el tablero. Opcionalmente reasigna la tarea
+        a otro colaborador aprobado con assignee_node_uuid (None no la toca, '' la desasigna;
+        se verifica que sea un colaborador real conectado por MCP, nunca un subagente de
+        jurado). Sincroniza a SQLite y OKF.
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_card = card_id or cardId or task_id or taskId or ""
         resolved_crit = acceptance_criteria if acceptance_criteria is not None else acceptanceCriteria
+        resolved_assignee = assignee_node_uuid if assignee_node_uuid is not None else assigneeNodeUuid
         return handler.edit_kanban_task(
             project_uuid=resolved_proj,
             card_id=resolved_card,
             title=title,
             description=description,
-            acceptance_criteria=resolved_crit
+            acceptance_criteria=resolved_crit,
+            assignee_node_uuid=resolved_assignee
         )
 
     # 4. Herramienta: Adquirir Tarea con Lease Atómico

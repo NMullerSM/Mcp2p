@@ -97,7 +97,8 @@ export function ProjectWorkspace({
         cardData.description,
         cardData.acceptance_criteria,
         cardData.status,
-        cardData.branch_ref
+        cardData.branch_ref,
+        cardData.assignee_node_uuid
       );
       if (res.success) {
         setSelectedCard(null);
@@ -204,6 +205,8 @@ export function ProjectWorkspace({
       <CardDetailModal
         isOpen={Boolean(selectedCard)}
         card={selectedCard}
+        api={api}
+        project={project}
         onClose={() => setSelectedCard(null)}
         onSave={handleSaveCard}
         onAcceptTask={handleAcceptCard}

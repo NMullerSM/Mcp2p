@@ -88,6 +88,46 @@ def test_claim_card_lease_collision_prevented(temp_db):
     assert "bloqueada por el nodo node_alpha" in str(exc_info.value)
 
 
+def test_manual_assignment_requires_approved_collaborator(temp_db):
+    """Verifica que asignar una tarjeta a un nodo exige que sea un colaborador APROBADO
+    real del proyecto (conectado por MCP) — nunca un subagente efímero de jurado."""
+    projects = temp_db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+    temp_db.create_card(proj_uuid, "CARD-ASSIGN-01", "Tarea asignable")
+
+    # node_alpha todavía no es colaborador del proyecto -> debe rechazarse
+    with pytest.raises(ValueError):
+        temp_db.update_card_details(proj_uuid, "CARD-ASSIGN-01", assignee_node_uuid="node_alpha")
+
+    # Un uuid inventado (equivalente a un subagente de jurado neutral_juror_01) también debe rechazarse
+    with pytest.raises(ValueError):
+        temp_db.update_card_details(proj_uuid, "CARD-ASSIGN-01", assignee_node_uuid="neutral_juror_01")
+
+    # Una vez aprobado como colaborador real del proyecto, sí se puede asignar
+    temp_db.add_or_request_collaborator(proj_uuid, "node_alpha", role="collaborator", status="approved")
+    updated = temp_db.update_card_details(proj_uuid, "CARD-ASSIGN-01", assignee_node_uuid="node_alpha")
+    assert updated["assignee_node_uuid"] == "node_alpha"
+
+    # '' desasigna explícitamente; None no toca la asignación actual
+    unassigned = temp_db.update_card_details(proj_uuid, "CARD-ASSIGN-01", assignee_node_uuid="")
+    assert unassigned["assignee_node_uuid"] is None
+    untouched = temp_db.update_card_details(proj_uuid, "CARD-ASSIGN-01", title="Tarea asignable (editada)")
+    assert untouched["assignee_node_uuid"] is None
+
+
+def test_create_card_with_assignee(temp_db):
+    """Verifica que una tarjeta pueda nacer ya asignada a un colaborador aprobado."""
+    projects = temp_db.list_projects()
+    proj_uuid = projects[0]["project_uuid"]
+    temp_db.add_or_request_collaborator(proj_uuid, "node_beta", role="collaborator", status="approved")
+
+    card = temp_db.create_card(proj_uuid, "CARD-ASSIGN-02", "Tarea con asignación inicial", assignee_node_uuid="node_beta")
+    assert card["assignee_node_uuid"] == "node_beta"
+
+    with pytest.raises(ValueError):
+        temp_db.create_card(proj_uuid, "CARD-ASSIGN-03", "Tarea con nodo inválido", assignee_node_uuid="node_inexistente")
+
+
 def test_project_folder_naming_and_cascade_delete(temp_db):
     """Verifica que las carpetas sigan la convención app_{name} y okf_{name}_{uuid} con .git y eliminación en cascada."""
     proj = temp_db.create_project(name="Modulo Pagos", init_git=True)

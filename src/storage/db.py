@@ -681,24 +681,41 @@ class DatabaseManager:
                 )
             return [dict(row) for row in cur.fetchall()]
 
+    def _validate_assignable_node(self, project_uuid: str, node_uuid: str) -> None:
+        """
+        Verifica que un nodo sea asignable a una tarjeta: debe ser un colaborador aprobado
+        del proyecto, registrado como nodo real conectado por MCP (swarm_nodes). Esto
+        excluye de forma natural a los subagentes efímeros del jurado del Tribunal de
+        Honor, que nunca se registran en swarm_nodes ni en project_collaborators.
+        """
+        collab = self.get_collaborator(project_uuid, node_uuid)
+        if not collab or collab.get("status") != "approved":
+            raise ValueError(
+                f"'{node_uuid}' no es un colaborador aprobado de este proyecto; no se puede asignar la tarea."
+            )
+
     def create_card(
         self,
         project_uuid: str,
         card_id: str,
         title: str,
         description: str = "",
-        acceptance_criteria: str = ""
+        acceptance_criteria: str = "",
+        assignee_node_uuid: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Crea una nueva tarjeta en el backlog asociada a un proyecto y sincroniza a YAML."""
+        """Crea una nueva tarjeta en el backlog asociada a un proyecto y sincroniza a YAML.
+        Si se indica assignee_node_uuid, la tarjeta nace ya asignada a ese colaborador."""
+        if assignee_node_uuid:
+            self._validate_assignable_node(project_uuid, assignee_node_uuid)
         now = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO kanban_cards (card_id, project_uuid, title, description, acceptance_criteria, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?);
+                    INSERT INTO kanban_cards (card_id, project_uuid, title, description, acceptance_criteria, status, assignee_node_uuid, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 'backlog', ?, ?, ?);
                     """,
-                    (card_id, project_uuid, title, description, acceptance_criteria, now, now)
+                    (card_id, project_uuid, title, description, acceptance_criteria, assignee_node_uuid or None, now, now)
                 )
         card = self.get_card_by_id(project_uuid, card_id) or {}
         self._sync_card_to_okf_yaml(project_uuid, card)
@@ -712,9 +729,13 @@ class DatabaseManager:
         description: Optional[str] = None,
         acceptance_criteria: Optional[str] = None,
         status: Optional[str] = None,
-        branch_ref: Optional[str] = None
+        branch_ref: Optional[str] = None,
+        assignee_node_uuid: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza los detalles completos de una tarjeta y sincroniza a YAML."""
+        """Actualiza los detalles completos de una tarjeta y sincroniza a YAML.
+        assignee_node_uuid: None = no se toca la asignación actual; '' (string vacío) =
+        desasignar explícitamente; cualquier otro valor debe ser un colaborador aprobado
+        real del proyecto (se verifica antes de escribir, nunca un subagente de jurado)."""
         card = self.get_card_by_id(project_uuid, card_id)
         if not card:
             raise ValueError(f"Tarjeta no encontrada: {card_id}")
@@ -725,16 +746,24 @@ class DatabaseManager:
         new_status = status if status is not None else card["status"]
         new_branch = branch_ref if branch_ref is not None else card.get("branch_ref")
 
+        if assignee_node_uuid is None:
+            new_assignee = card.get("assignee_node_uuid")
+        elif assignee_node_uuid == "":
+            new_assignee = None
+        else:
+            self._validate_assignable_node(project_uuid, assignee_node_uuid)
+            new_assignee = assignee_node_uuid
+
         now_str = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
                     """
                     UPDATE kanban_cards
-                    SET title = ?, description = ?, acceptance_criteria = ?, status = ?, branch_ref = ?, updated_at = ?
+                    SET title = ?, description = ?, acceptance_criteria = ?, status = ?, branch_ref = ?, assignee_node_uuid = ?, updated_at = ?
                     WHERE project_uuid = ? AND card_id = ?;
                     """,
-                    (new_title, new_desc, new_crit, new_status, new_branch, now_str, project_uuid, card_id)
+                    (new_title, new_desc, new_crit, new_status, new_branch, new_assignee, now_str, project_uuid, card_id)
                 )
         updated = self.get_card_by_id(project_uuid, card_id) or {}
         self._sync_card_to_okf_yaml(project_uuid, updated)

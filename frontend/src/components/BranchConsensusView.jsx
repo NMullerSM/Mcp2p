@@ -245,13 +245,13 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
     try {
       const res = await api.git_push_action(project.project_uuid, selectedBranch, repoTarget);
       if (res.success) {
-        setFeedback({ type: 'success', text: `Rama '${selectedBranch}' publicada exitosamente en el repositorio remoto.` });
+        setFeedback({ type: 'success', text: `Cambios de '${selectedBranch}' enviados exitosamente al repositorio remoto.` });
         loadData();
       } else {
         if (res.requires_remote) {
           setIsRemoteModalOpen(true);
         }
-        setFeedback({ type: 'error', text: res.error || 'Error al publicar rama' });
+        setFeedback({ type: 'error', text: res.error || 'Error al enviar cambios' });
       }
     } catch (e) {
       setFeedback({ type: 'error', text: 'Error: ' + e });
@@ -621,6 +621,11 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                   onChange={(e) => setSelectedBranch(e.target.value)}
                   title={selectedBranch}
                   style={{
+                    // Mismo fix de contraste en modo oscuro que el select de Estado: el
+                    // cuadro cerrado usa el widget nativo salvo que se quite la apariencia.
+                    WebkitAppearance: 'none',
+                    MozAppearance: 'none',
+                    appearance: 'none',
                     backgroundColor: 'var(--bg-app)',
                     border: '1px solid var(--border-subtle)',
                     color: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
@@ -733,32 +738,45 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                 <Download size={13} /> Actualizar rama
               </button>
 
-              <button
-                onClick={handleMerge}
-                disabled={actionLoading || selectedBranch === 'main'}
-                title="Fusionar cambios de la rama seleccionada a main"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(99, 102, 241, 0.12)',
-                  color: selectedBranch === 'main' ? 'var(--text-muted)' : 'var(--accent-primary)',
-                  cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
-                }}
-              >
-                <GitMerge size={13} /> Fusionar a main
-              </button>
+              {/* "Fusionar a main" no aplica al repositorio de gobernanza: el OKF es
+                  meramente informativo y por diseño nunca gesta ramas propias, todo vive
+                  directamente en main — no tiene sentido ofrecer un merge que nunca tendrá
+                  nada que fusionar. Se oculta también cuando, por la razón que sea, no hay
+                  otra rama real para elegir (en vez de mostrarlo deshabilitado sin motivo
+                  visible). */}
+              {repoTarget !== 'gov' && branchesList.length > 1 && (
+                <button
+                  onClick={handleMerge}
+                  disabled={actionLoading || selectedBranch === 'main'}
+                  title="Fusionar cambios de la rama seleccionada a main"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)',
+                    backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(99, 102, 241, 0.12)',
+                    color: selectedBranch === 'main' ? 'var(--text-muted)' : 'var(--accent-primary)',
+                    cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <GitMerge size={13} /> Fusionar a main
+                </button>
+              )}
 
+              {/* Enviar los commits locales ya existentes al remoto ya configurado — una
+                  acción recurrente ("push"), distinta de "Publicar repositorio" (sección de
+                  abajo), que es la creación/vinculación del repositorio remoto por única vez.
+                  Antes decía "Publicar Rama", lo que sonaba a esa acción única y confundía
+                  sobre cuál botón usar para simplemente mandar cambios nuevos. */}
               {!isCurrentBranchPublished && (
                 <button
                   onClick={handlePush}
                   disabled={actionLoading}
-                  title="Publicar rama al repositorio remoto (git push -u origin)"
+                  title="Envía los commits locales que todavía no están en el remoto (git push)"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -774,11 +792,38 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     boxShadow: 'var(--shadow-sm)'
                   }}
                 >
-                  <Upload size={13} /> Publicar Rama
+                  <Upload size={13} /> Enviar Cambios
                 </button>
               )}
             </div>
           </div>
+
+          {/* Aviso de commits sin enviar: cuando se comitea una card/ruling, MCP2P intenta
+              pushear automáticamente, pero si ese envío automático falla (red, credenciales,
+              remoto no configurado) el commit local queda guardado sin avisar en ningún lado
+              — antes solo se sabía mirando el log de depuración del backend. Esto lo hace
+              visible apenas se abre este panel, en vez de quedar en silencio. */}
+          {repoTarget === 'gov' && activeGit.unpushed_count > 0 && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              backgroundColor: 'rgba(234, 179, 8, 0.1)',
+              border: '1px solid rgba(234, 179, 8, 0.3)',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 14px',
+              fontSize: '12px',
+              color: '#eab308'
+            }}>
+              <AlertTriangle size={14} />
+              <span>
+                Hay {activeGit.unpushed_count} commit{activeGit.unpushed_count === 1 ? '' : 's'} de
+                gobernanza sin enviar al remoto — puede ser que el envío automático al guardar
+                haya fallado (red, credenciales, o el remoto todavía no está configurado). Usa
+                "Enviar Cambios" arriba para reintentarlo.
+              </span>
+            </div>
+          )}
 
           {/* Barra de Estado Remoto & Auto-Publicación */}
           <div style={{

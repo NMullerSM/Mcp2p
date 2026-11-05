@@ -594,9 +594,11 @@ class ApiBridge:
         card_id: str,
         title: str,
         description: str = "",
-        acceptance_criteria: str = ""
+        acceptance_criteria: str = "",
+        assignee_node_uuid: str = ""
     ) -> Dict[str, Any]:
-        """Crea una nueva tarjeta en el proyecto activo con criterios de aceptación opcionales."""
+        """Crea una nueva tarjeta en el proyecto activo con criterios de aceptación opcionales.
+        Si se indica assignee_node_uuid, nace ya asignada a ese colaborador aprobado."""
         try:
             if not self.active_project_uuid:
                 self._ensure_active_project()
@@ -607,7 +609,8 @@ class ApiBridge:
                 card_id=card_id.strip(),
                 title=title.strip(),
                 description=description.strip(),
-                acceptance_criteria=acceptance_criteria.strip()
+                acceptance_criteria=acceptance_criteria.strip(),
+                assignee_node_uuid=assignee_node_uuid.strip() or None
             )
             return {"success": True, "card": card}
         except Exception as e:
@@ -620,9 +623,11 @@ class ApiBridge:
         description: Optional[str] = None,
         acceptance_criteria: Optional[str] = None,
         status: Optional[str] = None,
-        branch_ref: Optional[str] = None
+        branch_ref: Optional[str] = None,
+        assignee_node_uuid: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza los detalles completos de una tarjeta: título, descripción, criterios de aceptación, estado y rama."""
+        """Actualiza los detalles completos de una tarjeta: título, descripción, criterios de
+        aceptación, estado, rama y asignación (None = no tocarla, '' = desasignar)."""
         try:
             if not self.active_project_uuid:
                 self._ensure_active_project()
@@ -633,7 +638,8 @@ class ApiBridge:
                 description=description,
                 acceptance_criteria=acceptance_criteria,
                 status=status,
-                branch_ref=branch_ref
+                branch_ref=branch_ref,
+                assignee_node_uuid=assignee_node_uuid
             )
             return {"success": True, "card": card}
         except Exception as e:

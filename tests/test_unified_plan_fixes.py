@@ -82,6 +82,58 @@ async def test_edit_kanban_task_and_update_card_micro_script(mcp_setup):
 
 
 @pytest.mark.anyio
+async def test_edit_kanban_task_reassignment_via_mcp(mcp_setup):
+    """Un agente conectado por MCP puede reasignar manualmente una tarjeta, pero solo a
+    otro colaborador aprobado real del proyecto — nunca a un subagente efímero de jurado."""
+    server, db, proj, tmp_path = mcp_setup
+    p_uuid = proj["project_uuid"]
+
+    await server.call_tool("create_kanban_task", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-REASSIGN-01",
+        "title": "Tarea a reasignar"
+    })
+
+    # Intento de asignar a un subagente de jurado (nunca es colaborador) -> falla
+    bad_res = await server.call_tool("edit_kanban_task", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-REASSIGN-01",
+        "assignee_node_uuid": "neutral_juror_01"
+    })
+    bad_out = json.loads(bad_res.content[0].text)
+    assert bad_out["success"] is False
+
+    # node_worker_2 aún no es colaborador aprobado -> también falla
+    db.register_or_update_node("node_worker_2", "Worker 2", "agent_worker_2")
+    not_collab_res = await server.call_tool("edit_kanban_task", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-REASSIGN-01",
+        "assignee_node_uuid": "node_worker_2"
+    })
+    assert json.loads(not_collab_res.content[0].text)["success"] is False
+
+    # Una vez aprobado como colaborador real, la reasignación funciona y queda en la DB viva
+    db.add_or_request_collaborator(p_uuid, "node_worker_2", role="collaborator", status="approved")
+    ok_res = await server.call_tool("edit_kanban_task", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-REASSIGN-01",
+        "assignee_node_uuid": "node_worker_2"
+    })
+    ok_out = json.loads(ok_res.content[0].text)
+    assert ok_out["success"] is True
+    assert ok_out["card"]["assignee_node_uuid"] == "node_worker_2"
+    assert db.get_card_by_id(p_uuid, "CARD-REASSIGN-01")["assignee_node_uuid"] == "node_worker_2"
+
+    # '' desasigna explícitamente
+    unassign_res = await server.call_tool("edit_kanban_task", {
+        "project_uuid": p_uuid,
+        "card_id": "CARD-REASSIGN-01",
+        "assignee_node_uuid": ""
+    })
+    assert json.loads(unassign_res.content[0].text)["card"]["assignee_node_uuid"] is None
+
+
+@pytest.mark.anyio
 async def test_release_kanban_task_rejected(mcp_setup):
     server, db, proj, tmp_path = mcp_setup
     p_uuid = proj["project_uuid"]

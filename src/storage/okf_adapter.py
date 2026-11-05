@@ -498,7 +498,11 @@ graph TD
     def push_gov_repo(self, gov_base_path: str | Path, remote: str = "origin") -> bool:
         """
         Publica los commits locales del repositorio de gobernanza hacia su remoto origin configurado.
-        Si no hay remoto configurado o falla la conexión, retorna False sin interrumpir la operación.
+        Si no hay remoto configurado o falla la conexión, retorna False sin interrumpir la operación
+        (el commit local ya quedó guardado), pero el fallo queda registrado en warning con el motivo
+        real — antes se perdía en un log de debug y no había ninguna forma de saber por qué un commit
+        de gobernanza se quedaba sin publicar. El commit sin pushear sigue siendo visible y reintentable
+        desde la UI (botón "Enviar Cambios" en Control de Cambios) porque incrementa unpushed_count.
         """
         base = Path(gov_base_path)
         if not (base / ".git").is_dir():
@@ -507,6 +511,9 @@ graph TD
             from src.storage.github_sync import GitHubSyncManager
             sync = GitHubSyncManager()
             if not sync.has_remote(base, remote):
+                logger.warning(
+                    f"Auto-push de gobernanza omitido en {base}: no hay remoto '{remote}' configurado todavía."
+                )
                 return False
             # Detectar rama activa o fallback a main
             res = subprocess.run(["git", "branch", "--show-current"], cwd=str(base), capture_output=True, text=True, check=False)
@@ -514,9 +521,15 @@ graph TD
             if not branch:
                 branch = "main"
             push_res = sync.git_push_branch(base, branch=branch, remote=remote)
-            return bool(push_res.get("success"))
+            success = bool(push_res.get("success"))
+            if not success:
+                logger.warning(
+                    f"Auto-push de gobernanza falló en {base} (rama '{branch}'): "
+                    f"{push_res.get('error', 'motivo desconocido')}"
+                )
+            return success
         except Exception as e:
-            logger.debug(f"Git push de gobernanza omitido o fallido: {e}")
+            logger.warning(f"Auto-push de gobernanza falló con excepción en {base}: {e}")
             return False
 
     def commit_gov_file(
