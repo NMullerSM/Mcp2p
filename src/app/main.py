@@ -90,6 +90,7 @@ def main() -> int:
         background_color="#0f1013",
         text_select=True
     )
+    api._updater.set_window(window)
 
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")

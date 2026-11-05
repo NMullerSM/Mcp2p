@@ -1,0 +1,254 @@
+name: MCP2P CI/CD — Multi-Platform Build & Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  # ============================================================================
+  # 1. Compilación para Windows (Instalador Inno Setup + ZIP Portable)
+  # ============================================================================
+  build-windows:
+    name: Build Windows (Installer & Portable)
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: 'utf-8'
+
+    steps:
+      - name: Checkout del Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22 (Vite + React)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar Inno Setup Compiler (ISCC)
+        shell: powershell
+        run: |
+          $standardPaths = @(
+            "C:\Program Files\Inno Setup 6\ISCC.exe",
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          )
+          $found = $standardPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) {
+            Write-Host "Inno Setup no detectado. Instalando vía Chocolatey..."
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Instalar Dependencias del Frontend
+        run: |
+          cd frontend
+          npm install --no-audit
+
+      - name: Compilar Frontend (React 18 + Vite)
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Instalar Dependencias de Python (editable + extras dev/build)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+
+      - name: Ejecutar Pruebas Automatizadas (pytest)
+        run: pytest tests
+
+      - name: Compilar Binario PyInstaller (Windows Onedir)
+        run: python build_desktop.py
+
+      - name: Compilar Instalador Oficial Setup (.exe con Inno Setup)
+        shell: powershell
+        run: |
+          $iscc = @(
+            "C:\Program Files\Inno Setup 6\ISCC.exe",
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\ProgramData\chocolatey\bin\iscc.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
+          if (-not $iscc) { throw "Inno Setup compiler (ISCC.exe) no fue encontrado." }
+          $ver = (python scripts/get_version.py).Trim()
+          & $iscc "/DMyAppVersion=$ver" "ejecutables\windows\installer\mcp2p_setup.iss"
+
+      - name: Guardar Artefactos de Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp2p-windows-build
+          if-no-files-found: warn
+          path: |
+            ejecutables/windows/Mcp2p-Setup-*.exe
+            ejecutables/windows/Mcp2p-Windows-Portable.zip
+          retention-days: 14
+
+  # ============================================================================
+  # 2. Compilación para Linux (Paquete .deb para Pop!_OS/Ubuntu + Tarball)
+  # ============================================================================
+  build-linux:
+    name: Build Linux (.deb & Portable Tarball)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22 (Vite + React)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Dependencias del Sistema Linux (WebKitGTK, Cairo, GObject & Build Tools)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3-dev pkg-config meson ninja-build \
+            libcairo2-dev gir1.2-gtk-3.0 gir1.2-webkit2-4.1 \
+            python3-gi dpkg
+          sudo apt-get install -y --no-install-recommends libgirepository-2.0-dev || sudo apt-get install -y --no-install-recommends libgirepository1.0-dev
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar Dependencias del Frontend
+        run: |
+          cd frontend
+          npm install --no-audit
+
+      - name: Compilar Frontend (React 18 + Vite)
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Instalar Dependencias de Python (editable + extras dev/build)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+
+      - name: Instalar Bindings GTK para Python (PyGObject, pycairo)
+        run: pip install PyGObject pycairo
+
+      - name: Ejecutar Pruebas Automatizadas (pytest)
+        run: pytest tests
+
+      - name: Compilar Binario PyInstaller (Linux Onedir)
+        run: python build_desktop.py
+
+      - name: Empaquetar Tarball Portable (.tar.gz) con Launcher mcp2p.sh
+        run: |
+          chmod 755 ejecutables/linux/Mcp2p/mcp2p.sh
+          chmod 755 ejecutables/linux/Mcp2p/Mcp2p
+          cd ejecutables/linux
+          tar -czf Mcp2p-Linux-Portable.tar.gz Mcp2p
+          cd ../..
+
+      - name: Generar Paquete Debian Oficial (.deb)
+        run: python ejecutables/linux/deb/build_deb.py
+
+      - name: Guardar Artefactos de Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp2p-linux-build
+          if-no-files-found: warn
+          path: |
+            ejecutables/linux/mcp2p_*_amd64.deb
+            ejecutables/linux/Mcp2p-Linux-Portable.tar.gz
+          retention-days: 14
+
+  # ============================================================================
+  # 3. Publicación Oficial en el Perfil Público (Exclusivo Push a 'main')
+  # ============================================================================
+  publish-release:
+    name: Publicar Release Oficial en GitHub
+    needs: [build-windows, build-linux]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout del Repositorio (Tags & Historial)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Descargar Artefactos de Windows
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp2p-windows-build
+          path: dist_release/windows
+
+      - name: Descargar Artefactos de Linux
+        uses: actions/download-artifact@v4
+        with:
+          name: mcp2p-linux-build
+          path: dist_release/linux
+
+      - name: Organizar Artefactos para Publicación
+        run: |
+          mkdir -p release_assets
+          find dist_release -type f \( -name "*.exe" -o -name "*.zip" -o -name "*.deb" -o -name "*.tar.gz" \) -exec cp -v {} release_assets/ \;
+          ls -la release_assets/
+
+      - name: Generar Manifiesto de Integridad SHA256SUMS
+        run: |
+          cd release_assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Determinar Versión y Verificar Colisión de Tags
+        id: release_version
+        run: |
+          VER=$(python3 scripts/get_version.py 2>/dev/null || echo "1.0.0")
+          TAG="v${VER}"
+          echo "Comprobando si el tag $TAG ya existe..."
+          if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then
+            echo "::error::El tag $TAG ya existe. Incrementa la versión en src/app/version.py antes de mergear a main."
+            exit 1
+          fi
+          echo "TAG_NAME=${TAG}" >> $GITHUB_ENV
+
+      - name: Publicar Release Oficial en el Perfil Público
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: "MCP2P ${{ env.TAG_NAME }} — Release Oficial"
+          body: |
+            ## MCP2P — Plataforma de Colaboración Agéntica (${{ env.TAG_NAME }})
+
+            Compilación oficial multiplataforma generada automáticamente para Windows y Linux.
+
+            ### Descargables Disponibles:
+            - **Windows**:
+              - `Mcp2p-Setup-*.exe` — Instalador guiado con accesos directos y desinstalador (Inno Setup).
+              - `Mcp2p-Windows-Portable.zip` — Versión portable lista para ejecutar.
+            - **Linux**:
+              - `mcp2p_*_amd64.deb` — Paquete oficial para Pop!_OS, Ubuntu, Linux Mint y Debian.
+              - `Mcp2p-Linux-Portable.tar.gz` — Paquete comprimido portable para cualquier distro Linux.
+
+            ### Integridad Criptográfica:
+            - `SHA256SUMS` incluido con los hashes criptográficos de cada binario publicado.
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

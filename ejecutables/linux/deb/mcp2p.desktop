@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=MCP2P
+GenericName=Agentic Collaboration Platform
+GenericName[es]=Plataforma de Colaboración Agéntica
+Comment=Local-first multi-agent collaboration platform with MCP & P2P sync
+Comment[es]=Plataforma local-first de colaboración multi-agente con MCP y sincronización P2P
+Exec=/usr/bin/mcp2p %U
+Icon=mcp2p
+Terminal=false
+Type=Application
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=Mcp2p
+Keywords=mcp;agents;p2p;okf;collaboration;

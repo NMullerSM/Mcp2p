@@ -1,0 +1,12 @@
+Package: mcp2p
+Version: 1.0.0
+Section: devel
+Priority: optional
+Architecture: amd64
+Maintainer: Nathaniel David Muller San Martin <nmullersm@gmail.com>
+Depends: libc6, gir1.2-gtk-3.0, gir1.2-webkit2-4.1, python3-gi
+Homepage: https://github.com/NMullerSM/Mcp2p
+Description: MCP2P — Local-first Agentic Collaboration Platform
+ Plataforma de escritorio local-first para colaboración multi-agente vía MCP,
+ sincronización P2P y gobernanza OKF viva. Compatible con Pop!_OS, Ubuntu,
+ Debian y derivadas.

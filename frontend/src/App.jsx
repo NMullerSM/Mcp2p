@@ -11,6 +11,22 @@ import {
   JoinP2PModal,
   DeleteProjectModal
 } from './components/Modals';
+import { APP_VERSION } from './version';
+import { UpdateNotificationPill } from './components/UpdateNotificationPill';
+import { UpdateModal } from './components/UpdateModal';
+
+function parseSemVer(v) {
+  const parts = v.replace(/^v/, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+}
+
+function isNewerVersion(remote, local) {
+  const [rMaj, rMin, rPat] = parseSemVer(remote);
+  const [lMaj, lMin, lPat] = parseSemVer(local);
+  if (rMaj !== lMaj) return rMaj > lMaj;
+  if (rMin !== lMin) return rMin > lMin;
+  return rPat > lPat;
+}
 
 export default function App() {
   const { isReady, api } = usePyWebView();
@@ -35,6 +51,46 @@ export default function App() {
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState(null);
   const [taskTrigger, setTaskTrigger] = useState(0);
+
+  // Auto-updater state
+  const [availableRelease, setAvailableRelease] = useState(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [isUpdateDismissed, setIsUpdateDismissed] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState({ status: 'idle', percent: 0, downloaded_mb: 0, total_mb: 0 });
+
+  useEffect(() => {
+    let isMounted = true;
+    async function checkForUpdate() {
+      try {
+        const res = await fetch('https://api.github.com/repos/NMullerSM/Mcp2p/releases/latest', {
+          headers: { Accept: 'application/vnd.github.v3+json' },
+        });
+        if (res.ok) {
+          const release = await res.json();
+          if (isMounted && release?.tag_name) {
+            const ignored = localStorage.getItem('mcp2p_ignored_update_version');
+            if (isNewerVersion(release.tag_name, APP_VERSION) && ignored !== release.tag_name) {
+              setAvailableRelease(release);
+            }
+          }
+        }
+      } catch {
+        // Sin red: no interrumpe el uso local-first.
+      }
+    }
+    checkForUpdate();
+    return () => { isMounted = false; };
+  }, []);
+
+  useEffect(() => {
+    if (updateProgress.status !== 'downloading' || !isReady || !api) return;
+    const interval = setInterval(async () => {
+      try {
+        setUpdateProgress(await api.get_update_progress());
+      } catch { /* noop */ }
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [updateProgress.status, isReady, api]);
 
   // Aplicar tema
   useEffect(() => {
@@ -293,6 +349,30 @@ export default function App() {
         onClose={() => setProjectToDelete(null)}
         onConfirm={handleDeleteProject}
       />
+
+      {/* Notificación y Modal de Auto-Actualización */}
+      {availableRelease && !isUpdateDismissed && !isUpdateModalOpen && (
+        <UpdateNotificationPill
+          release={availableRelease}
+          progress={updateProgress}
+          onOpenModal={() => setIsUpdateModalOpen(true)}
+          onDismiss={() => setIsUpdateDismissed(true)}
+        />
+      )}
+      {isUpdateModalOpen && availableRelease && (
+        <UpdateModal
+          release={availableRelease}
+          currentVersion={APP_VERSION}
+          api={api}
+          progress={updateProgress}
+          onIgnoreVersion={(v) => {
+            localStorage.setItem('mcp2p_ignored_update_version', v);
+            setAvailableRelease(null);
+            setIsUpdateModalOpen(false);
+          }}
+          onClose={() => setIsUpdateModalOpen(false)}
+        />
+      )}
     </div>
   );
 }

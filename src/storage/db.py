@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
 
+from src.app.paths import get_default_db_path
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", str(PROJECT_ROOT / "mcp2p_local.db"))
+DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", get_default_db_path())
 
 
 class DatabaseManager:

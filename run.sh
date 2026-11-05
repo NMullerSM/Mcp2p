@@ -5,6 +5,10 @@
 
 set -e
 
+# Compatibilidad gráfica WebKitGTK (NVIDIA / Wayland) — mitigación preventiva
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+
 # Obtener directorio raíz del proyecto
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 cd "$DIR"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp2p"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first P2P multi-agent collaboration platform powered by MCP & PyWebView"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,11 @@ dev = [
     "pytest>=8.0.0",
     "black>=24.0.0",
     "flake8>=7.0.0"
+]
+build = [
+    "pyinstaller>=6.0.0",
+    "pillow>=10.0.0",
+    "typer>=0.9.0"
 ]
 
 [project.scripts]

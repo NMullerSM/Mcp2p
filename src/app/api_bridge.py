@@ -23,6 +23,8 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
 from src.p2p.crypto import NodeCryptoManager
 from src.storage.github_sync import GitHubSyncManager
+from src.app.auto_updater import AutoUpdateManager
+from src.app.paths import get_bundle_dir, get_user_data_dir
 
 logger = logging.getLogger("mcp2p.api_bridge")
 
@@ -36,6 +38,7 @@ class ApiBridge:
         self.okf = OKFAdapter()
         self.crypto = NodeCryptoManager()
         self.github = GitHubSyncManager(db_manager=self.db)
+        self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
         self._ensure_local_node()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
@@ -567,6 +570,22 @@ class ApiBridge:
             return self.github.clear_pat_token()
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # ==========================
+    # Auto-actualización y reinicio silencioso
+    # ==========================
+
+    def start_auto_update(self, download_url: str, version: str) -> Dict[str, Any]:
+        """Inicia la descarga en segundo plano del instalador de la nueva versión."""
+        return self._updater.start_download(download_url, version)
+
+    def get_update_progress(self) -> Dict[str, Any]:
+        """Retorna el progreso porcentual y estado de la descarga."""
+        return self._updater.get_progress()
+
+    def apply_update_and_restart(self) -> Dict[str, Any]:
+        """Aplica la actualización silenciosa y reinicia."""
+        return self._updater.apply_update_and_restart()
 
     def get_active_project(self) -> Dict[str, Any]:
         """Devuelve el proyecto actualmente activo."""

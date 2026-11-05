@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+chmod 755 /opt/mcp2p/Mcp2p 2>/dev/null || true
+chmod 755 /opt/mcp2p/mcp2p-launcher.sh 2>/dev/null || true
+chmod 755 /usr/bin/mcp2p 2>/dev/null || true
+if which update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications || true
+fi
+if which gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+exit 0
