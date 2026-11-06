@@ -61,8 +61,10 @@ def build():
         "--clean", "--noconfirm",
     ] + add_data_args + [
         "--collect-all=pywebview",
+        "--collect-all=webview",
         "--collect-all=cryptography",
         "--collect-all=mcp",
+        "--collect-all=yaml",
         "--hidden-import=yaml",
         "--hidden-import=msgpack",
         "--hidden-import=cbor2",

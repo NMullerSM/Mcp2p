@@ -1,20 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('<repo>/frontend/dist', 'frontend/dist'), ('<repo>/src/ui', 'src/ui'), ('<repo>/mcp2p.png', '.'), ('<repo>/mcp2p.ico', '.')]
-binaries = []
-hiddenimports = ['yaml', 'msgpack', 'cbor2', 'src', 'src.app', 'src.app.api_bridge', 'src.app.auto_updater', 'src.app.paths', 'src.storage', 'src.storage.db', 'src.storage.okf_adapter', 'src.storage.github_sync', 'src.storage.code_scanner', 'src.p2p', 'src.p2p.network', 'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine']
-tmp_ret = collect_all('pywebview')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('cryptography')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('mcp')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+ROOT_DIR = os.path.dirname(os.path.abspath(SPEC)) if 'SPEC' in locals() else os.path.abspath('.')
 
+datas = [
+    (os.path.join(ROOT_DIR, 'frontend', 'dist'), 'frontend/dist'),
+    (os.path.join(ROOT_DIR, 'src', 'ui'), 'src/ui'),
+    (os.path.join(ROOT_DIR, 'mcp2p.ico'), '.'),
+    (os.path.join(ROOT_DIR, 'mcp2p.png'), '.'),
+]
+binaries = []
+hiddenimports = [
+    'yaml', 'msgpack', 'cbor2', 'src', 'src.app', 'src.app.api_bridge', 'src.app.auto_updater',
+    'src.app.paths', 'src.storage', 'src.storage.db', 'src.storage.okf_adapter',
+    'src.storage.github_sync', 'src.storage.code_scanner', 'src.p2p', 'src.p2p.network',
+    'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine'
+]
+for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml'):
+    tmp_ret = collect_all(pkg)
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
-    ['<repo>/src/app/main.py'],
-    pathex=['<repo>'],
+    [os.path.join(ROOT_DIR, 'src', 'app', 'main.py')],
+    pathex=[ROOT_DIR],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -43,7 +52,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['<repo>/mcp2p.png'],
+    icon=[os.path.join(ROOT_DIR, 'mcp2p.ico')],
 )
 coll = COLLECT(
     exe,
