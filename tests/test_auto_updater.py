@@ -53,7 +53,7 @@ def test_frozen_paths_simulation(monkeypatch):
         sys.frozen = True
         sys.executable = "/opt/mcp2p/Mcp2p"
         user_dir = get_user_data_dir()
-        assert "mcp2p/data" in user_dir
+        assert "mcp2p/data" in user_dir.replace("\\", "/")
         assert os.path.isabs(user_dir)
     finally:
         if orig_frozen:
