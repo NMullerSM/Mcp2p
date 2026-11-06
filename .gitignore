@@ -54,6 +54,7 @@ frontend/node_modules/
 frontend/dist/
 
 # Artefactos de compilación de escritorio (PyInstaller / Inno Setup / .deb)
+ejecutables/windows/Mcp2p/
 ejecutables/windows/Mcp2p-Setup-*.exe
 ejecutables/windows/Mcp2p-Windows-Portable.zip
 ejecutables/windows/installer/*.exe

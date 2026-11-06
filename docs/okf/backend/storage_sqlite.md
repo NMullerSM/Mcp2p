@@ -1,8 +1,8 @@
 # OKF Feature: Motor de Almacenamiento SQLite WAL
 ## Especificación Técnica de Persistencia Local-First
 
-> **Ubicación en Código**: [`src/storage/db.py`](src/storage/db.py)  
-> **Pruebas Automatizadas**: [`tests/test_storage.py`](tests/test_storage.py)  
+> **Ubicación en Código**: [`src/storage/db.py`](../../../src/storage/db.py)  
+> **Pruebas Automatizadas**: [`tests/test_storage.py`](../../../tests/test_storage.py)  
 
 ---
 

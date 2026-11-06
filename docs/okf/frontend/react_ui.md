@@ -1,7 +1,7 @@
 # Ficha Técnica: Frontend React + Vite con PyWebView
 > **Área**: Frontend  
 > **Identificador**: `react_ui`  
-> **Código Fuente**: [`frontend/src/App.jsx`](frontend/src/App.jsx), [`frontend/src/components/`](frontend/src/components/)  
+> **Código Fuente**: [`frontend/src/App.jsx`](../../../frontend/src/App.jsx), [`frontend/src/components/`](../../../frontend/src/components/)  
 > **Documento OKF de Referencia**: [`02_MAPA_DE_CODIGO_Y_FEATURES.md`](../02_MAPA_DE_CODIGO_Y_FEATURES.md)
 
 ---

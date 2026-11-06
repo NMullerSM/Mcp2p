@@ -56,7 +56,7 @@ run.bat
 ```
 
 ### Servidor MCP para Clientes Agénticos (`mcp.json`)
-Para conectar Claude Desktop, Cursor o Antigravity IDE:
+Para conectar Claude Desktop, Cursor o Antigravity IDE (Linux/macOS, usar la ruta absoluta al intérprete del `.venv`):
 ```json
 {
   "mcpServers": {
@@ -71,6 +71,7 @@ Para conectar Claude Desktop, Cursor o Antigravity IDE:
   }
 }
 ```
+En Windows, `command` debe apuntar a `C:\\ruta\\absoluta\\a\\Mcp2p\\.venv\\Scripts\\python.exe` (y `PYTHONPATH`/`MCP2P_DB_PATH` con la misma ruta base en Windows).
 
 ---
 

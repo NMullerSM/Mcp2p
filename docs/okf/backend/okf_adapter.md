@@ -1,7 +1,7 @@
 # Ficha Técnica: Adaptador OKF y Gestor de Memoria Huérfana
 > **Área**: Backend  
 > **Identificador**: `okf_adapter`  
-> **Código Fuente**: [`src/storage/okf_adapter.py`](src/storage/okf_adapter.py)  
+> **Código Fuente**: [`src/storage/okf_adapter.py`](../../../src/storage/okf_adapter.py)  
 > **Documento OKF de Referencia**: [`02_MAPA_DE_CODIGO_Y_FEATURES.md`](../02_MAPA_DE_CODIGO_Y_FEATURES.md)
 
 ---

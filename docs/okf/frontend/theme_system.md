@@ -1,7 +1,7 @@
 # OKF Feature: Sistema Visual y Motor de Temas
 ## Especificación de Diseño Claro/Oscuro y Tokens CSS
 
-> **Ubicación en Código**: [`src/ui/css/themes.css`](src/ui/css/themes.css) y [`src/ui/js/app.js`](src/ui/js/app.js)  
+> **Ubicación en Código**: [`src/ui/css/themes.css`](../../../src/ui/css/themes.css) y [`src/ui/js/app.js`](../../../src/ui/js/app.js)  
 
 ---
 

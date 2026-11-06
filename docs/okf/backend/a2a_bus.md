@@ -1,7 +1,7 @@
 # Ficha Técnica: Bus de Comunicación A2A Híbrido
 > **Área**: Backend  
 > **Identificador**: `a2a_bus`  
-> **Código Fuente**: [`src/a2a/bus.py`](src/a2a/bus.py)  
+> **Código Fuente**: [`src/a2a/bus.py`](../../../src/a2a/bus.py)  
 > **Documento OKF de Referencia**: [`02_MAPA_DE_CODIGO_Y_FEATURES.md`](../02_MAPA_DE_CODIGO_Y_FEATURES.md)
 
 ---

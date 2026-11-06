@@ -1,8 +1,8 @@
 # OKF Feature: Puente JS API y Aplicación PyWebView
 ## Especificación Técnica del Enlace Frontend <-> Backend
 
-> **Ubicación en Código**: [`src/app/api_bridge.py`](src/app/api_bridge.py) y [`src/app/main.py`](src/app/main.py)  
-> **Pruebas Automatizadas**: [`tests/test_api_bridge.py`](tests/test_api_bridge.py)  
+> **Ubicación en Código**: [`src/app/api_bridge.py`](../../../src/app/api_bridge.py) y [`src/app/main.py`](../../../src/app/main.py)  
+> **Pruebas Automatizadas**: [`tests/test_api_bridge.py`](../../../tests/test_api_bridge.py)  
 
 ---
 

@@ -1,7 +1,7 @@
 # Ficha Técnica: Módulo Criptográfico Ed25519 e Integración GitHub
 > **Área**: Backend  
 > **Identificador**: `crypto_p2p`  
-> **Código Fuente**: [`src/p2p/crypto.py`](src/p2p/crypto.py), [`src/storage/github_sync.py`](src/storage/github_sync.py)  
+> **Código Fuente**: [`src/p2p/crypto.py`](../../../src/p2p/crypto.py), [`src/storage/github_sync.py`](../../../src/storage/github_sync.py)  
 > **Documento OKF de Referencia**: [`02_MAPA_DE_CODIGO_Y_FEATURES.md`](../02_MAPA_DE_CODIGO_Y_FEATURES.md)
 
 ---

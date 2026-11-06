@@ -17,6 +17,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from src.app.api_bridge import ApiBridge
+from src.app.paths import get_bundle_dir
 from src.p2p.network import P2PNotificationService
 
 
@@ -30,8 +31,7 @@ def parse_arguments() -> argparse.Namespace:
 
 def get_ui_target() -> str:
     """Resuelve la URL o ruta local al archivo index.html."""
-    current_dir = Path(__file__).resolve().parent
-    root_dir = current_dir.parent.parent
+    root_dir = Path(get_bundle_dir())
 
     # 1. Comprobar build compilado de React (Vite)
     react_dist = root_dir / "frontend" / "dist" / "index.html"
@@ -39,7 +39,7 @@ def get_ui_target() -> str:
         return react_dist.as_uri()
 
     # 2. Fallback a la UI clásica en src/ui
-    vanilla_ui = current_dir.parent / "ui" / "index.html"
+    vanilla_ui = root_dir / "src" / "ui" / "index.html"
     if vanilla_ui.exists():
         return vanilla_ui.as_uri()
 

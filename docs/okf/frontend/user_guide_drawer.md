@@ -1,7 +1,7 @@
 # OKF Feature: Guía de Usuario Integrada y Ergonomía
 ## Especificación del Panel de Ayuda Contextual (Heurística 10 de Nielsen)
 
-> **Ubicación en Código**: [`src/ui/js/guide.js`](src/ui/js/guide.js), [`src/ui/css/styles.css`](src/ui/css/styles.css) y [`src/ui/index.html`](src/ui/index.html)  
+> **Ubicación en Código**: [`src/ui/js/guide.js`](../../../src/ui/js/guide.js), [`src/ui/css/styles.css`](../../../src/ui/css/styles.css) y [`src/ui/index.html`](../../../src/ui/index.html)  
 
 ---
 

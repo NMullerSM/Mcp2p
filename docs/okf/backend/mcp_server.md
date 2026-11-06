@@ -1,9 +1,9 @@
 # OKF Feature: Servidor Local Model Context Protocol (MCP)
 ## Especificación de Herramientas Agénticas y Control de Concurrencia (Fase 2-4)
 
-> **Ubicación en Código**: [`src/mcp/server.py`](src/mcp/server.py) y [`src/mcp/tools.py`](src/mcp/tools.py)  
-> **Pruebas Automatizadas**: [`tests/test_mcp_server.py`](tests/test_mcp_server.py)  
-> **Configuración para IDEs**: [`mcp.json`](mcp.json)  
+> **Ubicación en Código**: [`src/mcp/server.py`](../../../src/mcp/server.py) y [`src/mcp/tools.py`](../../../src/mcp/tools.py)  
+> **Pruebas Automatizadas**: [`tests/test_mcp_server.py`](../../../tests/test_mcp_server.py)  
+> **Configuración para IDEs**: [`mcp.json`](../../../mcp.json)  
 
 ---
 
@@ -69,7 +69,7 @@ Todas las operaciones se ejecutan de manera determinista contra SQLite en modo W
 {
   "mcpServers": {
     "mcp2p": {
-      "command": "./.venv/bin/python",
+      "command": "./.venv/Scripts/python.exe",
       "args": ["-m", "src.mcp.server"],
       "env": {
         "PYTHONPATH": "."
