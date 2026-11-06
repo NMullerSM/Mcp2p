@@ -29,6 +29,11 @@ jobs:
       - name: Checkout del Repositorio
         uses: actions/checkout@v4
 
+      - name: Configurar Identidad de Git (requerida por pytest)
+        run: |
+          git config --global user.name "MCP2P CI"
+          git config --global user.email "ci@mcp2p.local"
+
       - name: Configurar Node.js 22 (Vite + React)
         uses: actions/setup-node@v4
         with:
@@ -107,6 +112,11 @@ jobs:
     steps:
       - name: Checkout del Repositorio
         uses: actions/checkout@v4
+
+      - name: Configurar Identidad de Git (requerida por pytest)
+        run: |
+          git config --global user.name "MCP2P CI"
+          git config --global user.email "ci@mcp2p.local"
 
       - name: Configurar Node.js 22 (Vite + React)
         uses: actions/setup-node@v4

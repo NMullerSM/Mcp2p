@@ -45,10 +45,11 @@ def test_paths_management():
     assert db_path.endswith("mcp2p_local.db")
 
 
-def test_frozen_paths_simulation():
+def test_frozen_paths_simulation(monkeypatch):
     orig_frozen = getattr(sys, "frozen", False)
     orig_exe = sys.executable
     try:
+        monkeypatch.setattr(sys, "platform", "linux")
         sys.frozen = True
         sys.executable = "/opt/mcp2p/Mcp2p"
         user_dir = get_user_data_dir()
