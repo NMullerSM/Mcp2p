@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-export function UpdateModal({ release, currentVersion, api, onClose, onIgnoreVersion, progress: externalProgress }) {
+export function UpdateModal({ release, currentVersion, api, installMode, onClose, onIgnoreVersion, progress: externalProgress }) {
   const [internalProgress, setInternalProgress] = useState({ status: 'idle', percent: 0, downloaded_mb: 0, total_mb: 0 });
   const [isApplyingRestart, setIsApplyingRestart] = useState(false);
   const [actionError, setActionError] = useState(null);
@@ -15,7 +15,20 @@ export function UpdateModal({ release, currentVersion, api, onClose, onIgnoreVer
   const exeAsset = release.assets?.find((a) => a.name.toLowerCase().endsWith('.exe'));
   const debAsset = release.assets?.find((a) => a.name.toLowerCase().endsWith('.deb'));
   const tarAsset = release.assets?.find((a) => a.name.toLowerCase().includes('linux') && a.name.toLowerCase().endsWith('.tar.gz'));
-  const primaryAsset = isWindows ? exeAsset : (debAsset || tarAsset || exeAsset);
+
+  // Elige el asset que coincide con CÓMO está instalada esta misma copia (system vs
+  // portable), no solo con el SO: así una instancia portable se auto-actualiza con
+  // el tarball portable (reemplazo en caliente sin prompts), y una instalada por
+  // .deb se actualiza reinstalando el .deb (único prompt de polkit inevitable).
+  let primaryAsset;
+  if (installMode?.platform === 'win32') {
+    primaryAsset = exeAsset;
+  } else if (installMode?.platform?.startsWith('linux')) {
+    primaryAsset = installMode.mode === 'system' ? (debAsset || tarAsset) : (tarAsset || debAsset);
+  } else {
+    // installMode todavía no cargó: heurística de respaldo por user-agent.
+    primaryAsset = isWindows ? exeAsset : (debAsset || tarAsset || exeAsset);
+  }
 
   useEffect(() => {
     const checkStatus = async () => {

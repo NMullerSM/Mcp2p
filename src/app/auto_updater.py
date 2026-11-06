@@ -8,6 +8,7 @@ y nunca se sobreescriben al actualizar).
 import os
 import sys
 import time
+import shlex
 import shutil
 import hashlib
 import hmac
@@ -16,6 +17,8 @@ import threading
 import subprocess
 import urllib.request
 from typing import Optional, Dict, Any
+
+from src.app.paths import is_system_installed
 
 OFFICIAL_RELEASE_PREFIX = "https://github.com/NMullerSM/Mcp2p/releases/download/"
 
@@ -174,6 +177,51 @@ class AutoUpdateManager:
                 self._status = "error"
                 self._error_msg = str(e)
 
+    def _validate_portable_app_dir(self, app_dir: str) -> bool:
+        """Guarda de seguridad: solo autoriza reemplazar en caliente una carpeta portable
+        genuina de MCP2P (nunca una ruta de sistema, vacía, relativa o ajena)."""
+        if not app_dir or not os.path.isabs(app_dir):
+            return False
+        if os.path.basename(app_dir.rstrip(os.sep)) != "Mcp2p":
+            return False
+        if is_system_installed():
+            return False
+        return os.path.isfile(os.path.join(app_dir, "Mcp2p"))
+
+    def _build_linux_relaunch_script(self, new_archive_path: str, app_dir: str) -> str:
+        """Genera un script bash que espera a que MCP2P cierre, reemplaza la carpeta
+        portable con el contenido del nuevo tarball ya verificado (SHA256) y relanza
+        la app automáticamente, sin intervención manual del usuario."""
+        extract_dir = tempfile.mkdtemp(prefix="mcp2p_update_extract_")
+        script_dir = self._temp_dir or tempfile.gettempdir()
+        script_path = os.path.join(script_dir, "mcp2p_apply_update.sh")
+        pid = os.getpid()
+        q_extract = shlex.quote(extract_dir)
+        q_archive = shlex.quote(new_archive_path)
+        q_app_dir = shlex.quote(app_dir)
+        script = f"""#!/bin/bash
+set -e
+for i in $(seq 1 150); do
+    kill -0 {pid} 2>/dev/null || break
+    sleep 0.1
+done
+mkdir -p {q_extract}
+tar -xzf {q_archive} -C {q_extract}
+if [ ! -f {q_extract}/Mcp2p/Mcp2p ]; then
+    exit 1
+fi
+rm -rf {q_app_dir}
+mkdir -p {q_app_dir}
+cp -a {q_extract}/Mcp2p/. {q_app_dir}/
+rm -rf {q_extract}
+chmod 755 {q_app_dir}/Mcp2p {q_app_dir}/mcp2p.sh 2>/dev/null || true
+nohup {q_app_dir}/mcp2p.sh >/dev/null 2>&1 &
+"""
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script)
+        os.chmod(script_path, 0o755)
+        return script_path
+
     def apply_update_and_restart(self) -> Dict[str, Any]:
         with self._lock:
             status = self._status
@@ -203,9 +251,29 @@ class AutoUpdateManager:
                 subprocess.Popen(cmd)
             elif sys.platform.startswith("linux"):
                 if target_path.endswith(".deb"):
-                    subprocess.Popen(["xdg-open", target_path])
+                    # Instalación de sistema (.deb en /opt): requiere un único prompt de
+                    # autenticación (polkit) inevitable para escribir en rutas de root.
+                    subprocess.Popen(["pkexec", "dpkg", "-i", target_path])
+
+                    def _relaunch_after_deb_install():
+                        time.sleep(6.0)
+                        try:
+                            subprocess.Popen(["mcp2p"])
+                        except Exception:
+                            pass
+
+                    threading.Thread(target=_relaunch_after_deb_install, daemon=True).start()
                 else:
-                    subprocess.Popen(["xdg-open", os.path.dirname(target_path)])
+                    # Instalación portable (tarball descomprimido, carpeta de usuario):
+                    # reemplazo en caliente sin prompts, sin descarga manual.
+                    app_dir = os.path.dirname(sys.executable)
+                    if not self._validate_portable_app_dir(app_dir):
+                        return {
+                            "success": False,
+                            "error": "No se pudo verificar de forma segura la carpeta de instalación portable."
+                        }
+                    script_path = self._build_linux_relaunch_script(target_path, app_dir)
+                    subprocess.Popen(["bash", script_path], start_new_session=True)
             elif sys.platform.startswith("darwin"):
                 subprocess.Popen(["open", target_path])
 

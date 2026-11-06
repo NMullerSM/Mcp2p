@@ -20,6 +20,27 @@ def get_bundle_dir() -> str:
     return str(Path(__file__).resolve().parent.parent.parent)
 
 
+def is_system_installed() -> bool:
+    """True si el binario frozen corre desde una ubicación de instalación del sistema
+    (Program Files en Windows, /opt o /usr en Linux) en vez de una carpeta portable.
+    En modo desarrollo (no frozen) siempre es False.
+    """
+    if not getattr(sys, "frozen", False):
+        return False
+
+    exe_dir = os.path.dirname(sys.executable)
+
+    if sys.platform == "win32":
+        prog_files = os.environ.get("ProgramFiles", "C:\\Program Files").lower()
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)").lower()
+        exe_lower = exe_dir.lower()
+        return exe_lower.startswith(prog_files) or exe_lower.startswith(prog_files_x86) or "program files" in exe_lower
+    elif sys.platform.startswith("linux"):
+        return exe_dir.startswith("/opt") or exe_dir.startswith("/usr")
+
+    return False
+
+
 def get_user_data_dir() -> str:
     """Directorio con permisos de escritura garantizados para la base de datos y workspace/."""
     if not getattr(sys, "frozen", False):
@@ -27,17 +48,7 @@ def get_user_data_dir() -> str:
         return get_bundle_dir()
 
     exe_dir = os.path.dirname(sys.executable)
-    is_installed = False
-
-    if sys.platform == "win32":
-        prog_files = os.environ.get("ProgramFiles", "C:\\Program Files").lower()
-        prog_files_x86 = os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)").lower()
-        exe_lower = exe_dir.lower()
-        if exe_lower.startswith(prog_files) or exe_lower.startswith(prog_files_x86) or "program files" in exe_lower:
-            is_installed = True
-    elif sys.platform.startswith("linux"):
-        if exe_dir.startswith("/opt") or exe_dir.startswith("/usr"):
-            is_installed = True
+    is_installed = is_system_installed()
 
     if not is_installed:
         # Modo portable (tarball / zip descomprimido): probar si la carpeta del ejecutable

@@ -57,6 +57,19 @@ export default function App() {
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [isUpdateDismissed, setIsUpdateDismissed] = useState(false);
   const [updateProgress, setUpdateProgress] = useState({ status: 'idle', percent: 0, downloaded_mb: 0, total_mb: 0 });
+  const [installMode, setInstallMode] = useState(null);
+
+  useEffect(() => {
+    if (!isReady || !api) return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const res = await api.get_install_mode();
+        if (isMounted && res?.success) setInstallMode(res);
+      } catch { /* noop */ }
+    })();
+    return () => { isMounted = false; };
+  }, [isReady, api]);
 
   useEffect(() => {
     let isMounted = true;
@@ -364,6 +377,7 @@ export default function App() {
           release={availableRelease}
           currentVersion={APP_VERSION}
           api={api}
+          installMode={installMode}
           progress={updateProgress}
           onIgnoreVersion={(v) => {
             localStorage.setItem('mcp2p_ignored_update_version', v);

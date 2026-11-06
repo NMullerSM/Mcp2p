@@ -74,9 +74,45 @@ Para conectar Claude Desktop, Cursor o Antigravity IDE:
 
 ---
 
+## 📦 Descarga, Releases y Actualización Automática
+
+### Binarios Oficiales
+
+Cada push a `main` ejecuta el pipeline de CI/CD (`.github/workflows/build-and-release.yml`), que compila los paquetes de cada plataforma y los publica como **GitHub Release** oficial en https://github.com/NMullerSM/Mcp2p/releases, junto con un manifiesto **`SHA256SUMS`** de integridad.
+
+| Plataforma | Archivo | Modo de instalación |
+|---|---|---|
+| 🪟 Windows | `Mcp2p-Setup-vX.Y.Z.exe` | Instalador (Inno Setup) |
+| 🪟 Windows | `Mcp2p-Windows-Portable.zip` | Portable, sin instalación |
+| 🐧 Linux (Pop!_OS / Ubuntu / Debian) | `mcp2p_X.Y.Z_amd64.deb` | Paquete de sistema (`/opt`, vía `apt`/`dpkg`) |
+| 🐧 Linux | `Mcp2p-Linux-Portable.tar.gz` | Portable, en carpeta de usuario |
+
+### Actualización Automática
+
+Al abrir la aplicación, consulta en **segundo plano** la última release de GitHub y compara versiones (**semver**). Si existe una más nueva, muestra una notificación discreta ("Nueva versión disponible") sin interrumpir el uso. Al aceptar, la descarga se realiza en segundo plano con progreso en MB y porcentaje, y el archivo se **verifica criptográficamente contra `SHA256SUMS`** antes de aplicar nada. Si el hash no coincide, la actualización se **rechaza**.
+
+La aplicación detecta sola la plataforma y el modo de instalación:
+
+* **Windows (instalador o portable)**: ejecuta el instalador en modo silencioso (`/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`), cierra la versión anterior y la reabre automáticamente. Cero pasos manuales.
+* **Linux portable (tarball en carpeta de usuario)**: reemplaza en caliente los archivos de la carpeta de la aplicación con el tarball ya verificado y relanza la app. Cero pasos manuales, sin contraseña.
+* **Linux `.deb` (instalación de sistema)**: ejecuta `pkexec dpkg -i` con el nuevo paquete y relanza la app. Es la **única excepción con un paso manual** (un clic y contraseña en el diálogo de polkit). Es una limitación de permisos del sistema operativo, no un descuido: escribir en `/opt` y `/usr` requiere privilegios de root, y polkit exige autenticación explícita del usuario para concederlos.
+
+En modo desarrollo (ejecución desde código fuente con `.venv`), "aplicar actualización" equivale a un `git pull` de la rama actual. Este modo no aplica a usuarios finales.
+
+### Datos de Usuario Persistentes
+
+Los datos del usuario **nunca se tocan ni se pierden durante una actualización**, porque viven en un directorio separado del de instalación:
+
+* **Windows**: `%LOCALAPPDATA%\MCP2P\data`
+* **Linux**: `~/.local/share/mcp2p/data`
+
+Ese directorio contiene la base de datos SQLite local y la carpeta `workspace/` con los proyectos clonados.
+
+---
+
 ## 🧪 Pruebas Automatizadas
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 ```
-Suite exhaustiva con 73+ pruebas unitarias y de integración cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico y las 25 herramientas MCP.
+Suite exhaustiva con 92 pruebas unitarias y de integración (1 adicional se omite fuera de un host Windows real) cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico, las 25 herramientas MCP y actualización automática multiplataforma.

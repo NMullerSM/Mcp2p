@@ -24,7 +24,7 @@ from src.storage.okf_adapter import OKFAdapter
 from src.p2p.crypto import NodeCryptoManager
 from src.storage.github_sync import GitHubSyncManager
 from src.app.auto_updater import AutoUpdateManager
-from src.app.paths import get_bundle_dir, get_user_data_dir
+from src.app.paths import get_bundle_dir, get_user_data_dir, is_system_installed
 
 logger = logging.getLogger("mcp2p.api_bridge")
 
@@ -586,6 +586,13 @@ class ApiBridge:
     def apply_update_and_restart(self) -> Dict[str, Any]:
         """Aplica la actualización silenciosa y reinicia."""
         return self._updater.apply_update_and_restart()
+
+    def get_install_mode(self) -> Dict[str, Any]:
+        """Informa al frontend si esta instancia corre instalada a nivel de sistema
+        (.deb en /opt, o en Program Files) o en modo portable, para que el modal de
+        actualización ofrezca el asset correcto (.deb vs .tar.gz / .exe)."""
+        mode = "system" if is_system_installed() else ("portable" if getattr(sys, "frozen", False) else "dev")
+        return {"success": True, "platform": sys.platform, "mode": mode}
 
     def get_active_project(self) -> Dict[str, Any]:
         """Devuelve el proyecto actualmente activo."""
