@@ -111,7 +111,10 @@ export default function App() {
     try {
       localStorage.setItem('mcp2p_theme', theme);
     } catch {}
-  }, [theme]);
+    if (api && typeof api.set_ui_theme === 'function') {
+      api.set_ui_theme(theme).catch(() => {});
+    }
+  }, [theme, api]);
 
   const toggleTheme = useCallback(() => {
     setTheme(t => (t === 'dark' ? 'light' : 'dark'));

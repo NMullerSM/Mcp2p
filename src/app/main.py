@@ -81,21 +81,34 @@ def main() -> int:
 
     target_url = get_ui_target()
 
+    # Determinar color de fondo nativo coherente con el tema persistido (FLK-05)
+    try:
+        ui_theme = api.db.get_setting("ui_theme", "dark") or "dark"
+    except Exception:
+        ui_theme = "dark"
+    bg_color = "#f8fafc" if ui_theme == "light" else "#0f1013"
+
     window = webview.create_window(
-        title="MCP2P — Plataforma Agéntica Local-First",
+        title="MCP²P — Agent Consensus & Governance",
         url=target_url,
         js_api=api,
         width=1280,
         height=840,
         min_size=(960, 600),
-        background_color="#0f1013",
+        background_color=bg_color,
         text_select=True
     )
+    if hasattr(api, "set_window"):
+        api.set_window(window)
     api._updater.set_window(window)
 
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
-        webview.start(debug=args.debug)
+        start_kwargs = {"debug": args.debug}
+        icon_path = Path(get_bundle_dir()) / "mcp2p.png"
+        if icon_path.exists():
+            start_kwargs["icon"] = str(icon_path)
+        webview.start(**start_kwargs)
     finally:
         p2p_network.stop_lan_server()
         print("[MCP2P] Ventana cerrada. Red P2P y sesión finalizadas limpiamente.")

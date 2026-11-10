@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.proc_utils import run_hidden
 from src.storage.validators import ensure_within, validate_safe_id
 
 logger = logging.getLogger("mcp2p.storage.okf")
@@ -518,7 +519,7 @@ graph TD
                 )
                 return False
             # Detectar rama activa o fallback a main
-            res = subprocess.run(["git", "branch", "--show-current"], cwd=str(base), capture_output=True, text=True, check=False)
+            res = run_hidden(["git", "branch", "--show-current"], cwd=str(base), capture_output=True, text=True, check=False)
             branch = res.stdout.strip() if res.returncode == 0 else ""
             if not branch:
                 branch = "main"
@@ -570,8 +571,8 @@ graph TD
 
         try:
             for r in rel_paths:
-                subprocess.run(["git", "add", r], cwd=str(base), capture_output=True, check=False)
-            result = subprocess.run(
+                run_hidden(["git", "add", r], cwd=str(base), capture_output=True, check=False)
+            result = run_hidden(
                 ["git", "commit", "-m", commit_message],
                 cwd=str(base),
                 capture_output=True,
@@ -1000,14 +1001,14 @@ graph TD
                 return {"success": False, "error": f"No es un repositorio Git: {code_dir}"}
 
             wt_dir.parent.mkdir(parents=True, exist_ok=True)
-            res = subprocess.run(
+            res = run_hidden(
                 ["git", "worktree", "add", "-B", branch_name, str(wt_dir)],
                 cwd=code_dir,
                 capture_output=True,
                 text=True
             )
             if res.returncode != 0:
-                res = subprocess.run(
+                res = run_hidden(
                     ["git", "worktree", "add", str(wt_dir), "-b", branch_name],
                     cwd=code_dir,
                     capture_output=True,
@@ -1037,8 +1038,8 @@ graph TD
             branch_name = f"wt/{card_id}"
 
             if (code_dir / ".git").is_dir():
-                subprocess.run(["git", "worktree", "remove", "--force", str(wt_dir)], cwd=code_dir, capture_output=True)
-                subprocess.run(["git", "branch", "-D", branch_name], cwd=code_dir, capture_output=True)
+                run_hidden(["git", "worktree", "remove", "--force", str(wt_dir)], cwd=code_dir, capture_output=True)
+                run_hidden(["git", "branch", "-D", branch_name], cwd=code_dir, capture_output=True)
 
             if card_id in registry.get("active_worktrees", {}):
                 del registry["active_worktrees"][card_id]
@@ -1091,9 +1092,9 @@ graph TD
             try:
                 wt_file = orphan_wt / f"{branch_name}.json"
                 wt_file.write_text(json.dumps(snapshot_data, indent=2, ensure_ascii=False), encoding="utf-8")
-                subprocess.run(["git", "add", "."], cwd=orphan_wt, capture_output=True)
-                p_c = subprocess.run(["git", "commit", "-m", commit_message], cwd=orphan_wt, capture_output=True, text=True)
-                rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=orphan_wt, capture_output=True, text=True)
+                run_hidden(["git", "add", "."], cwd=orphan_wt, capture_output=True)
+                p_c = run_hidden(["git", "commit", "-m", commit_message], cwd=orphan_wt, capture_output=True, text=True)
+                rev = run_hidden(["git", "rev-parse", "--short", "HEAD"], cwd=orphan_wt, capture_output=True, text=True)
                 if rev.returncode == 0:
                     commit_sha = rev.stdout.strip()
                     git_committed = True
@@ -1102,21 +1103,21 @@ graph TD
 
         elif git_dir.exists():
             try:
-                check_branch = subprocess.run(
+                check_branch = run_hidden(
                     ["git", "rev-parse", "--verify", branch_name],
                     cwd=base,
                     capture_output=True,
                     text=True
                 )
                 if check_branch.returncode != 0:
-                    subprocess.run(
+                    run_hidden(
                         ["git", "branch", branch_name],
                         cwd=base,
                         capture_output=True,
                         text=True
                     )
 
-                hash_proc = subprocess.run(
+                hash_proc = run_hidden(
                     ["git", "hash-object", "-w", str(snapshot_file)],
                     cwd=base,
                     capture_output=True,
@@ -1474,8 +1475,8 @@ graph TD
         if (base / ".git").is_dir():
             creationflags = 0
             try:
-                subprocess.run(["git", "add", "."], cwd=str(base), capture_output=True, check=False)
-                subprocess.run(
+                run_hidden(["git", "add", "."], cwd=str(base), capture_output=True, check=False)
+                run_hidden(
                     ["git", "commit", "-m", f"feat(okf): bootstrap and ratify initial OKF v2 governance dossier for {project_uuid}"],
                     cwd=str(base),
                     capture_output=True,

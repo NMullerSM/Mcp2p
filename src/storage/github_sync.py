@@ -17,13 +17,20 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.proc_utils import run_hidden
+
 logger = logging.getLogger("mcp2p.github")
+
+AUTH_STATUS_TTL_S: float = 60.0
+GIT_ID_TTL_S: float = 60.0
 
 
 class GitHubSyncManager:
@@ -32,6 +39,11 @@ class GitHubSyncManager:
     def __init__(self, db_manager: Optional[Any] = None) -> None:
         self.gh_bin = shutil.which("gh")
         self._db = db_manager
+        self._auth_cache: Optional[Dict[str, Any]] = None
+        self._auth_cache_time: float = 0.0
+        self._git_id_cache: Optional[Dict[str, str]] = None
+        self._git_id_cache_time: float = 0.0
+        self._cache_lock = threading.Lock()
 
     @property
     def db(self) -> Any:
@@ -83,75 +95,96 @@ class GitHubSyncManager:
         if not (path / ".git").exists():
             return False
         try:
-            res = subprocess.run(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
+            res = run_hidden(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
             if res.returncode == 0:
                 raw_url = res.stdout.strip()
                 cleaned = self.clean_url_credentials(raw_url)
                 if cleaned != raw_url:
-                    subprocess.run(["git", "remote", "set-url", remote, cleaned], cwd=path, capture_output=True, timeout=5)
+                    run_hidden(["git", "remote", "set-url", remote, cleaned], cwd=path, capture_output=True, timeout=5)
                     return True
         except Exception as e:
             logger.debug(f"Error sanitizando remote {remote} en {repo_path}: {e}")
         return False
 
-    def get_auth_status(self) -> Dict[str, Any]:
+    def get_auth_status(self, force: bool = False) -> Dict[str, Any]:
         """Comprueba si el usuario tiene una sesión activa de GitHub (PAT, gh CLI o env)."""
-        git_identity = self.get_git_global_identity()
+        now = time.time()
+        with self._cache_lock:
+            if not force and self._auth_cache is not None and (now - self._auth_cache_time) < AUTH_STATUS_TTL_S:
+                return dict(self._auth_cache)
+
+        git_identity = self.get_git_global_identity(force=force)
 
         # 1. Comprobar Token Personal (PAT) almacenado en SQLite
         try:
             pat_token = self.db.get_setting("github_pat_token")
             if pat_token:
                 username = self.db.get_setting("github_pat_username", "github_user")
-                return {
+                res = {
                     "authenticated": True,
                     "provider": "pat",
                     "username": username,
                     "details": f"Autenticado mediante Personal Access Token (PAT) (@{username})",
                     "git_identity": git_identity
                 }
+                with self._cache_lock:
+                    self._auth_cache = res
+                    self._auth_cache_time = time.time()
+                return res
         except Exception as e:
             logger.debug(f"Error comprobando PAT en db: {e}")
 
-        # 2. Comprobar gh CLI
+        # 2. Comprobar gh CLI (NIT-01: sin --show-token)
         if self.gh_bin:
             try:
-                proc = subprocess.run(
-                    [self.gh_bin, "auth", "status", "--show-token"],
+                proc = run_hidden(
+                    [self.gh_bin, "auth", "status"],
                     capture_output=True,
                     text=True,
                     timeout=5
                 )
                 if proc.returncode == 0 or "Logged in to github.com" in proc.stdout or "Logged in to github.com" in proc.stderr:
                     username = self._extract_username_from_gh()
-                    return {
+                    res = {
                         "authenticated": True,
                         "provider": "gh_cli",
                         "username": username or "github_user",
                         "details": f"Sesión activa mediante GitHub CLI (@{username or 'usuario'})",
                         "git_identity": git_identity
                     }
+                    with self._cache_lock:
+                        self._auth_cache = res
+                        self._auth_cache_time = time.time()
+                    return res
             except Exception as e:
                 logger.debug(f"gh auth status falló: {e}")
 
         # 3. Comprobar variable de entorno GITHUB_TOKEN / GH_TOKEN
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         if token:
-            return {
+            res = {
                 "authenticated": True,
                 "provider": "env_token",
                 "username": os.environ.get("GITHUB_USER", "token_user"),
                 "details": "Autenticado mediante variable de entorno",
                 "git_identity": git_identity
             }
+            with self._cache_lock:
+                self._auth_cache = res
+                self._auth_cache_time = time.time()
+            return res
 
-        return {
+        res = {
             "authenticated": False,
             "provider": None,
             "username": "",
             "details": "No se detectó sesión de GitHub. Puedes ingresar un Personal Access Token (PAT) o autenticarte con 'gh auth login'.",
             "git_identity": git_identity
         }
+        with self._cache_lock:
+            self._auth_cache = res
+            self._auth_cache_time = time.time()
+        return res
 
     def save_pat_token(self, token: str) -> Dict[str, Any]:
         """Valida y guarda un GitHub Personal Access Token (PAT) en la base de datos local."""
@@ -198,6 +231,10 @@ class GitHubSyncManager:
                             )
                     except Exception as node_err:
                         logger.debug(f"No se pudo sincronizar identidad de nodo local con PAT: {node_err}")
+
+                    with self._cache_lock:
+                        self._auth_cache = None
+                        self._auth_cache_time = 0.0
 
                     return {
                         "success": True,
@@ -346,6 +383,9 @@ class GitHubSyncManager:
         try:
             self.db.delete_setting("github_pat_token")
             self.db.delete_setting("github_pat_username")
+            with self._cache_lock:
+                self._auth_cache = None
+                self._auth_cache_time = 0.0
             return {"success": True, "message": "Token de GitHub eliminado correctamente"}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -355,7 +395,7 @@ class GitHubSyncManager:
         if not self.gh_bin:
             return None
         try:
-            proc = subprocess.run(
+            proc = run_hidden(
                 [self.gh_bin, "api", "user", "--jq", ".login"],
                 capture_output=True,
                 text=True,
@@ -375,7 +415,7 @@ class GitHubSyncManager:
 
         try:
             # Comprobar si ya existe el remote
-            check = subprocess.run(
+            check = run_hidden(
                 ["git", "remote", "get-url", remote_name],
                 cwd=path,
                 capture_output=True,
@@ -383,7 +423,7 @@ class GitHubSyncManager:
             )
             if check.returncode == 0:
                 # Actualizar URL existente
-                subprocess.run(
+                run_hidden(
                     ["git", "remote", "set-url", remote_name, remote_url],
                     cwd=path,
                     capture_output=True,
@@ -391,7 +431,7 @@ class GitHubSyncManager:
                 )
             else:
                 # Agregar nuevo remote
-                subprocess.run(
+                run_hidden(
                     ["git", "remote", "add", remote_name, remote_url],
                     cwd=path,
                     capture_output=True,
@@ -401,20 +441,30 @@ class GitHubSyncManager:
         except subprocess.CalledProcessError as e:
             return {"success": False, "error": f"Error configurando remoto Git: {e}"}
 
-    def get_git_global_identity(self) -> Dict[str, str]:
+    def get_git_global_identity(self, force: bool = False) -> Dict[str, str]:
         """Obtiene el nombre y correo configurados en Git global del sistema."""
+        now = time.time()
+        with self._cache_lock:
+            if not force and self._git_id_cache is not None and (now - self._git_id_cache_time) < GIT_ID_TTL_S:
+                return dict(self._git_id_cache)
+
         name = ""
         email = ""
         try:
-            p_name = subprocess.run(["git", "config", "--global", "user.name"], capture_output=True, text=True, timeout=3)
+            p_name = run_hidden(["git", "config", "--global", "user.name"], capture_output=True, text=True, timeout=3)
             if p_name.returncode == 0:
                 name = p_name.stdout.strip()
-            p_email = subprocess.run(["git", "config", "--global", "user.email"], capture_output=True, text=True, timeout=3)
+            p_email = run_hidden(["git", "config", "--global", "user.email"], capture_output=True, text=True, timeout=3)
             if p_email.returncode == 0:
                 email = p_email.stdout.strip()
         except Exception as e:
             logger.debug(f"Error leyendo git config global: {e}")
-        return {"name": name, "email": email}
+
+        res = {"name": name, "email": email}
+        with self._cache_lock:
+            self._git_id_cache = res
+            self._git_id_cache_time = time.time()
+        return res
 
     def get_git_branches_and_log(self, repo_path: str | Path) -> Dict[str, Any]:
         """Recupera la rama actual, ramas disponibles y el historial de commits con grafo."""
@@ -424,15 +474,15 @@ class GitHubSyncManager:
 
         try:
             # 1. Rama actual
-            cur_p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True, timeout=5)
+            cur_p = run_hidden(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True, timeout=5)
             current_branch = cur_p.stdout.strip() if cur_p.returncode == 0 else "main"
 
             # 2. Lista de ramas
-            b_p = subprocess.run(["git", "branch", "--format=%(refname:short)"], cwd=path, capture_output=True, text=True, timeout=5)
+            b_p = run_hidden(["git", "branch", "--format=%(refname:short)"], cwd=path, capture_output=True, text=True, timeout=5)
             branches = [b.strip() for b in b_p.stdout.splitlines() if b.strip()] if b_p.returncode == 0 else [current_branch]
 
             # 3. Historial de commits con padres para graficar ramas
-            log_p = subprocess.run(
+            log_p = run_hidden(
                 ["git", "log", "--all", "--date=iso", "--pretty=format:%h|%p|%an|%ad|%s|%d", "-n", "30"],
                 cwd=path,
                 capture_output=True,
@@ -461,19 +511,19 @@ class GitHubSyncManager:
                         })
 
             # 4. Remotos configurados
-            rem_p = subprocess.run(["git", "remote", "-v"], cwd=path, capture_output=True, text=True, timeout=5)
+            rem_p = run_hidden(["git", "remote", "-v"], cwd=path, capture_output=True, text=True, timeout=5)
             remotes = rem_p.stdout.strip().splitlines() if rem_p.returncode == 0 else []
             origin_url = self.get_remote_url(path, "origin")
 
             # 5. Estado de rastreo remoto y commits no publicados
-            upstream_p = subprocess.run(
+            upstream_p = run_hidden(
                 ["git", "rev-parse", "--abbrev-ref", f"{current_branch}@{{u}}"],
                 cwd=path, capture_output=True, text=True, timeout=5
             )
             is_tracking = (upstream_p.returncode == 0 and bool(upstream_p.stdout.strip()))
             unpushed_count = 0
             if is_tracking:
-                unp_p = subprocess.run(
+                unp_p = run_hidden(
                     ["git", "rev-list", f"{current_branch}@{{u}}..HEAD", "--count"],
                     cwd=path, capture_output=True, text=True, timeout=5
                 )
@@ -501,7 +551,7 @@ class GitHubSyncManager:
         """Comprueba si existe un control remoto configurado en el repositorio."""
         path = Path(repo_path)
         try:
-            res = subprocess.run(["git", "remote"], cwd=path, capture_output=True, text=True, timeout=5)
+            res = run_hidden(["git", "remote"], cwd=path, capture_output=True, text=True, timeout=5)
             return remote in res.stdout.split()
         except Exception:
             return False
@@ -510,7 +560,7 @@ class GitHubSyncManager:
         """Obtiene la URL configurada para un control remoto (sanitizada sin tokens)."""
         path = Path(repo_path)
         try:
-            res = subprocess.run(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
+            res = run_hidden(["git", "remote", "get-url", remote], cwd=path, capture_output=True, text=True, timeout=5)
             if res.returncode == 0 and res.stdout.strip():
                 import re
                 raw_url = res.stdout.strip()
@@ -616,7 +666,7 @@ class GitHubSyncManager:
 
         elif self.gh_bin:
             # Fallback a gh CLI
-            proc = subprocess.run(
+            proc = run_hidden(
                 [self.gh_bin, "repo", "create", clean_repo_name, "--private" if private else "--public", "--confirm"],
                 cwd=path,
                 capture_output=True,
@@ -629,16 +679,16 @@ class GitHubSyncManager:
             return {"success": False, "error": "No se pudo obtener la URL del repositorio de GitHub."}
 
         # 3. Asegurar que exista al menos un commit en la rama actual
-        head_check = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True)
+        head_check = run_hidden(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True)
         if head_check.returncode != 0:
             readme_file = path / "README.md"
             if not readme_file.exists():
                 readme_file.write_text(f"# {clean_repo_name}\n\nRepositorio autónomo local-first gestionado por MCP2P.\n", encoding="utf-8")
-            subprocess.run(["git", "add", "."], cwd=path, capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"chore(init): initial commit for {clean_repo_name}"], cwd=path, capture_output=True)
+            run_hidden(["git", "add", "."], cwd=path, capture_output=True)
+            run_hidden(["git", "commit", "-m", f"chore(init): initial commit for {clean_repo_name}"], cwd=path, capture_output=True)
 
         # 4. Obtener la rama activa actual
-        b_p = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True)
+        b_p = run_hidden(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=path, capture_output=True, text=True)
         current_branch = b_p.stdout.strip() if b_p.returncode == 0 else "main"
 
         # 5. Configurar origin con URL limpia (sin PAT embebido para prevenir fugas en .git/config)
@@ -674,9 +724,9 @@ class GitHubSyncManager:
             return {"success": False, "error": "La URL remota no puede estar vacía."}
         try:
             if self.has_remote(path, remote):
-                proc = subprocess.run(["git", "remote", "set-url", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
+                proc = run_hidden(["git", "remote", "set-url", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
             else:
-                proc = subprocess.run(["git", "remote", "add", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
+                proc = run_hidden(["git", "remote", "add", remote, url], cwd=path, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0:
                 self.sanitize_remote_url(path, remote)
                 return {"success": True, "remote": remote, "url": url}
@@ -704,7 +754,7 @@ class GitHubSyncManager:
 
         cmd, env = self._build_git_cmd_and_env(cmd_args, pat=pat)
         try:
-            proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout)
+            proc = run_hidden(cmd, env=env, capture_output=True, text=True, timeout=timeout)
             if proc.returncode == 0:
                 self.sanitize_remote_url(path, "origin")
                 return {"success": True, "path": str(path), "output": proc.stdout}
@@ -732,7 +782,7 @@ class GitHubSyncManager:
             }
         try:
             cmd, env = self._build_git_cmd_and_env(["fetch", remote], pat=pat)
-            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=20)
+            proc = run_hidden(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=20)
             if proc.returncode == 0:
                 self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout or "Referencias remotas actualizadas"}
@@ -757,7 +807,7 @@ class GitHubSyncManager:
             cmd_args.append(branch)
         try:
             cmd, env = self._build_git_cmd_and_env(cmd_args, pat=pat)
-            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
+            proc = run_hidden(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
             if proc.returncode == 0:
                 self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout}
@@ -784,7 +834,7 @@ class GitHubSyncManager:
         try:
             refspec = f"{branch}:{remote_branch}" if remote_branch else branch
             cmd, env = self._build_git_cmd_and_env(["push", "-u", remote, refspec], pat=pat)
-            proc = subprocess.run(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
+            proc = run_hidden(cmd, cwd=path, env=env, capture_output=True, text=True, timeout=25)
             if proc.returncode == 0:
                 self.sanitize_remote_url(path, remote)
                 return {"success": True, "output": proc.stdout}
@@ -803,12 +853,12 @@ class GitHubSyncManager:
         path = Path(repo_path)
         try:
             # 1. Asegurar checkout en target
-            subprocess.run(["git", "checkout", target_branch], cwd=path, capture_output=True, check=True, timeout=10)
+            run_hidden(["git", "checkout", target_branch], cwd=path, capture_output=True, check=True, timeout=10)
             # 2. Merge de source_branch
-            proc = subprocess.run(["git", "merge", source_branch, "--no-ff", "-m", f"merge: integrate {source_branch} into {target_branch}"], cwd=path, capture_output=True, text=True, timeout=15)
+            proc = run_hidden(["git", "merge", source_branch, "--no-ff", "-m", f"merge: integrate {source_branch} into {target_branch}"], cwd=path, capture_output=True, text=True, timeout=15)
             if proc.returncode == 0:
                 return {"success": True, "output": proc.stdout}
-            subprocess.run(["git", "merge", "--abort"], cwd=path, capture_output=True, timeout=10)
+            run_hidden(["git", "merge", "--abort"], cwd=path, capture_output=True, timeout=10)
             return {"success": False, "error": proc.stderr or proc.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -817,7 +867,7 @@ class GitHubSyncManager:
         """Crea y hace checkout de una nueva rama."""
         path = Path(repo_path)
         try:
-            proc = subprocess.run(["git", "checkout", "-b", branch_name], cwd=path, capture_output=True, text=True, timeout=10)
+            proc = run_hidden(["git", "checkout", "-b", branch_name], cwd=path, capture_output=True, text=True, timeout=10)
             if proc.returncode == 0:
                 return {"success": True, "branch": branch_name}
             return {"success": False, "error": proc.stderr or proc.stdout}
@@ -828,7 +878,7 @@ class GitHubSyncManager:
         """Realiza el push inicial al remoto configurado si está autenticado."""
         path = Path(repo_path)
         try:
-            proc = subprocess.run(
+            proc = run_hidden(
                 ["git", "push", "-u", "origin", branch],
                 cwd=path,
                 capture_output=True,
@@ -1103,7 +1153,7 @@ class GitHubSyncManager:
             if not head_branch:
                 # Comprobar si existe feature/task-pr o similar en el repo
                 try:
-                    branches_res = subprocess.run(["git", "branch"], cwd=str(local_repo_path), capture_output=True, text=True)
+                    branches_res = run_hidden(["git", "branch"], cwd=str(local_repo_path), capture_output=True, text=True)
                     for b in branches_res.stdout.splitlines():
                         clean_b = b.replace("*", "").strip()
                         if f"pr-{pr_number}" in clean_b or clean_b.startswith("feature/"):

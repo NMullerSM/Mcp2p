@@ -1272,10 +1272,11 @@ class MCPToolsHandler:
         Calcula dinámicamente el transporte, conteo de herramientas y commit Git en tiempo de ejecución.
         """
         import subprocess
+        from src.proc_utils import check_output_hidden
         git_hash = "unknown"
         try:
             repo_root = Path(__file__).resolve().parent.parent.parent
-            git_hash = subprocess.check_output(
+            git_hash = check_output_hidden(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd=str(repo_root),
                 stderr=subprocess.DEVNULL

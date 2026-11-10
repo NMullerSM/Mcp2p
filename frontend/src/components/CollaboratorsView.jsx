@@ -9,43 +9,41 @@ export function CollaboratorsView({ project, api }) {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const loadData = () => {
+  const loadData = async (isInitial = false) => {
     if (!api || !project) return;
-    setLoading(true);
+    if (isInitial) setLoading(true);
 
-    // 1. Colaboradores del proyecto
-    api.get_project_collaborators(project.project_uuid).then(res => {
-      if (res.success) {
-        setCollaborators(res.collaborators || []);
-      }
-    });
+    try {
+      const [collabRes, inviteRes, mcpRes] = await Promise.allSettled([
+        api.get_project_collaborators(project.project_uuid),
+        api.generate_p2p_invite(project.project_uuid),
+        api.get_mcp_and_agents_status(project.project_uuid)
+      ]);
 
-    // 2. Enlace de invitación P2P
-    api.generate_p2p_invite(project.project_uuid).then(res => {
-      if (res.success) {
-        setInviteUrl(res.invite_url || '');
+      if (collabRes.status === 'fulfilled' && collabRes.value?.success) {
+        setCollaborators(collabRes.value.collaborators || []);
       }
-    });
-
-    // 3. Pasarela MCP y Agentes Conectados
-    api.get_mcp_and_agents_status(project.project_uuid).then(res => {
-      if (res.success) {
-        setMcpInfo(res.mcp_server || null);
-        setConnectedAgents(res.connected_agents || []);
+      if (inviteRes.status === 'fulfilled' && inviteRes.value?.success) {
+        setInviteUrl(inviteRes.value.invite_url || '');
       }
+      if (mcpRes.status === 'fulfilled' && mcpRes.value?.success) {
+        setMcpInfo(mcpRes.value.mcp_server || null);
+        setConnectedAgents(mcpRes.value.connected_agents || []);
+      }
+    } finally {
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(true);
   }, [project, api]);
 
   const handleApprove = async (nodeUuid) => {
     if (!api || !project) return;
     const res = await api.approve_collaborator(project.project_uuid, nodeUuid);
     if (res.success) {
-      loadData();
+      loadData(false);
     } else {
       alert("Error aprobando colaborador: " + res.error);
     }
@@ -55,7 +53,7 @@ export function CollaboratorsView({ project, api }) {
     if (!api || !project) return;
     const res = await api.reject_collaborator(project.project_uuid, nodeUuid);
     if (res.success) {
-      loadData();
+      loadData(false);
     } else {
       alert("Error rechazando colaborador: " + res.error);
     }
@@ -67,7 +65,7 @@ export function CollaboratorsView({ project, api }) {
     try {
       const res = await api.remove_collaborator(project.project_uuid, nodeUuid);
       if (res.success) {
-        loadData();
+        loadData(false);
       } else {
         alert("Error removiendo colaborador: " + (res.error || "Error desconocido"));
       }
@@ -84,7 +82,15 @@ export function CollaboratorsView({ project, api }) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '18px', overflowY: 'auto', paddingRight: '4px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '18px', overflowY: 'auto', paddingRight: '4px', scrollbarGutter: 'stable' }}>
+      {loading && !collaborators.length && !inviteUrl ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }} data-testid="collaborators-skeleton">
+          <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', minHeight: '76px', opacity: 0.6 }} />
+          <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', minHeight: '160px', opacity: 0.6 }} />
+          <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', minHeight: '160px', opacity: 0.6 }} />
+        </div>
+      ) : (
+        <>
       {/* 1. SECCIÓN INVITACIÓN P2P */}
       <div style={{
         backgroundColor: 'var(--bg-card)',
@@ -463,6 +469,8 @@ export function CollaboratorsView({ project, api }) {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

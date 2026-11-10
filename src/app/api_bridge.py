@@ -41,7 +41,9 @@ class ApiBridge:
         self.crypto = NodeCryptoManager()
         self.github = GitHubSyncManager(db_manager=self.db)
         self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
+        self._window: Optional[Any] = None
         self._ensure_local_node()
+        self.ensure_local_node_registered()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
 
@@ -67,6 +69,35 @@ class ApiBridge:
         projects = self.db.list_projects()
         if projects:
             self.active_project_uuid = projects[0]["project_uuid"]
+
+    def set_window(self, window: Any) -> None:
+        """Asigna la referencia a la ventana principal de PyWebView."""
+        self._window = window
+
+    def set_ui_theme(self, theme: str) -> Dict[str, Any]:
+        """Guarda la preferencia de tema (dark/light) y sincroniza el fondo nativo en Windows."""
+        try:
+            self.db.set_setting("ui_theme", theme)
+            hex_color = "#f8fafc" if theme == "light" else "#0f1013"
+            if platform.system() == "Windows" and self._window is not None:
+                try:
+                    form = getattr(self._window, "native", None)
+                    if form is not None:
+                        def _apply():
+                            from System.Drawing import Color, ColorTranslator
+                            form.BackColor = ColorTranslator.FromHtml(hex_color)
+                            r, g, b = (int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+                            if hasattr(form, "webview") and form.webview is not None:
+                                form.webview.DefaultBackgroundColor = Color.FromArgb(255, r, g, b)
+                        if hasattr(form, "Invoke"):
+                            form.Invoke(_apply)
+                        else:
+                            _apply()
+                except Exception as we:
+                    logger.debug(f"[FLK-05] No se pudo sincronizar fondo nativo en Windows: {we}")
+            return {"success": True, "theme": theme}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ==========================
     # Gestión de Proyectos
@@ -118,6 +149,7 @@ class ApiBridge:
             if not proj:
                 return {"success": False, "error": "Proyecto no encontrado"}
             self.active_project_uuid = project_uuid
+            self.ensure_local_node_registered()
             return {"success": True, "project": proj}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1354,12 +1386,9 @@ class ApiBridge:
             return {"success": False, "error": "Sin proyecto activo", "fingerprint": ""}
         return self.db.get_project_sync_fingerprint(target_uuid)
 
-    def get_mcp_and_agents_status(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Obtiene el estado de la pasarela MCP local y los agentes conectados al enjambre."""
-        target_uuid = project_uuid or self.active_project_uuid
+    def ensure_local_node_registered(self) -> None:
+        """Asegura el registro inicial del nodo local principal en SQLite."""
         local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
-
-        # 1. Asegurar registro del agente local principal
         try:
             self.db.register_or_update_node(
                 node_uuid=local_node,
@@ -1371,6 +1400,10 @@ class ApiBridge:
         except Exception:
             pass
 
+    def get_mcp_and_agents_status(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene el estado de la pasarela MCP local y los agentes conectados al enjambre (lectura pura)."""
+        target_uuid = project_uuid or self.active_project_uuid
+        local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
         nodes = self.db.get_swarm_nodes()
         # Herramientas del servidor MCP expuestas
         mcp_tools = [

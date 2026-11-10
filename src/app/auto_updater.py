@@ -18,6 +18,7 @@ import subprocess
 import urllib.request
 from typing import Optional, Dict, Any
 
+from src.proc_utils import run_hidden
 from src.app.paths import is_system_installed
 
 OFFICIAL_RELEASE_PREFIX = "https://github.com/NMullerSM/Mcp2p/releases/download/"
@@ -230,12 +231,12 @@ nohup {q_app_dir}/mcp2p.sh >/dev/null 2>&1 &
         git_dir = os.path.join(self._base_dir, ".git")
         if not getattr(sys, "frozen", False) and os.path.exists(git_dir):
             try:
-                res = subprocess.run(
+                res = run_hidden(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     cwd=self._base_dir, capture_output=True, text=True, check=True, timeout=10,
                 )
                 current_branch = res.stdout.strip() or "main"
-                subprocess.run(["git", "pull", "origin", current_branch], cwd=self._base_dir, check=True, timeout=30)
+                run_hidden(["git", "pull", "origin", current_branch], cwd=self._base_dir, check=True, timeout=30)
                 if self._window:
                     self._window.destroy()
                 return {"success": True, "mode": "git_pull", "branch": current_branch}

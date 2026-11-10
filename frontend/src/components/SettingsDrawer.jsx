@@ -51,9 +51,16 @@ export function SettingsDrawer({
   const [selectedFileContent, setSelectedFileContent] = useState('');
   const [fileLoading, setFileLoading] = useState(false);
   const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
+  const [isAsideHidden, setIsAsideHidden] = useState(!isOpen);
 
   const targetProject = activeProject || (projectsList && projectsList[0]);
   const targetProjectUuid = targetProject?.project_uuid;
+
+  useEffect(() => {
+    if (isOpen) {
+      setIsAsideHidden(false);
+    }
+  }, [isOpen]);
 
   // Sincronizar tab si cambia initialTab al abrir
   useEffect(() => {
@@ -98,41 +105,51 @@ export function SettingsDrawer({
     if (!isOpen || !api) return;
     let cancelled = false;
 
-    // Cargar datos del sistema
-    api.get_system_info().then(info => {
-      if (cancelled) return;
-      if (info && info.success) setSystemInfo(info);
-    });
+    const promises = [
+      api.get_system_info(),
+      api.get_github_status()
+    ];
+    if (targetProjectUuid) {
+      promises.push(api.generate_p2p_invite(targetProjectUuid));
+      promises.push(api.get_mcp_config_snippet(targetProjectUuid));
+    }
 
-    // Cargar estado de GitHub
-    api.get_github_status().then(res => {
+    Promise.allSettled(promises).then(results => {
       if (cancelled) return;
-      if (res && res.success) {
-        setGithubStatus(res.github);
-        if (onGithubStatusChange) onGithubStatusChange(res.github);
+      const [sysRes, ghRes, inviteRes, mcpRes] = results;
+
+      if (sysRes?.status === 'fulfilled' && sysRes.value?.success) {
+        setSystemInfo(sysRes.value);
+      }
+      if (ghRes?.status === 'fulfilled' && ghRes.value?.success) {
+        const newGh = ghRes.value.github;
+        setGithubStatus(prev => {
+          if (!prev || prev.authenticated !== newGh.authenticated || prev.username !== newGh.username) {
+            if (onGithubStatusChange) onGithubStatusChange(newGh);
+          }
+          return newGh;
+        });
+      }
+      if (inviteRes?.status === 'fulfilled' && inviteRes.value?.success) {
+        setInviteUrl(inviteRes.value.invite_url || '');
+      }
+      if (mcpRes?.status === 'fulfilled' && mcpRes.value?.success) {
+        setMcpConfig(mcpRes.value.mcp_json);
+        setAgentPrompt(mcpRes.value.agent_seed_prompt);
       }
     });
 
-    // Cargar enlace P2P
-    if (targetProjectUuid) {
-      api.generate_p2p_invite(targetProjectUuid).then(res => {
-        if (cancelled) return;
-        if (res && res.success) setInviteUrl(res.invite_url);
-      });
-
-      api.get_mcp_config_snippet(targetProjectUuid).then(res => {
-        if (cancelled) return;
-        if (res && res.success) {
-          setMcpConfig(res.mcp_json);
-          setAgentPrompt(res.agent_seed_prompt);
-        }
-      });
-
-      loadOkfTree(() => cancelled);
-    }
-
     return () => { cancelled = true; };
   }, [isOpen, api, targetProjectUuid, onGithubStatusChange]);
+
+  // Carga perezosa del arbol OKF SOLO cuando la pestaña okf_viewer este activa
+  useEffect(() => {
+    if (!isOpen || !api || !targetProjectUuid || activeTab !== 'okf_viewer') return;
+    if (okfTree && okfTree.length > 0) return;
+    let cancelled = false;
+    loadOkfTree(() => cancelled);
+    return () => { cancelled = true; };
+  }, [isOpen, api, targetProjectUuid, activeTab]);
 
   const copyToClipboard = (text, setter) => {
     navigator.clipboard.writeText(text);
@@ -207,22 +224,25 @@ export function SettingsDrawer({
 
   return (
     <>
-      {/* Backdrop */}
-      {isOpen && (
-        <div
-          onClick={onClose}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.45)',
-            backdropFilter: 'blur(3px)',
-            zIndex: 90
-          }}
-        />
-      )}
+      {/* Backdrop (FLK-03: sin blur, animado por opacidad, siempre montado) */}
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.45)',
+          opacity: isOpen ? 1 : 0,
+          pointerEvents: isOpen ? 'auto' : 'none',
+          transition: 'opacity 0.2s ease',
+          zIndex: 90
+        }}
+      />
 
       {/* Drawer Container (Totalmente Responsive) */}
       <aside
+        onTransitionEnd={() => {
+          if (!isOpen) setIsAsideHidden(true);
+        }}
         style={{
           position: 'fixed',
           top: 0,
@@ -235,6 +255,9 @@ export function SettingsDrawer({
           boxShadow: 'var(--shadow-lg)',
           transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.28s cubic-bezier(0.16, 1, 0.3, 1)',
+          willChange: 'transform',
+          contain: 'layout paint style',
+          visibility: (!isOpen && isAsideHidden) ? 'hidden' : 'visible',
           display: 'flex',
           flexDirection: 'column',
           zIndex: 100
