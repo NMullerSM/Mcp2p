@@ -151,3 +151,16 @@ def test_project_folder_naming_and_cascade_delete(temp_db):
     assert temp_db.get_project_by_uuid(p_uuid) is None
     # Las tarjetas deben haberse eliminado en cascada
     assert len(temp_db.get_cards(p_uuid)) == 0
+
+
+def test_delete_nonexistent_project_is_strict_false(temp_db):
+    """F8: delete_project debía devolver {} (truthy en JS) cuando el proyecto no existe."""
+    from src.app.api_bridge import ApiBridge
+
+    assert temp_db.delete_project("proj_doesnotexist") is False
+
+    bridge = ApiBridge(db_manager=temp_db)
+    assert bridge.delete_project("proj_doesnotexist") == {
+        "success": False,
+        "error": "Proyecto no encontrado: proj_doesnotexist"
+    }

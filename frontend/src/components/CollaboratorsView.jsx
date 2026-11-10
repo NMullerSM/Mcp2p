@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Terminal, Radio, Sparkles, Trash2 } from 'lucide-react';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2 } from 'lucide-react';
 
 export function CollaboratorsView({ project, api }) {
   const [collaborators, setCollaborators] = useState([]);

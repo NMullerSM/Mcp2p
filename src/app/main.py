@@ -60,7 +60,8 @@ def main() -> int:
         node_uuid=local_node,
         lan_port=int(os.environ.get("MCP2P_LAN_PORT", 42424)),
         on_event_callback=lambda evt: api.sync_three_tiers() if hasattr(api, "sync_three_tiers") else None,
-        crypto_manager=api.crypto
+        crypto_manager=api.crypto,
+        is_trusted_pubkey=api.db.is_trusted_public_key,
     )
     p2p_network.start_lan_server()
 

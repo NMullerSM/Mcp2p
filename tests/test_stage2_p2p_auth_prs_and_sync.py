@@ -153,11 +153,15 @@ def test_p2p_hybrid_lan_server_and_broadcast(stage2_env):
     def on_event(evt):
         events_received.append(evt)
 
+    crypto = NodeCryptoManager(key_path=stage2_env["root"] / "alpha.key")
+
     # Iniciar servicio P2P
     p2p_svc = P2PNotificationService(
         node_uuid="node_alpha",
-        lan_port=42430,
-        on_event_callback=on_event
+        lan_port=0,
+        on_event_callback=on_event,
+        crypto_manager=crypto,
+        is_trusted_pubkey=lambda pk: pk == crypto.public_key_base64,
     )
 
     started = p2p_svc.start_lan_server()

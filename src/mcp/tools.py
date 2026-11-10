@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
+from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
 
 class MCPToolsHandler:
@@ -471,9 +473,17 @@ class MCPToolsHandler:
 
             # Cargar tarjeta YAML fresca
             yaml_card = {}
-            yaml_path = gov_path / "kanban" / "cards" / f"{card_id}.yaml"
-            if not yaml_path.exists() and (gov_path / "docs" / "okf" / "kanban" / "cards" / f"{card_id}.yaml").exists():
-                yaml_path = gov_path / "docs" / "okf" / "kanban" / "cards" / f"{card_id}.yaml"
+            cards_root = gov_path / "kanban" / "cards"
+            okf_cards_root = gov_path / "docs" / "okf" / "kanban" / "cards"
+            wt_root = app_path / ".worktrees"
+            try:
+                yaml_path = ensure_within(cards_root, cards_root / f"{card_id}.yaml")
+                okf_yaml_path = ensure_within(okf_cards_root, okf_cards_root / f"{card_id}.yaml")
+                wt_path = ensure_within(wt_root, wt_root / card_id)
+            except InvalidIdentifierError as ve:
+                return self._wrap_response(project_uuid, {"success": False, "error": str(ve)})
+            if not yaml_path.exists() and okf_yaml_path.exists():
+                yaml_path = okf_yaml_path
 
             if yaml_path.exists():
                 import yaml
@@ -484,12 +494,13 @@ class MCPToolsHandler:
             docs_base = gov_path / "docs" / "okf" if (gov_path / "docs" / "okf").exists() else gov_path
             linked_docs = {}
             for rid in related_ids:
+                if not is_safe_id(rid):
+                    continue
                 matches = list(docs_base.glob(f"**/{rid}*.md"))
                 if matches:
                     linked_docs[rid] = matches[0].read_text(encoding="utf-8", errors="ignore")[:2000]
 
             # Worktree info
-            wt_path = app_path / ".worktrees" / card_id
             has_worktree = wt_path.exists()
 
             return self._wrap_response(project_uuid, {

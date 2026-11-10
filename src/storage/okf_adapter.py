@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.storage.validators import ensure_within, validate_safe_id
+
 logger = logging.getLogger("mcp2p.storage.okf")
 
 DEFAULT_OKF_SCHEMA = {
@@ -635,6 +637,8 @@ graph TD
 
         active_file = cards_dir / f"{card_id}.yaml"
         discarded_file = discarded_dir / f"{card_id}.yaml"
+        ensure_within(cards_dir, active_file)
+        ensure_within(discarded_dir, discarded_file)
 
         if status in ("discarded", "rejected"):
             if active_file.exists():
@@ -684,7 +688,7 @@ graph TD
                 try:
                     data = yaml.safe_load(f.read_text(encoding="utf-8"))
                     if isinstance(data, dict):
-                        cid = data.get("id") or data.get("card_id") or f.stem
+                        cid = str(data.get("id") or data.get("card_id") or f.stem)
                         p_uuid = data.get("project_uuid") or project_uuid
                         status = data.get("status", "backlog")
                         if status in ("discarded", "rejected"):
@@ -712,7 +716,7 @@ graph TD
                 try:
                     data = yaml.safe_load(f.read_text(encoding="utf-8"))
                     if isinstance(data, dict):
-                        cid = data.get("id") or data.get("card_id") or f.stem
+                        cid = str(data.get("id") or data.get("card_id") or f.stem)
                         p_uuid = data.get("project_uuid") or project_uuid
                         db_manager.upsert_card_from_okf(
                             project_uuid=p_uuid,
@@ -754,6 +758,7 @@ graph TD
         Crea un artefacto OKF con encabezado YAML y enlaces cruzados bidireccionales.
         artifact_type: 'decision', 'adr', 'discarded', 'functional', 'non_functional', 'design'.
         """
+        validate_safe_id(item_id, "item_id")
         base = Path(gov_base_path)
         docs_okf = base / "docs" / "okf" if (base / "docs" / "okf").exists() else base
 
@@ -771,6 +776,7 @@ graph TD
             "heuristics": docs_okf / "design" / "heuristics"
         }
         target_dir = type_map.get(artifact_type.lower(), docs_okf / artifact_type)
+        ensure_within(docs_okf, target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         slug = "".join(c if c.isalnum() or c in "-_" else "_" for c in title.lower().replace(" ", "_")).strip("_")[:40]
@@ -935,6 +941,7 @@ graph TD
         la rama huérfana de gobernanza para evitar colisiones entre agentes.
         action: 'create' o 'remove'.
         """
+        validate_safe_id(card_id, "card_id")
         code_dir = Path(code_repo_path)
         gov_dir = Path(gov_base_path)
 
@@ -1006,6 +1013,8 @@ graph TD
                     capture_output=True,
                     text=True
                 )
+            if res.returncode != 0:
+                return {"success": False, "error": f"git worktree add falló: {(res.stderr or '').strip()[:300]}"}
 
             registry.setdefault("active_worktrees", {})[card_id] = {
                 "node_uuid": node_uuid,

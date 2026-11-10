@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   # ============================================================================
   # 1. Compilación para Windows (Instalador Inno Setup + ZIP Portable)
@@ -21,6 +25,7 @@ jobs:
   build-windows:
     name: Build Windows (Installer & Portable)
     runs-on: windows-latest
+    timeout-minutes: 45
     env:
       PYTHONUTF8: '1'
       PYTHONIOENCODING: 'utf-8'
@@ -38,12 +43,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Configurar Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
+
+      - name: Verificar Sincronía de Versiones (fuente única src/app/version.py)
+        run: python scripts/sync_version.py --check
 
       - name: Instalar Inno Setup Compiler (ISCC)
         shell: powershell
@@ -108,6 +118,7 @@ jobs:
   build-linux:
     name: Build Linux (.deb & Portable Tarball)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout del Repositorio
@@ -122,6 +133,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Instalar Dependencias del Sistema Linux (WebKitGTK, Cairo, GObject & Build Tools)
         run: |
@@ -138,6 +151,9 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Verificar Sincronía de Versiones (fuente única src/app/version.py)
+        run: python scripts/sync_version.py --check
+
       - name: Instalar Dependencias del Frontend
         run: |
           cd frontend
@@ -147,6 +163,11 @@ jobs:
         run: |
           cd frontend
           npm run build
+
+      - name: Ejecutar Pruebas del Frontend (vitest)
+        run: |
+          cd frontend
+          npm test
 
       - name: Instalar Dependencias de Python (editable + extras dev/build)
         run: |
@@ -191,6 +212,7 @@ jobs:
     needs: [build-windows, build-linux]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
 
@@ -227,7 +249,7 @@ jobs:
       - name: Determinar Versión y Verificar Colisión de Tags
         id: release_version
         run: |
-          VER=$(python3 scripts/get_version.py 2>/dev/null || echo "1.0.0")
+          VER=$(python3 scripts/get_version.py)
           TAG="v${VER}"
           echo "Comprobando si el tag $TAG ya existe..."
           if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin | grep -q "refs/tags/$TAG"; then

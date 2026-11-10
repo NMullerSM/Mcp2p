@@ -289,18 +289,19 @@ def test_event_import_is_idempotent(temp_env):
         assert count == 1
 
 
-def test_lan_webhook_verifies_signature():
+def test_lan_webhook_verifies_signature(tmp_path):
     """
     Verifica que el servicio HTTP LAN de P2P valida firmas Ed25519 y rechaza paquetes adulterados (401).
     """
-    crypto_sender = NodeCryptoManager()
+    crypto_sender = NodeCryptoManager(key_path=tmp_path / "sender.key")
     events_received = []
 
     service = P2PNotificationService(
         node_uuid="receiver_node",
         lan_port=0,
         on_event_callback=lambda evt: events_received.append(evt),
-        crypto_manager=crypto_sender
+        crypto_manager=crypto_sender,
+        is_trusted_pubkey=lambda pk: pk == crypto_sender.public_key_base64,
     )
     started = service.start_lan_server()
     assert started is True

@@ -15,14 +15,16 @@ import re
 import subprocess
 import sys
 import urllib.parse
+import yaml
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
 from src.p2p.crypto import NodeCryptoManager
 from src.storage.github_sync import GitHubSyncManager
+from src.storage.validators import InvalidIdentifierError, validate_safe_id
 from src.app.auto_updater import AutoUpdateManager
 from src.app.paths import get_bundle_dir, get_user_data_dir, is_system_installed
 
@@ -124,10 +126,12 @@ class ApiBridge:
         """Elimina un proyecto y todas sus tareas/mensajes asociados en cascada."""
         try:
             success = self.db.delete_project(project_uuid)
+            if not success:
+                return {"success": False, "error": f"Proyecto no encontrado: {project_uuid}"}
             if self.active_project_uuid == project_uuid:
                 self.active_project_uuid = None
                 self._ensure_active_project()
-            return {"success": success}
+            return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -196,6 +200,11 @@ class ApiBridge:
             p_name = payload.get("name")
             if not p_uuid or not p_name:
                 return {"success": False, "error": "El token no contiene los datos del proyecto requeridos"}
+
+            try:
+                validate_safe_id(p_uuid, "project_uuid")
+            except InvalidIdentifierError as ve:
+                return {"success": False, "error": str(ve)}
 
             # Verificar si ya existe localmente
             existing = self.db.get_project_by_uuid(p_uuid)
@@ -374,6 +383,7 @@ class ApiBridge:
             collab = next((c for c in collabs if c.get("node_uuid") == node_uuid), None)
             proj = self.db.get_project_by_uuid(project_uuid)
             invitations_sent = []
+            gov_commit_error = None
 
             if collab and proj:
                 pub_key = collab.get("public_key")
@@ -402,18 +412,24 @@ class ApiBridge:
                     try:
                         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
                         subprocess.run(["git", "add", "."], cwd=gov_path, capture_output=True, creationflags=creationflags)
-                        subprocess.run(
-                            ["git", "commit", "-m", f"chore(gov): authorize peer {node_uuid[:8]} (@{gh_user or 'node'}) in trusted_nodes.yaml"],
-                            cwd=gov_path,
-                            capture_output=True,
-                            creationflags=creationflags
-                        )
-                        if self.github.has_remote(gov_path, "origin"):
+                        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=gov_path, capture_output=True, creationflags=creationflags)
+                        commit_ok = True
+                        if staged.returncode != 0:
+                            commit_res = subprocess.run(
+                                ["git", "commit", "-m", f"chore(gov): authorize peer {node_uuid[:8]} (@{gh_user or 'node'}) in trusted_nodes.yaml"],
+                                cwd=gov_path, capture_output=True, encoding="utf-8", errors="replace",
+                                creationflags=creationflags
+                            )
+                            commit_ok = commit_res.returncode == 0
+                            if not commit_ok:
+                                gov_commit_error = (commit_res.stderr or commit_res.stdout or "").strip()[:300]
+                                logger.warning(f"approve_collaborator: commit de trusted_nodes.yaml falló: {gov_commit_error}")
+                        if commit_ok and self.github.has_remote(gov_path, "origin"):
                             self.github.git_push_branch(gov_path, branch="main", remote="origin")
                     except Exception as push_err:
                         logger.debug(f"Push de trusted_nodes omitido: {push_err}")
 
-            return {"success": True, "invitations": invitations_sent}
+            return {"success": True, "invitations": invitations_sent, **({"gov_commit_error": gov_commit_error} if gov_commit_error else {})}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -1005,20 +1021,26 @@ class ApiBridge:
 
         # 3. Montar el worktree
         if ref_check.returncode == 0:
-            subprocess.run(
+            wt_res = subprocess.run(
                 ["git", "worktree", "add", str(wt_path), orphan_branch],
                 cwd=str(gov_path),
                 capture_output=True,
                 creationflags=creationflags
             )
+            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
+                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
         else:
             # Crear rama huérfana desde cero desacoplada
-            subprocess.run(
+            wt_res = subprocess.run(
                 ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(wt_path)],
                 cwd=str(gov_path),
                 capture_output=True,
                 creationflags=creationflags
             )
+            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
+                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
             if wt_path.exists():
                 readme = wt_path / "README_CONVERSA.md"
                 if not readme.exists():
@@ -1027,12 +1049,17 @@ class ApiBridge:
                         encoding="utf-8"
                     )
                 subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                subprocess.run(
+                commit_res = subprocess.run(
                     ["git", "commit", "-m", f"init(orphan): initialize decoupled conversational memory for {project_uuid}"],
                     cwd=str(wt_path),
                     capture_output=True,
                     creationflags=creationflags
                 )
+                if commit_res.returncode != 0:
+                    logger.warning(
+                        "ensure_orphan_worktree: commit inicial del README falló en %s: %s",
+                        wt_path, (commit_res.stderr or b"").decode("utf-8", errors="replace").strip()[:300]
+                    )
 
         return wt_path
 
@@ -1170,6 +1197,7 @@ class ApiBridge:
         # Nivel 1: Memoria Huérfana y Eventos A2A
         # ==========================================
         tier1_res = {"flushed": 0, "imported": 0, "status": "ok"}
+        events_committed = False
         try:
             wt_path = self.ensure_orphan_worktree(gov_path, target_uuid)
             orphan_branch = f"orphan-conversa-memory-{target_uuid}"
@@ -1181,6 +1209,7 @@ class ApiBridge:
                 events_dir = wt_path / "nodes" / local_node / "events"
                 events_dir.mkdir(parents=True, exist_ok=True)
                 events_file = events_dir / f"{today}.jsonl"
+                pre_size = events_file.stat().st_size if events_file.exists() else 0
 
                 with events_file.open("a", encoding="utf-8") as f:
                     for ev in pending_events:
@@ -1206,13 +1235,20 @@ class ApiBridge:
                         f.write(json.dumps(line_data, ensure_ascii=False) + "\n")
 
                 subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                subprocess.run(
+                commit_res = subprocess.run(
                     ["git", "commit", "-m", f"sync(orphan): flush {len(pending_events)} events from node {local_node}"],
-                    cwd=str(wt_path),
-                    capture_output=True,
+                    cwd=str(wt_path), capture_output=True, encoding="utf-8", errors="replace",
                     creationflags=creationflags
                 )
-                tier1_res["flushed"] = len(pending_events)
+                if commit_res.returncode == 0:
+                    events_committed = True
+                    tier1_res["flushed"] = len(pending_events)
+                else:
+                    err = (commit_res.stderr or commit_res.stdout or "").strip()
+                    tier1_res["status"] = f"commit_failed: {err[:300]}"
+                    logger.warning(f"sync_three_tiers: commit de outbox falló, eventos quedan pendientes: {err[:300]}")
+                    with events_file.open("r+b") as tf:
+                        tf.truncate(pre_size)
 
             # 1.2 Pull con rebase y push al remoto si existe
             if self.github.has_remote(gov_path, "origin"):
@@ -1268,8 +1304,9 @@ class ApiBridge:
                         except Exception as jf_err:
                             logger.debug(f"Error procesando {jf}: {jf_err}")
 
-            for ev in pending_events:
-                self.db.update_outbox_sync_status(ev["event_uuid"], "acked")
+            if events_committed:
+                for ev in pending_events:
+                    self.db.update_outbox_sync_status(ev["event_uuid"], "acked")
 
             tier1_res["imported"] = imported_count
         except Exception as t1_err:
@@ -1806,6 +1843,14 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    @staticmethod
+    def _parse_github_owner_repo(raw_url: str) -> Optional[Tuple[str, str]]:
+        """Extrae (owner, repo) de una URL https/ssh de GitHub; None si no es resoluble."""
+        m = re.search(r"github\.com[/:]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", (raw_url or "").strip())
+        if not m:
+            return None
+        return m.group(1), m.group(2)
+
     def sign_and_approve_item(
         self,
         project_uuid: str,
@@ -1929,32 +1974,53 @@ class ApiBridge:
                         "signature": sig_block
                     }
 
-                merge_res: Dict[str, Any] = {"success": True, "merged": True}
-                if card and card.get("branch_ref") and app_path.exists():
-                    branch_ref = card["branch_ref"]
-                    if branch_ref != "main":
-                        git_m = self.github.git_merge(app_path, source_branch=branch_ref, target_branch="main")
-                        if git_m.get("success"):
-                            merge_res["git_merge"] = git_m
-                elif item_id.isdigit():
-                    merge_res = self.github.evaluate_and_merge_pull_request(
-                        repo_owner="",
-                        repo_name="",
-                        pr_number=int(item_id),
-                        local_repo_path=app_path,
-                        force_auto_merge=True
-                    )
-
                 if card:
+                    branch_ref = (card.get("branch_ref") or "").strip()
+                    if not branch_ref or branch_ref == "main":
+                        merge_res: Dict[str, Any] = {
+                            "success": True, "merged": True, "skipped_git_merge": True,
+                            "reason": "La tarjeta no tiene una rama propia que fusionar."
+                        }
+                    elif not app_path.exists():
+                        merge_res = {"success": False, "error": f"No existe el repositorio de código local: {app_path}"}
+                    else:
+                        git_m = self.github.git_merge(app_path, source_branch=branch_ref, target_branch="main")
+                        ok = bool(git_m.get("success"))
+                        merge_res = {"success": ok, "merged": ok, "git_merge": git_m}
+                        if not ok:
+                            merge_res["error"] = f"Fallo al fusionar '{branch_ref}' en main: {git_m.get('error') or 'error desconocido'}"
+                elif item_id.isdigit():
+                    owner_repo = self._parse_github_owner_repo(proj.get("code_repo_url", ""))
+                    if not owner_repo:
+                        merge_res = {
+                            "success": False,
+                            "error": f"No se pudo resolver owner/repo de GitHub desde code_repo_url del proyecto; no se fusionó la PR #{item_id}."
+                        }
+                    else:
+                        merge_res = self.github.evaluate_and_merge_pull_request(
+                            repo_owner=owner_repo[0],
+                            repo_name=owner_repo[1],
+                            pr_number=int(item_id),
+                            local_repo_path=app_path,
+                            force_auto_merge=True
+                        )
+                else:
+                    merge_res = {"success": False, "error": f"No existe la tarjeta '{item_id}' ni es un número de PR válido."}
+
+                merge_ok = bool(merge_res.get("success"))
+                if card and merge_ok:
                     self.db.update_card_status(project_uuid, item_id, "merged")
 
-                return {
-                    "success": True,
-                    "merged": True,
+                result: Dict[str, Any] = {
+                    "success": merge_ok,
+                    "merged": merge_ok,
                     "item_id": item_id,
                     "details": merge_res,
                     "signature": sig_block
                 }
+                if not merge_ok:
+                    result["error"] = merge_res.get("error") or merge_res.get("reason") or "La fusión no se completó."
+                return result
 
             elif item_type in ("bootstrap_dossier", "bootstrap"):
                 return self.ratify_okf_bootstrap(project_uuid=project_uuid, comment=comment)

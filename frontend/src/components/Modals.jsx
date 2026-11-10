@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle2, GitBranch, User, CheckSquare, Save, Clock } from 'lucide-react';
+import { X, CheckCircle2, GitBranch, User, CheckSquare, Save } from 'lucide-react';
 
 export function ModalOverlay({ isOpen, onClose, title, maxWidth = '500px', children }) {
   useEffect(() => {

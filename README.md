@@ -1,5 +1,7 @@
 # MCP2P: Plataforma de Colaboración Agéntica y Gobernanza OKF
 
+> Ver [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
+
 > **Plataforma de Escritorio Local-First** construida con **PyWebView**, **React + Vite**, **Model Context Protocol (MCP)** y persistencia determinista **SQLite (WAL)** para la orquestación, concurrencia y desarrollo colaborativo entre humanos y agentes de Inteligencia Artificial (Claude, Gemini, Antigravity, Cursor, etc.).
 
 ---
@@ -15,6 +17,10 @@
   * 🐧 **Linux**: Ejecución nativa mediante PyWebView (WebKitGTK 4.1 / 4.0).
   * 🪟 **Windows**: Ejecución nativa mediante PyWebView (WebView2).
   * 🍎 **macOS**: Soporte nativo mediante PyWebView (WebKit Cocoa / pyobjc).
+* **Red P2P LAN Autenticada**: el listener de notificaciones en tiempo real escucha por defecto solo en `127.0.0.1`
+  (sin exposición en la red local). Para activarlo en LAN: `MCP2P_LAN_BIND_HOST=0.0.0.0` (o la IP de la interfaz). Todo
+  payload entrante debe venir firmado con Ed25519 por una clave pública que figure como colaborador aprobado del
+  proyecto; cualquier otro paquete se rechaza (401/403).
 
 ---
 
@@ -109,11 +115,22 @@ Los datos del usuario **nunca se tocan ni se pierden durante una actualización*
 
 Ese directorio contiene la base de datos SQLite local y la carpeta `workspace/` con los proyectos clonados.
 
+### Publicar una nueva versión
+
+1. Editar solo `src/app/version.py` (fuente única de verdad).
+2. Ejecutar `python scripts/sync_version.py` para propagar el número a `pyproject.toml`, `frontend/src/version.js`,
+   `frontend/package.json` y `frontend/package-lock.json`.
+3. Añadir la entrada correspondiente en [`CHANGELOG.md`](CHANGELOG.md).
+
+El CI falla antes de compilar si alguna copia queda desincronizada (`python scripts/sync_version.py --check`), y lo
+mismo valida `tests/test_version_consistency.py` en local.
+
 ---
 
 ## 🧪 Pruebas Automatizadas
 
 ```bash
 PYTHONPATH=. .venv/bin/pytest tests/ -v
+cd frontend && npm test   # vitest: hooks de React (useProjectPulse)
 ```
-Suite exhaustiva con 92 pruebas unitarias y de integración (1 adicional se omite fuera de un host Windows real) cubriendo persistencia, criptografía Ed25519, colisiones de leases, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico, las 25 herramientas MCP y actualización automática multiplataforma.
+Suite exhaustiva con 140 pruebas unitarias y de integración (1 adicional se omite fuera de un host Windows real) cubriendo persistencia, criptografía Ed25519, colisiones de leases (incluida concurrencia real multi-proceso), autenticación del webhook P2P, path traversal, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico, las 25 herramientas MCP y actualización automática multiplataforma. Ver [`CHANGELOG.md`](CHANGELOG.md) para el detalle por versión.

@@ -65,7 +65,7 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         task_id: Optional[str] = None,
         taskId: Optional[str] = None
     ) -> str:
-        """Crea una nueva tarea en el estado 'backlog' del proyecto indicado."""
+        """Crea una nueva tarea en el estado 'backlog' del proyecto indicado. card_id es OBLIGATORIO y lo elige el llamador: 1-64 caracteres [A-Za-z0-9_-], empezando por letra o número (ej. 'CARD-PARMA-27'). Si falta o es inválido, la tarea NO se crea."""
         resolved_proj = project_uuid or projectUuid or ""
         resolved_card = card_id or cardId or task_id or taskId or ""
         resolved_title = title or ""

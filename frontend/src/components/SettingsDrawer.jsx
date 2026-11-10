@@ -53,6 +53,7 @@ export function SettingsDrawer({
   const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
 
   const targetProject = activeProject || (projectsList && projectsList[0]);
+  const targetProjectUuid = targetProject?.project_uuid;
 
   // Sincronizar tab si cambia initialTab al abrir
   useEffect(() => {
@@ -61,10 +62,11 @@ export function SettingsDrawer({
     }
   }, [isOpen, initialTab]);
 
-  const loadOkfTree = async () => {
+  const loadOkfTree = async (isCancelled = () => false) => {
     if (!api || !targetProject) return;
     try {
       const res = await api.get_okf_raw_tree(targetProject.project_uuid);
+      if (isCancelled()) return;
       if (res.success && res.tree?.length > 0) {
         setOkfTree(res.tree);
         const first = res.tree[0].path;
@@ -94,14 +96,17 @@ export function SettingsDrawer({
 
   useEffect(() => {
     if (!isOpen || !api) return;
+    let cancelled = false;
 
     // Cargar datos del sistema
     api.get_system_info().then(info => {
+      if (cancelled) return;
       if (info && info.success) setSystemInfo(info);
     });
 
     // Cargar estado de GitHub
     api.get_github_status().then(res => {
+      if (cancelled) return;
       if (res && res.success) {
         setGithubStatus(res.github);
         if (onGithubStatusChange) onGithubStatusChange(res.github);
@@ -109,21 +114,25 @@ export function SettingsDrawer({
     });
 
     // Cargar enlace P2P
-    if (targetProject) {
-      api.generate_p2p_invite(targetProject.project_uuid).then(res => {
+    if (targetProjectUuid) {
+      api.generate_p2p_invite(targetProjectUuid).then(res => {
+        if (cancelled) return;
         if (res && res.success) setInviteUrl(res.invite_url);
       });
 
-      api.get_mcp_config_snippet(targetProject.project_uuid).then(res => {
+      api.get_mcp_config_snippet(targetProjectUuid).then(res => {
+        if (cancelled) return;
         if (res && res.success) {
           setMcpConfig(res.mcp_json);
           setAgentPrompt(res.agent_seed_prompt);
         }
       });
 
-      loadOkfTree();
+      loadOkfTree(() => cancelled);
     }
-  }, [isOpen, api, targetProject, onGithubStatusChange]);
+
+    return () => { cancelled = true; };
+  }, [isOpen, api, targetProjectUuid, onGithubStatusChange]);
 
   const copyToClipboard = (text, setter) => {
     navigator.clipboard.writeText(text);

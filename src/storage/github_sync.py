@@ -808,6 +808,7 @@ class GitHubSyncManager:
             proc = subprocess.run(["git", "merge", source_branch, "--no-ff", "-m", f"merge: integrate {source_branch} into {target_branch}"], cwd=path, capture_output=True, text=True, timeout=15)
             if proc.returncode == 0:
                 return {"success": True, "output": proc.stdout}
+            subprocess.run(["git", "merge", "--abort"], cwd=path, capture_output=True, timeout=10)
             return {"success": False, "error": proc.stderr or proc.stdout}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -1033,6 +1034,8 @@ class GitHubSyncManager:
         now = datetime.now(timezone.utc)
 
         pat = self.db.get_setting("github_pat_token") if self.db else None
+        if pat and (not repo_owner or not repo_name):
+            return {"success": False, "error": "repo_owner y repo_name son obligatorios para consultar la API de GitHub."}
         pr_data = {}
         if pat:
             req = urllib.request.Request(

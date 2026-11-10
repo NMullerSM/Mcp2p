@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp2p"
-version = "1.0.1"
+version = "1.0.3"
 description = "Local-first P2P multi-agent collaboration platform powered by MCP & PyWebView"
 readme = "README.md"
 requires-python = ">=3.10"

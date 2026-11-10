@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 import platform
 import sqlite3
 import subprocess
@@ -20,6 +21,19 @@ from typing import Any, Dict, Generator, List, Optional
 
 
 from src.app.paths import get_default_db_path
+from src.storage.validators import validate_safe_id
+
+logger = logging.getLogger("mcp2p.storage.db")
+
+
+def _run_git_logged(args: List[str], cwd: Path, creationflags: int = 0) -> subprocess.CompletedProcess:
+    """Ejecuta git y registra un warning con stderr si el código de salida no es 0 (no lanza)."""
+    res = subprocess.run(args, cwd=str(cwd), capture_output=True, creationflags=creationflags)
+    if res.returncode != 0:
+        err = (res.stderr or b"").decode("utf-8", errors="replace").strip()
+        logger.warning("git %s falló en %s (código %s): %s", " ".join(args[1:3]), cwd, res.returncode, err[:300])
+    return res
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", get_default_db_path())
@@ -346,6 +360,8 @@ class DatabaseManager:
         Crea un nuevo proyecto en el subsistema.
         Genera UUIDv4 único y estructura de doble repositorio (app_{name} y okf_{name}_{uuid}).
         """
+        if project_uuid is not None:
+            validate_safe_id(project_uuid, "project_uuid")
         p_uuid = project_uuid or f"proj_{uuid.uuid4().hex[:12]}"
         now_str = datetime.now(timezone.utc).isoformat()
 
@@ -374,33 +390,31 @@ class DatabaseManager:
 
             # 1. Inicializar repo de código si no existe .git
             if not (app_dir / ".git").exists():
-                subprocess.run(["git", "init", "-b", "main"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
-                subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
+                _run_git_logged(["git", "init", "-b", "main"], app_dir, creationflags)
+                _run_git_logged(["git", "config", "core.autocrlf", "false"], app_dir, creationflags)
                 readme = app_dir / "README.md"
                 if not readme.exists():
                     readme.write_text(f"# {name}\n\nEspacio de desarrollo local-first gestionado por MCP2P.\nUUID: `{p_uuid}`\n", encoding="utf-8")
-                subprocess.run(["git", "add", "."], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
-                subprocess.run(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], cwd=str(app_dir), capture_output=True, creationflags=creationflags)
+                _run_git_logged(["git", "add", "."], app_dir, creationflags)
+                _run_git_logged(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], app_dir, creationflags)
 
             # 2. Inicializar repo de gobernanza con rama huérfana aislada
             if not (gov_dir / ".git").exists():
-                subprocess.run(["git", "init", "-b", "main"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
-                subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
-                
+                _run_git_logged(["git", "init", "-b", "main"], gov_dir, creationflags)
+                _run_git_logged(["git", "config", "core.autocrlf", "false"], gov_dir, creationflags)
+
                 # Commit inicial de OKF en main
                 marker = gov_dir / ".okf_project.json"
                 marker.write_text(f'{{"project_uuid": "{p_uuid}", "name": "{name}"}}\n', encoding="utf-8")
-                subprocess.run(["git", "add", "."], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
-                subprocess.run(["git", "commit", "-m", f"init(okf): initialize governance master branch for {p_uuid}"], cwd=str(gov_dir), capture_output=True, creationflags=creationflags)
+                _run_git_logged(["git", "add", "."], gov_dir, creationflags)
+                _run_git_logged(["git", "commit", "-m", f"init(okf): initialize governance master branch for {p_uuid}"], gov_dir, creationflags)
 
                 # Desacoplar la rama huérfana en un worktree dentro de .git para no ensuciar main
                 orphan_branch = f"orphan-conversa-memory-{p_uuid}"
                 orphan_wt_path = gov_dir / ".git" / "orphan_worktree"
-                subprocess.run(
+                _run_git_logged(
                     ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(orphan_wt_path)],
-                    cwd=str(gov_dir),
-                    capture_output=True,
-                    creationflags=creationflags
+                    gov_dir, creationflags
                 )
                 if orphan_wt_path.exists():
                     conversa_readme = orphan_wt_path / "README_CONVERSA.md"
@@ -408,12 +422,10 @@ class DatabaseManager:
                         f"# Memoria Conversacional Desacoplada\n\nProyecto: {name} ({p_uuid})\nRama: {orphan_branch}\n",
                         encoding="utf-8"
                     )
-                    subprocess.run(["git", "add", "."], cwd=str(orphan_wt_path), capture_output=True, creationflags=creationflags)
-                    subprocess.run(
+                    _run_git_logged(["git", "add", "."], orphan_wt_path, creationflags)
+                    _run_git_logged(
                         ["git", "commit", "-m", f"init(orphan): initialize conversation memory branch for {p_uuid}"],
-                        cwd=str(orphan_wt_path),
-                        capture_output=True,
-                        creationflags=creationflags
+                        orphan_wt_path, creationflags
                     )
 
             # 3. Instalar hooks de Git para sincronización en tiempo real
@@ -505,7 +517,7 @@ class DatabaseManager:
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 cur = conn.execute("DELETE FROM projects WHERE project_uuid = ?;", (project_uuid,))
-                return cur.rowcount > 0 or {}
+                return cur.rowcount > 0
 
     def list_projects(self) -> List[Dict[str, Any]]:
         """Lista todos los proyectos registrados."""
@@ -639,6 +651,7 @@ class DatabaseManager:
         updated_at: Optional[str] = None
     ) -> Dict[str, Any]:
         """Inserta o actualiza una tarjeta directamente desde un archivo YAML del OKF (sin re-emitir escritura a YAML)."""
+        validate_safe_id(card_id, "card_id")
         now = updated_at or datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -707,6 +720,7 @@ class DatabaseManager:
     ) -> Dict[str, Any]:
         """Crea una nueva tarjeta en el backlog asociada a un proyecto y sincroniza a YAML.
         Si se indica assignee_node_uuid, la tarjeta nace ya asignada a ese colaborador."""
+        validate_safe_id(card_id, "card_id")
         if assignee_node_uuid:
             self._validate_assignable_node(project_uuid, assignee_node_uuid)
         now = datetime.now(timezone.utc).isoformat()
@@ -789,9 +803,13 @@ class DatabaseManager:
 
         with self._write_lock, self.get_connection() as conn:
             with conn:
+                # BEGIN IMMEDIATE toma el lock RESERVED de SQLite ANTES de leer, serializando el
+                # ciclo leer-comprobar-escribir entre PROCESOS distintos (cada agente MCP es un proceso).
+                # self._write_lock solo protege hilos del mismo proceso.
+                conn.execute("BEGIN IMMEDIATE;")
                 cur = conn.execute(
                     """
-                    SELECT assignee_node_uuid, lease_expires_at, status 
+                    SELECT assignee_node_uuid, lease_expires_at, status
                     FROM kanban_cards WHERE project_uuid = ? AND card_id = ?;
                     """,
                     (project_uuid, card_id)
@@ -1036,6 +1054,17 @@ class DatabaseManager:
                     (project_uuid, node_uuid, github_username, public_key, role, status, now_str, approved_at)
                 )
         return self.get_collaborator(project_uuid, node_uuid) or {}
+
+    def is_trusted_public_key(self, public_key: str) -> bool:
+        """True si la clave pública Ed25519 pertenece a un colaborador APROBADO de algún proyecto local."""
+        if not isinstance(public_key, str) or not public_key.strip():
+            return False
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM project_collaborators WHERE public_key = ? AND status = 'approved' LIMIT 1;",
+                (public_key.strip(),)
+            ).fetchone()
+        return row is not None
 
     def get_collaborator(self, project_uuid: str, node_uuid: str) -> Optional[Dict[str, Any]]:
         """Recupera la información de un colaborador en un proyecto."""

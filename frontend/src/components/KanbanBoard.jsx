@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, User, GitBranch, CheckSquare, ExternalLink, Maximize2, Minimize2 } from 'lucide-react';
+import { Lock, User, GitBranch, CheckSquare, Maximize2, Minimize2 } from 'lucide-react';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Por Hacer', dotColor: '#94a3b8' },

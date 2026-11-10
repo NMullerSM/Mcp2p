@@ -46,13 +46,15 @@ export function ProjectWorkspace({
     loadCards();
   }, [loadCards, taskTrigger]);
 
+  const bumpGitPulse = useCallback(() => setGitPulseTrigger(prev => prev + 1), []);
+
   // Hook reactivo de sincronización en tiempo real para eventos de agentes MCP y Git
   useProjectPulse({
     api,
     projectUuid: project?.project_uuid,
     onCardsChange: loadCards,
-    onConsensusChange: () => setGitPulseTrigger(prev => prev + 1),
-    onGitChange: () => setGitPulseTrigger(prev => prev + 1),
+    onConsensusChange: bumpGitPulse,
+    onGitChange: bumpGitPulse,
     intervalMs: 1200
   });
 
@@ -71,7 +73,7 @@ export function ProjectWorkspace({
         if (project && api.sign_and_approve_item) {
           const res = await api.sign_and_approve_item(project.project_uuid, 'pr_merge', cardId, 'APPROVED');
           if (!res.success) {
-            await api.update_task_status(cardId, targetStatus);
+            alert("No se pudo fusionar la tarea: " + (res.error || 'Fallo desconocido'));
           }
         } else {
           await api.update_task_status(cardId, targetStatus);
@@ -127,6 +129,8 @@ export function ProjectWorkspace({
           await loadCards();
           return;
         }
+        alert("No se pudo aprobar y fusionar la tarea: " + (res.error || 'Fallo desconocido'));
+        return;
       }
       const res = await api.update_kanban_card_details(
         cardData.card_id,

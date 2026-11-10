@@ -12,6 +12,6 @@ sys.path.insert(0, str(ROOT_DIR))
 try:
     from src.app.version import __version__
     print(__version__)
-except Exception:
-    # Respaldo de seguridad en caso de error inesperado
-    print("1.0.0")
+except Exception as exc:
+    print(f"ERROR leyendo src/app/version.py: {exc}", file=sys.stderr)
+    sys.exit(1)

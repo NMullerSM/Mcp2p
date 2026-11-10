@@ -11,6 +11,7 @@ Suite de Pruebas de Integración — Iteración B & C:
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -210,6 +211,19 @@ def test_hitl_deep_inspector_and_okf_precedents_export(tmp_path: Path, monkeypat
     assert pr_detail["success"] is True
     assert pr_detail["item"]["acceptance_criteria"] == "1. Latencia < 5ms"
 
+    # F1/F2: sign_and_approve_item ya no marca 'merged' si no hay un merge real que hacer,
+    # así que para validar la ruta de éxito hay que fusionar una rama que exista de verdad.
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "MCP2P Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "test@mcp2p.local")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "MCP2P Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "test@mcp2p.local")
+    app = Path(proj_res["project"]["code_repo_path"])
+    subprocess.run(["git", "checkout", "-b", "feature/task-102"], cwd=app, capture_output=True)
+    (app / "catalog.py").write_text("# catalogo de productos\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=app, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "feat: catalog"], cwd=app, capture_output=True)
+    subprocess.run(["git", "checkout", "main"], cwd=app, capture_output=True)
+
     merge_res = api.sign_and_approve_item(
         project_uuid=puuid,
         item_type="pr_merge",
@@ -219,5 +233,6 @@ def test_hitl_deep_inspector_and_okf_precedents_export(tmp_path: Path, monkeypat
     )
     assert merge_res["success"] is True
     assert merge_res["merged"] is True
+    assert (app / "catalog.py").exists()
     updated_card = api.db.get_card_by_id(puuid, "TASK-102")
     assert updated_card["status"] == "merged"
