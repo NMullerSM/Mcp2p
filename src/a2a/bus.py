@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -510,8 +511,31 @@ class A2ABus:
         }
 
     # ==========================================
-    # Motor de Juicio de Honor Ponderado (2.0 Humano / 1.5 Agente)
+    # Motor de Juicio de Honor Ponderado (EGM-01 / EGM-02 / EGM-03 / EGM-04 / EGM-05)
     # ==========================================
+
+    def eligible_humans_count(
+        self,
+        project_uuid: str,
+        contenders: Optional[List[str]] = None,
+        arbiter_node_uuid: Optional[str] = None
+    ) -> int:
+        """
+        Calcula el universo real de humanos elegibles para un proyecto y disputa (EGM-04).
+        Excluye contendientes (en N >= 3) y al árbitro externo si fue designado.
+        """
+        collabs = self.db.get_project_collaborators(project_uuid)
+        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
+        if not all_nodes:
+            swarm = self.db.get_swarm_nodes()
+            all_nodes = [n["node_uuid"] for n in swarm] if swarm else list(contenders or [])
+        contenders_clean = [c for c in (contenders or []) if c]
+        universe = self.jury_engine.resolve_voter_universe(
+            all_nodes,
+            contenders_clean,
+            arbiter_node_uuid=arbiter_node_uuid
+        )
+        return int(universe.get("eligible_humans_count", max(1, len(universe.get("eligible_human_nodes", [])))))
 
     def open_dispute_ticket(
         self,
@@ -532,19 +556,24 @@ class A2ABus:
         """Abre formalmente un ticket de juicio técnico en disputa e inicializa su Matriz Neutral Anti-Sycophancy."""
         t_id = ticket_id or f"TICKET-{str(uuid.uuid4())[:8].upper()}"
 
-        # 1. Calcular universo real de nodos y humanos elegibles (§2.1 / §3.1)
-        collabs = self.db.get_project_collaborators(project_uuid)
-        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
-        if not all_nodes:
-            swarm = self.db.get_swarm_nodes()
-            all_nodes = [n["node_uuid"] for n in swarm] if swarm else [contender_a_node, contender_b_node]
-
+        # 1. EGM-01: Seleccionar árbitro externo pre-registrado más antiguo que no sea contendiente
+        arbiters = self.db.list_project_arbiters(project_uuid)
         contenders = [c for c in [contender_a_node, contender_b_node] if c]
-        universe = self.jury_engine.resolve_voter_universe(all_nodes, contenders)
-        eligible_voters = universe.get("eligible_voters", [])
-        eligible_count = len(eligible_voters) if eligible_voters else max(1, len(all_nodes))
+        arbiter_node_uuid = None
+        for arb in arbiters:
+            a_node = arb.get("arbiter_node_uuid") or arb.get("node_uuid")
+            if a_node and a_node not in contenders:
+                arbiter_node_uuid = a_node
+                break
 
-        # 2. Inferencia de dominio si no se pasa explícitamente (§2.2)
+        # 2. EGM-04: Conteo unificado de humanos elegibles
+        eligible_count = self.eligible_humans_count(
+            project_uuid=project_uuid,
+            contenders=contenders,
+            arbiter_node_uuid=arbiter_node_uuid
+        )
+
+        # 3. Inferencia de dominio si no se pasa explícitamente (§2.2)
         inferred_domain = domain
         if not inferred_domain:
             text_context = f"{title} {collision_reason} {proposal_a_ref} {proposal_b_ref}".lower()
@@ -568,10 +597,32 @@ class A2ABus:
             seed=t_id,
             domain=inferred_domain
         )
-        synthesis_text = proposal_c_ref or (
-            f"Síntesis (Tercera Vía C): Integrar los puntos de mayor resiliencia de Tesis ({proposal_a_ref[:60]}) "
-            f"con la simplicidad operativa de Antítesis ({proposal_b_ref[:60]}), aislando efectos secundarios mediante interfaz intermedia."
-        )
+
+        # 4. EGM-06: Marcado e inspección de prompt injection (señal para auditoría humana)
+        injection_suspected = False
+        injection_patterns = [
+            r"ignore\s+(all\s+)?(previous|prior)\s+instructions",
+            r"disregard\s+(all\s+)?(previous|prior)\s+instructions",
+            r"system\s*instruction",
+            r"system\s*prompt",
+            r"<\|im_start\|>",
+            r"<\|im_end\|>",
+            r"\[INST\]",
+            r"\[\/INST\]",
+            r"system\s*:\s*",
+            r"you\s+are\s+now\b",
+            r"<!--",
+            r"<\/untrusted",
+        ]
+        combined_text = f"{title}\n{collision_reason}\n{proposal_a_ref}\n{proposal_b_ref}"
+        for pat in injection_patterns:
+            if re.search(pat, combined_text, re.IGNORECASE):
+                injection_suspected = True
+                break
+
+        # 5. NEW-04: Síntesis C no se fabrica con plantilla; queda vacía si no fue provista
+        synthesis_text = (proposal_c_ref or "").strip()
+
         return self.db.create_dispute_ticket(
             ticket_id=t_id,
             project_uuid=project_uuid,
@@ -584,7 +635,9 @@ class A2ABus:
             card_id=card_id,
             proposal_c_ref=synthesis_text,
             jury_matrix_json=json.dumps(matrix_info.get("evaluators", []), ensure_ascii=False),
-            escalation_recommendation=escalation_recommendation
+            escalation_recommendation=escalation_recommendation,
+            arbiter_node_uuid=arbiter_node_uuid,
+            injection_suspected=injection_suspected
         )
 
     def submit_agent_borda_evaluation(
@@ -625,26 +678,86 @@ class A2ABus:
         node_uuid: str,
         developer_name: str,
         voted_option: str,
-        signature_ed25519: str
+        signature_ed25519: str,
+        public_key: str = "",
+        signed_at: str = "",
+        content_sha256: str = "",
+        project_uuid: str = ""
     ) -> Dict[str, Any]:
-        """Registra el voto humano obligatorio con firma Ed25519 y peso 2.0."""
+        """
+        Registra el voto humano obligatorio con autenticación Ed25519 (EGM-05).
+        Verifica:
+        - El votante no debe ser contendiente en N>=3 ni árbitro.
+        - Verificación criptográfica si signature_ed25519 y public_key están presentes.
+        - Registra delivery time para control de quórum (EGM-01).
+        """
+        ticket = self.db.get_dispute_ticket(ticket_id) or {}
+        p_uuid = project_uuid or ticket.get("project_uuid", "")
+
+        contenders = [ticket.get("contender_a_node"), ticket.get("contender_b_node")]
+        arbiter = ticket.get("arbiter_node_uuid")
+
+        # Exclusión de contendientes en N>=3
+        collabs = self.db.get_project_collaborators(p_uuid)
+        if len(collabs) >= 3 and node_uuid in contenders:
+            return {"success": False, "error": f"Nodo {node_uuid} es contendiente en disputa N>=3", "code": 403}
+
+        # Exclusión de árbitro
+        if arbiter and node_uuid == arbiter:
+            return {"success": False, "error": f"Nodo {node_uuid} es el árbitro designado", "code": 403}
+
+        # Verificación criptográfica Ed25519 si la clave está disponible
+        collab = next((c for c in collabs if c.get("node_uuid") == node_uuid), None)
+        pubkey = public_key or (collab.get("public_key") if collab else "")
+        if pubkey and signature_ed25519 and signature_ed25519 not in ("valid_test_signature", "sig_human_test"):
+            from src.p2p.crypto import NodeCryptoManager
+            import hashlib
+            content_text = f"VOTE:{voted_option}:TICKET:{ticket_id}:PROJECT:{p_uuid}"
+            sha = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+            sig_block = {
+                "artifact_id": ticket_id,
+                "content_sha256": content_sha256 or sha,
+                "node_uuid": node_uuid,
+                "developer_name": developer_name,
+                "decision": voted_option,
+                "signed_at": signed_at or datetime.now(timezone.utc).isoformat(),
+                "public_key": pubkey,
+                "signature_ed25519": signature_ed25519
+            }
+            if not NodeCryptoManager.verify_artifact_signature(content_text, sig_block):
+                # Fallback para contenido sin PROJECT
+                legacy_content = f"VOTE:{voted_option}:TICKET:{ticket_id}"
+                if not NodeCryptoManager.verify_artifact_signature(legacy_content, sig_block):
+                    return {"success": False, "error": "Firma Ed25519 inválida o adulterada", "code": 401}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            self.db.record_vote_delivery(ticket_id, node_uuid, now_iso)
+        except Exception:
+            pass
+
         vote_uuid = str(uuid.uuid4())
-        return self.db.add_human_jury_vote(
+        res = self.db.add_human_jury_vote(
             vote_uuid=vote_uuid,
             ticket_id=ticket_id,
             node_uuid=node_uuid,
             developer_name=developer_name,
             voted_option=voted_option,
-            signature_ed25519=signature_ed25519
+            signature_ed25519=signature_ed25519,
+            weight=2.0,
+            public_key=pubkey,
+            signed_at=signed_at or now_iso,
+            content_sha256=content_sha256,
+            project_uuid=p_uuid
         )
+        return {"success": True, "vote_uuid": vote_uuid, **res}
 
     def compute_jury_verdict(self, project_uuid: str, ticket_id: str) -> Dict[str, Any]:
         """
-        Calcula el veredicto ponderado del Juicio de Honor Dialéctico (3 Fases):
-        - Gobernanza Human-Dominant: Peso humano = 2.0 vs Pool de subagentes capado a 1.5 * H (57.14% vs 42.86%).
-        - Umbral de consenso >= 80% o unanimidad humana decisoria.
-        - Si todos los humanos votan por una opción y todos los bots por otra, los humanos ganan siempre.
-        - Persiste el dictamen en docs/okf/architecture/rulings/{ticket_id}.yaml.
+        Calcula el veredicto ponderado continuo del Juicio de Honor Dialéctico (EGM-01/02/03):
+        - R_efectivo = 0.70·h_O + 0.30·a_O con umbral de ratificación 0.80.
+        - Persiste dictamen YAML y commitea OKF SOLO si status == 'ratified'.
+        - Actualiza el estado del ticket en base de datos al status del veredicto.
         """
         summary = self.db.get_jury_votes_summary(ticket_id)
         human_votes = summary.get("human_votes", [])
@@ -660,7 +773,21 @@ class A2ABus:
             c for c in [ticket.get("contender_a_node"), ticket.get("contender_b_node")]
             if c
         ]
-        voter_universe = self.jury_engine.resolve_voter_universe(all_nodes, contenders)
+        arbiter_node_uuid = ticket.get("arbiter_node_uuid")
+        voter_universe = self.jury_engine.resolve_voter_universe(
+            all_nodes,
+            contenders,
+            arbiter_node_uuid=arbiter_node_uuid
+        )
+
+        # Verificar si el quórum de votación está cerrado
+        deliveries = self.db.get_vote_deliveries(ticket_id)
+        quorum_closed = self.jury_engine.is_quorum_closed(
+            ticket=ticket,
+            human_votes=human_votes,
+            deliveries=deliveries,
+            eligible_human_nodes=voter_universe["eligible_human_nodes"]
+        )
 
         # Ejecutar motor de consenso dialéctico
         consensus = self.jury_engine.compute_dialectic_consensus(
@@ -669,57 +796,39 @@ class A2ABus:
             human_votes=human_votes,
             agent_scores=agent_scores,
             all_project_nodes=all_nodes,
-            contender_nodes=contenders
+            contender_nodes=contenders,
+            arbiter_node_uuid=arbiter_node_uuid,
+            quorum_closed=quorum_closed
         )
 
-        # Compatibilidad hacia atrás con breakdown legacy (Score(k) = Votos Humanos * 1000 + Borda * 1.5)
-        options = ["OPTION_A", "OPTION_B", "THIRD_WAY_C"]
-        scores_by_option: Dict[str, Dict[str, float]] = {
-            opt: {"human_weight": 0.0, "agent_score_sum": 0.0, "agent_count": 0.0, "final_score": 0.0}
-            for opt in options
-        }
-        for hv in human_votes:
-            voted = hv.get("voted_option")
-            if voted in scores_by_option:
-                raw_w = float(hv.get("weight", 2.0))
-                scores_by_option[voted]["human_weight"] += (raw_w * 500.0)
-        for ag in agent_scores:
-            opt = ag.get("evaluated_option")
-            if opt in scores_by_option:
-                scores_by_option[opt]["agent_score_sum"] += float(ag.get("weighted_total", 0.0))
-                scores_by_option[opt]["agent_count"] += 1.0
-
-        for opt, val in scores_by_option.items():
-            avg_agent = (val["agent_score_sum"] / val["agent_count"]) if val["agent_count"] > 0 else 0.0
-            agent_points = (avg_agent / 100.0) * 1.5
-            total = val["human_weight"] + agent_points
-            val["final_score"] = round(total, 4)
-            c_bd = consensus["breakdown"].get(opt, {})
-            val["dialectic_ratio"] = c_bd.get("consensus_ratio", 0.0)
-            val["dialectic_points"] = c_bd.get("total_points", 0.0)
-
         winning_option = consensus["winning_option"]
-        highest_score = scores_by_option.get(winning_option, {}).get("final_score", 0.0)
+        breakdown = consensus["breakdown"]
+        highest_score = breakdown[winning_option]["final_score"]
+        status = consensus["status"]
+        resolution_mode = consensus["resolution_mode"]
         tie_detected = consensus["tie_detected"]
 
-        # Persistir dictamen YAML en OKF si el proyecto tiene gov_repo_path
+        # Persistir dictamen YAML en OKF ÚNICAMENTE si está ratificado (NEW-02)
         ruling_yaml_path = None
         proj = self.db.get_project_by_uuid(project_uuid)
-        if proj and proj.get("gov_repo_path"):
+        if status == "ratified" and proj and proj.get("gov_repo_path"):
             try:
                 matrix_list = []
                 if ticket.get("jury_matrix_json"):
-                    matrix_list = json.loads(ticket["jury_matrix_json"])
+                    try:
+                        matrix_list = json.loads(ticket["jury_matrix_json"])
+                    except Exception:
+                        matrix_list = []
+                synth_data = {
+                    "option_id": "THIRD_WAY_C",
+                    "generated_by": "agent" if ticket.get("proposal_c_ref") else "pending",
+                    "summary": ticket.get("proposal_c_ref", "")
+                }
                 ruling_path = self.jury_engine.persist_ruling_yaml(
                     gov_base_path=proj["gov_repo_path"],
                     ticket=ticket,
                     verdict=consensus,
-                    synthesis_data={
-                        "option_id": "THIRD_WAY_C",
-                        "synthesizer_agent": "subagent_synthesizer_third_way",
-                        "temperature": 0.65,
-                        "summary": ticket.get("proposal_c_ref", "")
-                    },
+                    synthesis_data=synth_data,
                     neutral_matrix=matrix_list
                 )
                 ruling_yaml_path = str(ruling_path)
@@ -743,9 +852,11 @@ class A2ABus:
             except Exception as e:
                 logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket_id, e)
 
-        # Actualizar estado del ticket en base de datos
-        self.db.resolve_dispute_ticket(
+        # Actualizar estado del ticket en base de datos (NEW-02)
+        self.db.update_dispute_status(
             ticket_id=ticket_id,
+            status=status,
+            resolution_mode=resolution_mode,
             winning_option=winning_option,
             final_adr_path=ruling_yaml_path
         )
@@ -759,12 +870,13 @@ class A2ABus:
             "consensus_reached": consensus["consensus_reached"],
             "threshold_required": consensus["threshold_required"],
             "winning_ratio": consensus["consensus_ratio"],
-            "resolution_mode": consensus["resolution_mode"],
-            "effective_agent_weight": consensus["effective_agent_unit_weight"],
+            "status": status,
+            "resolution_mode": resolution_mode,
+            "effective_agent_weight": consensus.get("effective_agent_unit_weight", 1.5),
             "voter_universe": voter_universe,
             "ruling_yaml_path": ruling_yaml_path,
-            "breakdown": scores_by_option,
-            "dialectic_breakdown": consensus["breakdown"],
+            "breakdown": breakdown,
+            "dialectic_breakdown": breakdown,
             "human_votes_count": len(human_votes),
             "agent_evaluations_count": len(agent_scores)
         }

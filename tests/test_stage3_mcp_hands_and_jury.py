@@ -146,27 +146,26 @@ def test_weighted_honor_jury_system(stage3_env):
         rationale="OPTION_A ofrece mejor KISS y performance."
     )
 
-    # 3. Voto Humano de Desarrollador Beta (apoya OPTION_B con peso 2.0)
-    # Generar firma Ed25519 humana
+    # 3. Voto Humano de Desarrollador Neutral (EGM-01: node_beta es contendiente; vota el desarrollador neutral del proyecto)
+    owner_node = stage3_env["db"].get_project_collaborators(p_uuid)[0]["node_uuid"]
     key_path = stage3_env["root"] / "human_dev_key.pem"
     crypto_mgr = NodeCryptoManager(key_path=key_path)
     sig_b = crypto_mgr.sign_payload({"vote": "OPTION_B", "ticket": ticket_id})
 
     bus.submit_human_jury_vote(
         ticket_id=ticket_id,
-        node_uuid="node_beta",
-        developer_name="Desarrollador Beta",
+        node_uuid=owner_node,
+        developer_name="Desarrollador Neutral",
         voted_option="OPTION_B",
         signature_ed25519=sig_b
     )
 
     # 4. Calcular veredicto:
-    # OPTION_A: 0 humanos * 2.0 + (90/100 * 1.5) = 1.35
-    # OPTION_B: 1 humano * 2.0 + (50/100 * 1.5) = 2.0 + 0.75 = 2.75
-    # Gana OPTION_B porque el voto humano tiene mayor peso (2.0)
+    # Gana OPTION_B porque el voto humano tiene mayor peso (2.0) y aplica override de unanimidad humana
     verdict = bus.compute_jury_verdict(p_uuid, ticket_id)
     assert verdict["winning_option"] == "OPTION_B"
-    assert verdict["highest_score"] >= 2.75
+    assert verdict["highest_score"] >= 2.0
+    assert verdict["consensus_reached"] is True
 
 
 def test_mcp_agent_hands_tools(stage3_env):

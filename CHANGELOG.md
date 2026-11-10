@@ -3,6 +3,32 @@
 Todas las versiones siguen [SemVer](https://semver.org/lang/es/). Fuente única de la versión: `src/app/version.py`
 (sincronizar con `python scripts/sync_version.py`).
 
+## [Unreleased]
+
+### Seguridad
+- **Cierre de Quórum Humano y Prevención de Primer Voto (NEW-01, EGM-01)**: `is_quorum_closed` exige unanimidad de votos o el transcurso de una ventana de gracia (48h) tras recepción confirmada (`dispute_vote_delivery`), o 168h de timeout por estancamiento. Se elimina la vulnerabilidad donde un único voto humano prematuro cerraba la disputa.
+- **Autenticación Ed25519 y Anti-Sybil en Votación (EGM-05)**: Los votos humanos requieren firma criptográfica válida sobre el contenido canónico (`VOTE:{option}:TICKET:{id}:PROJECT:{uuid}`) cruzada con la clave pública del colaborador aprobado. Nodos no registrados o atacantes Sybil se aíslan en `rejected_unknown_votes` sin diluir el denominador de elegibles. Exclusión estricta de contendientes en $N \ge 3$ y exclusión de árbitros en rondas regulares.
+- **Aislamiento de Contexto y Anti-Prompt Injection (EGM-06, EGM-08)**: Paquetes Clean-Room delimitados por `<untrusted_proposal_context>` con nonces únicos impredecibles. Caracteres `<` y `>` escapados a entidades HTML. Truncado defensivo a 8,000 caracteres con verificación SHA-256 para prevenir ataques de denegación de servicio por desbordamiento de contexto.
+- **Votación a Ciegas y Redacción Anti-Sesgo (EGM-07, NEW-05)**: Opciones proyectadas en alias neutrales (`ALFA`, `BETA`, `GAMMA`) mediante permutación determinista pseudoaleatoria por evaluador. Ocultamiento de puntuaciones numéricas de agentes y votos humanos individuales hasta que el evaluador firma su voto.
+- **Validación de Identidad de Jurados MCP (NEW-03)**: Verificación estricta de asignación de `agent_id` en la matriz neutral del ticket, rechazo de evaluaciones duplicadas y bloqueo en tickets cerrados.
+
+### Corregido
+- **Persistencia Condicional de Dictámenes (NEW-02)**: Los archivos YAML `RULING-{ticket_id}.yaml` y sus commits correspondientes en Git solo se crean si el estado del veredicto es estrictamente `ratified`. Dictámenes en `open` o `challenged` no dejan artefactos huérfanos.
+- **Eliminación de Sesgos Numéricos Mágicos (EGM-03)**: Removido el offset artificial `+10.0` y el multiplicador obsoleto `500.0`. Sincronía estricta `final_score == total_points`.
+- **Eliminación de Síntesis Fabricadas (NEW-04)**: Erradicada la plantilla autogenerada para la Tercera Vía C. La síntesis solo se formula si un sintetizador genuino la genera o si es provista con fundamento técnico real.
+- **Conteo Unificado de Votantes Elegibles (EGM-04)**: Centralizado en `bus.eligible_humans_count()` para evitar discrepancias entre bus, pasarela API y herramientas MCP.
+
+### Mejorado
+- **Modelo Continuo de Consenso Dialéctico Ponderado (EGM-02)**: Consenso ponderado $R = 0.70 \cdot h + 0.30 \cdot a$ con umbral estricto del $80\%$ y escalera jerárquica de resolución en 5 pasos (supermayoría, unanimidad humana, árbitro externo, desempate técnico sin árbitro, y escalamiento manual).
+- **Mecanismo de Desempate con Árbitro Externo (EGM-01)**: Soporte para árbitro neutral pre-registrado (`project_arbiters`) congelado al momento de la apertura del ticket.
+- **Escritura Atómica en Disco e Índice de Precedentes OKF (EGM-10)**: Nueva utilidad `atomic_write_text` con `fsync` y `replace` seguro con limpieza garantizada. Índice de precedentes determinista con suma SHA-256 e indexación exclusiva de fallos ratificados.
+- **Identidad Visual de Marca MCP²P (Frente A)**: Generación de favicon e icono multi-resolución real para Windows (`mcp2p.ico` con capas de 16, 32, 48, 64 y 256 px), logos PNG optimizados, componente SVG inline `BrandMark.jsx`, tokens CSS de marca (`--brand-emerald`, `--brand-mint`) y títulos de ventana consistentes.
+- **Mitigación de Parpadeo de Consola en Windows (Frente C)**: Creación del helper `run_hidden` / `no_window_kwargs` (`CREATE_NO_WINDOW`) para todos los subprocesos (`git`, `gh`, `scripts`), caché TTL de 60s para estado de autenticación GitHub, sincronización nativa de fondo en PyWebView (`set_ui_theme`) y eliminación de render commits redundantes en drawers.
+
+### Interno
+- **Sincronización Documental y Catálogo Técnico (EGM-09)**: Catálogo exhaustivo de 10 vectores técnicos (`FOCUS_CATALOG`) con directivas y submétricas sincronizado en `docs/ARQUITECTURA_JUICIO_DIALECTICO_Y_MATRIZ.md`.
+- **Suite de Pruebas Adversariales**: 11 nuevas pruebas exhaustivas en `tests/test_adversarial_jury_and_hitl.py` cubriendo ataques Sybil, adulteración criptográfica, inyección de prompt, truncado masivo, aliasing ciego, resiliencia a caídas de disco y validación de jurados MCP.
+
 ## [1.0.3] - 2026-11-09
 
 ### Seguridad

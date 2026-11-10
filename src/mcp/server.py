@@ -575,6 +575,28 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
             rationale=rationale
         )
 
+    # Herramienta: Registrar Síntesis de Tercera Vía C en Juicio de Honor (NEW-04)
+    @server.tool()
+    def submit_synthesis(
+        project_uuid: Optional[str] = None,
+        ticket_id: Optional[str] = None,
+        synthesis_text: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        ticketId: Optional[str] = None,
+        synthesisText: Optional[str] = None
+    ) -> str:
+        """
+        Registra la propuesta real de Tercera Vía C elaborada por un agente sintetizador en un ticket de juicio de honor (NEW-04).
+        """
+        resolved_proj = project_uuid or projectUuid or ""
+        resolved_ticket = ticket_id or ticketId or ""
+        resolved_text = synthesis_text if synthesis_text is not None else (synthesisText or "")
+        return handler.submit_synthesis(
+            project_uuid=resolved_proj,
+            ticket_id=resolved_ticket,
+            synthesis_text=resolved_text
+        )
+
     # 18. Herramienta: Escanear e Iniciar Bootstrap OKF (Modo 1 Onboarding)
     @server.tool()
     def scan_and_bootstrap_okf(

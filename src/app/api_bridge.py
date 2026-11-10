@@ -7,10 +7,12 @@ Soporte nativo para multi-proyecto con aislamiento estricto de doble repositorio
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
 import platform
+import random
 import re
 import subprocess
 import sys
@@ -1526,7 +1528,52 @@ class ApiBridge:
     # Bandeja HITL de Aprobación Humana (Etapa 4)
     # ==========================
 
-    def get_pending_human_approvals(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+    def _get_blind_options_mapping(self, ticket_id: str, viewer_node: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """
+        Calcula una permutación pseudoaleatoria determinista para el par (ticket_id, viewer_node) (EGM-07).
+        Devuelve (alias_to_canonical, canonical_to_alias).
+        """
+        seed = hashlib.sha256(f"{ticket_id}:{viewer_node}".encode("utf-8")).digest()
+        shuffled = random.Random(seed).sample(["OPTION_A", "OPTION_B", "THIRD_WAY_C"], 3)
+        alias_names = ["ALFA", "BETA", "GAMMA"]
+        alias_to_canonical = {alias_names[i]: shuffled[i] for i in range(3)}
+        canonical_to_alias = {shuffled[i]: alias_names[i] for i in range(3)}
+        return alias_to_canonical, canonical_to_alias
+
+    def _anonymize_text(self, text: str, canonical_to_alias: Dict[str, str]) -> str:
+        """
+        Reescribe referencias a opciones y roles dialécticos en propuestas y argumentos cualitativos (EGM-07).
+        """
+        if not text:
+            return ""
+        alias_a = canonical_to_alias.get("OPTION_A", "ALFA")
+        alias_b = canonical_to_alias.get("OPTION_B", "BETA")
+        alias_c = canonical_to_alias.get("THIRD_WAY_C", "GAMMA")
+        patterns = [
+            (r"\bOPTION_A\b", f"Opción {alias_a}"),
+            (r"\bOPTION_B\b", f"Opción {alias_b}"),
+            (r"\bTHIRD_WAY_C\b", f"Opción {alias_c}"),
+            (r"\bOpci[oó]n\s+A\b", f"Opción {alias_a}"),
+            (r"\bOpci[oó]n\s+B\b", f"Opción {alias_b}"),
+            (r"\bOpci[oó]n\s+C\b", f"Opción {alias_c}"),
+            (r"\bTesis\s+A\b", f"Propuesta {alias_a}"),
+            (r"\bAnt[ií]tesis\s+B\b", f"Propuesta {alias_b}"),
+            (r"\bS[ií]ntesis\s+C\b", f"Propuesta {alias_c}"),
+            (r"\bTesis\b", f"Propuesta {alias_a}"),
+            (r"\bAnt[ií]tesis\b", f"Propuesta {alias_b}"),
+            (r"\bS[ií]ntesis\b", f"Propuesta {alias_c}"),
+            (r"\bTercera\s+V[ií]a\b", f"Propuesta {alias_c}"),
+        ]
+        res = text
+        for pat, repl in patterns:
+            res = re.sub(pat, repl, res, flags=re.IGNORECASE)
+        return res
+
+    def get_pending_human_approvals(
+        self,
+        project_uuid: Optional[str] = None,
+        viewer_node: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Recupera en una sola llamada todos los elementos pendientes de aprobación humana:
         1. Pull Requests con recomendación del agente y reloj de tiempo de gracia.
@@ -1545,7 +1592,7 @@ class ApiBridge:
 
             gov_path = Path(proj["gov_repo_path"])
             app_path = Path(proj["code_repo_path"])
-            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            local_node = viewer_node or os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
 
             # 1. Decisiones técnicas en docs/okf/architecture/decisions/
             decisions = []
@@ -1584,101 +1631,161 @@ class ApiBridge:
 
             with self.db.get_connection() as conn:
                 cur = conn.execute(
-                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND status = 'open' ORDER BY created_at DESC;",
-                    (target_uuid,)
+                    """
+                    SELECT * FROM dispute_tickets 
+                    WHERE project_uuid = ? 
+                      AND (status = 'open' 
+                           OR (status = 'challenged' AND resolution_mode = 'awaiting_external_arbiter' AND arbiter_node_uuid = ?))
+                    ORDER BY created_at DESC;
+                    """,
+                    (target_uuid, local_node)
                 )
-                for row in cur.fetchall():
-                    t = dict(row)
-                    summary = self.db.get_jury_votes_summary(t["ticket_id"])
-                    has_voted = any(hv.get("node_uuid") == local_node for hv in summary.get("human_votes", []))
+                rows = cur.fetchall()
 
-                    # Asegurar Síntesis (Tercera Vía C) y Matriz Neutral si es un ticket previo a Iteración B
-                    proposal_c = t.get("proposal_c_ref") or ""
-                    raw_matrix = t.get("jury_matrix_json") or "[]"
-                    try:
-                        matrix_list = json.loads(raw_matrix) if raw_matrix else []
-                    except Exception:
-                        matrix_list = []
+            for row in rows:
+                t = dict(row)
+                t_id = t["ticket_id"]
+                # EGM-01: Registrar entrega del ticket al nodo local
+                now_iso = datetime.now(timezone.utc).isoformat()
+                try:
+                    self.db.record_vote_delivery(t_id, local_node, now_iso)
+                except Exception:
+                    pass
 
-                    if not proposal_c or not matrix_list:
-                        gen_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
-                            eligible_humans_count=len(all_nodes),
-                            ticket_id=t["ticket_id"],
-                            seed=t["ticket_id"]
-                        )
-                        if not matrix_list:
-                            matrix_list = gen_matrix.get("evaluators", [])
-                        if not proposal_c:
-                            proposal_c = (
-                                f"Síntesis Híbrida (Tercera Vía C): Adoptar la arquitectura base de Tesis ({t.get('proposal_a_ref', '')[:80]}) "
-                                f"incorporando las salvaguardas de rendimiento y aislamiento propuestas en Antítesis ({t.get('proposal_b_ref', '')[:80]}), "
-                                f"mediante un adaptador desacoplado verificable con contratos de interfaz."
-                            )
-                        self.db.update_dispute_synthesis_and_matrix(
-                            ticket_id=t["ticket_id"],
-                            proposal_c_ref=proposal_c,
-                            jury_matrix=matrix_list
-                        )
-                        t["proposal_c_ref"] = proposal_c
+                summary = self.db.get_jury_votes_summary(t_id)
+                raw_human_votes = summary.get("human_votes", [])
+                has_voted = any(hv.get("node_uuid") == local_node for hv in raw_human_votes)
 
-                    # Construir vista de Mayéutica de Subagentes (sin revelar score numérico antes del voto humano para evitar sesgo)
-                    agent_scores = summary.get("agent_scores", [])
-                    mayeutic_discussions = []
-                    grouped_by_juror: Dict[str, List[Dict[str, Any]]] = {}
-                    for sc in agent_scores:
-                        j_id = sc.get("juror_id", "subagent_neutral")
-                        grouped_by_juror.setdefault(j_id, []).append(sc)
+                # NEW-04: Respetar propuesta C real o mantenerla vacía si no existe
+                proposal_c = t.get("proposal_c_ref") or ""
 
-                    for idx, m_spec in enumerate(matrix_list):
-                        j_id = m_spec.get("juror_id", f"subagent_neutral_{idx+1}")
-                        j_evals = grouped_by_juror.get(j_id, [])
-                        rationale_text = ""
-                        for ev in j_evals:
-                            if ev.get("rationale_summary"):
-                                rationale_text = ev["rationale_summary"]
-                                break
-                        if not rationale_text:
-                            focus_names = ", ".join(m_spec.get("focus_vectors", [])) or "Neutralidad General (Zero-Focus)"
-                            rationale_text = (
-                                f"Evaluación mayéutica independiente bajo vector [{focus_names}] (T={m_spec.get('temperature')}): "
-                                f"La Tesis A privilegia consistencia estructural e invariantes de dominio; la Antítesis B reduce "
-                                f"la latencia de ruta crítica pero introduce acoplamiento adicional; la Síntesis C equilibra ambos "
-                                f"requisitos aislando el contrato de comunicación."
-                            )
-                        mayeutic_entry: Dict[str, Any] = {
-                            "juror_id": j_id,
-                            "focus_vectors": m_spec.get("focus_vectors", []),
-                            "focus_count": m_spec.get("focus_count", 0),
-                            "temperature": m_spec.get("temperature", 0.2),
-                            "temperature_profile": m_spec.get("temperature_profile", "analytical_strict"),
-                            "mayeutic_argument": rationale_text,
-                            "scores_hidden_until_human_vote": not has_voted
-                        }
-                        if has_voted:
-                            mayeutic_entry["revealed_scores"] = j_evals
-                        mayeutic_discussions.append(mayeutic_entry)
+                raw_matrix = t.get("jury_matrix_json") or "[]"
+                try:
+                    matrix_list = json.loads(raw_matrix) if raw_matrix else []
+                except Exception:
+                    matrix_list = []
 
-                    contenders = [c for c in [t.get("contender_a_node"), t.get("contender_b_node")] if c]
-                    voter_universe = self.bus.jury_engine.resolve_voter_universe(all_nodes, contenders)
+                contenders = [c for c in [t.get("contender_a_node"), t.get("contender_b_node")] if c]
+                arbiter_uuid = t.get("arbiter_node_uuid")
+                h_eligible = self.bus.eligible_humans_count(target_uuid, contenders, arbiter_node_uuid=arbiter_uuid)
 
-                    has_matrix_version = any(m.get("matrix_version") == "2.0.0" for m in matrix_list)
-                    has_clean_room = all("clean_room_prompt" in m for m in matrix_list)
-                    is_outdated = bool(matrix_list and not (has_matrix_version and has_clean_room))
-                    t["is_outdated_matrix"] = is_outdated
-                    if is_outdated:
-                        t["matrix_warning"] = "Matriz de jurado generada con versión previa del motor (sin directivas de cámara limpia 2.0.0)."
+                if not matrix_list:
+                    gen_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
+                        eligible_humans_count=h_eligible,
+                        ticket_id=t_id,
+                        seed=t_id
+                    )
+                    matrix_list = gen_matrix.get("evaluators", [])
+                    self.db.update_dispute_synthesis_and_matrix(
+                        ticket_id=t_id,
+                        proposal_c_ref=proposal_c,
+                        jury_matrix=matrix_list
+                    )
 
-                    t["has_voted"] = has_voted
-                    t["proposal_c_ref"] = proposal_c
-                    t["jury_matrix"] = matrix_list
-                    t["mayeutic_discussions"] = mayeutic_discussions
-                    t["voter_universe"] = voter_universe
-                    t["votes_summary"] = summary if has_voted else {
-                        "human_votes": summary.get("human_votes", []),
-                        "agent_scores_count": len(agent_scores),
-                        "bias_protection": "Puntuaciones cardinales ocultas hasta emitir tu voto humano."
+                # Mapeo determinista de voto ciego (EGM-07)
+                alias_to_canonical, canonical_to_alias = self._get_blind_options_mapping(t_id, local_node)
+
+                # Construir mayéutica de subagentes
+                agent_scores = summary.get("agent_scores", [])
+                mayeutic_discussions = []
+                grouped_by_juror: Dict[str, List[Dict[str, Any]]] = {}
+                for sc in agent_scores:
+                    j_id = sc.get("juror_id", "subagent_neutral")
+                    grouped_by_juror.setdefault(j_id, []).append(sc)
+
+                for idx, m_spec in enumerate(matrix_list):
+                    real_jid = m_spec.get("juror_id", f"subagent_neutral_{idx+1}")
+                    j_evals = grouped_by_juror.get(real_jid, [])
+                    rationale_text = ""
+                    for ev in j_evals:
+                        if ev.get("rationale_summary"):
+                            rationale_text = ev["rationale_summary"]
+                            break
+
+                    is_pending = not bool(rationale_text)
+                    if is_pending:
+                        display_text = "⏳ Pendiente de evaluación por el subagente jurado."
+                    else:
+                        display_text = self._anonymize_text(rationale_text, canonical_to_alias) if not has_voted else rationale_text
+
+                    juror_display_id = f"Jurado {idx + 1}" if not has_voted else real_jid
+                    role_display = "EVALUADOR_NEUTRAL" if not has_voted else m_spec.get("role", "NEUTRAL_MATRIX_JUROR")
+
+                    mayeutic_entry: Dict[str, Any] = {
+                        "juror_id": juror_display_id,
+                        "role": role_display,
+                        "focus_vectors": m_spec.get("focus_vectors", []),
+                        "focus_labels": m_spec.get("focus_labels", []),
+                        "focus_count": m_spec.get("focus_count", 0),
+                        "pending": is_pending,
+                        "mayeutic_argument": display_text,
+                        "scores_hidden_until_human_vote": not has_voted
                     }
-                    disputes.append(t)
+                    if has_voted:
+                        mayeutic_entry["temperature"] = m_spec.get("temperature", 0.2)
+                        mayeutic_entry["temperature_profile"] = m_spec.get("temperature_profile", "analytical_strict")
+                        mayeutic_entry["revealed_scores"] = j_evals
+                    mayeutic_discussions.append(mayeutic_entry)
+
+                voter_universe = self.bus.jury_engine.resolve_voter_universe(all_nodes, contenders, arbiter_node_uuid=arbiter_uuid)
+
+                # Construir options_view (EGM-07)
+                canonical_proposals = {
+                    "OPTION_A": t.get("proposal_a_ref", ""),
+                    "OPTION_B": t.get("proposal_b_ref", ""),
+                    "THIRD_WAY_C": proposal_c
+                }
+                options_view = []
+                for alias in ["ALFA", "BETA", "GAMMA"]:
+                    canon = alias_to_canonical[alias]
+                    raw_prop = canonical_proposals.get(canon, "")
+                    is_available = True if (canon != "THIRD_WAY_C" or bool(proposal_c)) else False
+                    opt_entry: Dict[str, Any] = {
+                        "alias_id": alias,
+                        "alias_label": f"Opción {alias}",
+                        "text": self._anonymize_text(raw_prop, canonical_to_alias) if not has_voted else raw_prop,
+                        "is_available": is_available
+                    }
+                    if has_voted or t.get("status") != "open":
+                        opt_entry["canonical_option"] = canon
+                        opt_entry["author"] = t.get("contender_a_node") if canon == "OPTION_A" else (t.get("contender_b_node") if canon == "OPTION_B" else "Subagente Sintetizador")
+                    options_view.append(opt_entry)
+
+                t["options_view"] = options_view
+                t["has_voted"] = has_voted
+                t["jury_matrix"] = matrix_list
+                t["mayeutic_discussions"] = mayeutic_discussions
+                t["voter_universe"] = voter_universe
+
+                if not has_voted and t.get("status") == "open":
+                    # Redacción estricta antes de votar (EGM-07 / NEW-05)
+                    t["votes_summary"] = {
+                        "human_votes": {
+                            "human_votes_cast": len(raw_human_votes),
+                            "human_votes_expected": h_eligible
+                        },
+                        "agent_scores_count": len(agent_scores),
+                        "bias_protection": "Voto ciego activado: opciones anonimizadas con alias estables. Puntuaciones ocultas hasta emitir tu voto."
+                    }
+                    # Ocultar claves canónicas que filtrarían autoría o texto crudo sin anonimizar
+                    t.pop("proposal_a_ref", None)
+                    t.pop("proposal_b_ref", None)
+                    t.pop("proposal_c_ref", None)
+                    t.pop("contender_a_node", None)
+                    t.pop("contender_b_node", None)
+                    t.pop("jury_matrix_json", None)
+                else:
+                    t["votes_summary"] = summary
+                    t["reveal_map"] = {
+                        alias: {
+                            "canonical_option": alias_to_canonical[alias],
+                            "author": t.get("contender_a_node") if alias_to_canonical[alias] == "OPTION_A" else (t.get("contender_b_node") if alias_to_canonical[alias] == "OPTION_B" else "Subagente Sintetizador"),
+                            "label": "Tesis (A)" if alias_to_canonical[alias] == "OPTION_A" else ("Antítesis (B)" if alias_to_canonical[alias] == "OPTION_B" else "Síntesis (C)")
+                        }
+                        for alias in ["ALFA", "BETA", "GAMMA"]
+                    }
+
+                disputes.append(t)
 
             # 3. Pull requests / Tareas en Revisión pendientes con detalle completo
             prs = []
@@ -1890,7 +1997,8 @@ class ApiBridge:
         item_type: str,
         item_id: str,
         decision: str = "APPROVED",
-        comment: str = ""
+        comment: str = "",
+        voter_node: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Firma y aprueba un ítem utilizando la clave privada Ed25519 del desarrollador local.
@@ -1903,7 +2011,7 @@ class ApiBridge:
 
             gov_path = Path(proj["gov_repo_path"])
             app_path = Path(proj["code_repo_path"])
-            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            local_node = voter_node or os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
             dev_name = os.environ.get("USER", os.environ.get("USERNAME", "developer"))
 
             if item_type == "decision":
@@ -1948,32 +2056,46 @@ class ApiBridge:
                 }
 
             elif item_type == "jury_vote":
-                # decision: 'OPTION_A', 'OPTION_B', 'THIRD_WAY_C'
+                # decision: puede ser alias 'ALFA', 'BETA', 'GAMMA' o canónico 'OPTION_A', 'OPTION_B', 'THIRD_WAY_C' (EGM-07)
+                dec_upper = str(decision).strip().upper()
+                alias_to_canonical, canonical_to_alias = self._get_blind_options_mapping(item_id, local_node)
+                
+                if dec_upper in alias_to_canonical:
+                    canonical_decision = alias_to_canonical[dec_upper]
+                elif dec_upper in ("OPTION_A", "OPTION_B", "THIRD_WAY_C"):
+                    canonical_decision = dec_upper
+                else:
+                    return {"success": False, "error": f"Opción de voto inválida '{decision}'. Debe ser ALFA, BETA o GAMMA."}
+
+                # Estampar firma humana Ed25519 sobre la opción canónica y proyecto (EGM-05)
+                sig_content = f"VOTE:{canonical_decision}:TICKET:{item_id}:PROJECT:{project_uuid}"
                 sig_block = self.crypto.sign_human_approval(
                     artifact_id=item_id,
-                    content_text=f"VOTE:{decision}:TICKET:{item_id}",
+                    content_text=sig_content,
                     node_uuid=local_node,
                     developer_name=dev_name,
-                    decision=decision
+                    decision=canonical_decision
                 )
                 vote_res = self.bus.submit_human_jury_vote(
                     ticket_id=item_id,
                     node_uuid=local_node,
                     developer_name=dev_name,
-                    voted_option=decision,
-                    signature_ed25519=sig_block["signature_ed25519"]
+                    voted_option=canonical_decision,
+                    signature_ed25519=sig_block["signature_ed25519"],
+                    public_key=sig_block.get("public_key", ""),
+                    signed_at=sig_block.get("signed_at", ""),
+                    content_sha256=sig_block.get("content_sha256", ""),
+                    project_uuid=project_uuid
                 )
-                # Computar veredicto automáticamente y exportar precedentes OKF
+                # Computar veredicto automáticamente (EGM-10: bus.compute_jury_verdict ya exporta y commitea si está ratificado)
                 verdict = self.bus.compute_jury_verdict(project_uuid, item_id)
-                try:
-                    self.okf.export_precedents_index(gov_path)
-                except Exception:
-                    pass
                 return {
                     "success": True,
                     "vote": vote_res,
                     "verdict": verdict,
-                    "signature": sig_block
+                    "signature": sig_block,
+                    "canonical_decision": canonical_decision,
+                    "voted_alias": canonical_to_alias.get(canonical_decision, dec_upper)
                 }
 
             elif item_type == "pr_merge":

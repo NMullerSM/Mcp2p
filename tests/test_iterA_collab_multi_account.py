@@ -360,6 +360,10 @@ def test_human_dominant_jury_verdict(temp_env):
     proj = api.create_project(name="JuryProject")["project"]
     p_uuid = proj["project_uuid"]
 
+    # Obtener el nodo dueño registrado automáticamente al crear el proyecto (EGM-05)
+    collabs = db.get_project_collaborators(p_uuid)
+    owner_node = collabs[0]["node_uuid"] if collabs else "node_human_owner"
+
     # Crear ticket de disputa
     ticket_id = "TICKET-DISPUTE-01"
     api.bus.open_dispute_ticket(
@@ -393,7 +397,7 @@ def test_human_dominant_jury_verdict(temp_env):
     # 1 solo humano vota por OPTION_B (con peso estándar)
     api.bus.submit_human_jury_vote(
         ticket_id=ticket_id,
-        node_uuid="node_human_owner",
+        node_uuid=owner_node,
         developer_name="Architect Nathaniel",
         voted_option="OPTION_B",
         signature_ed25519="valid_test_signature"
@@ -402,10 +406,11 @@ def test_human_dominant_jury_verdict(temp_env):
     # Calcular veredicto
     verdict = api.bus.compute_jury_verdict(p_uuid, ticket_id)
 
-    # OPTION_B DEBE ganar a pesar de la masa de bots
+    # OPTION_B DEBE ganar a pesar de la masa de bots por override de unanimidad humana (EGM-02 / EGM-03)
     assert verdict["winning_option"] == "OPTION_B"
     assert verdict["human_votes_count"] == 1
-    assert verdict["breakdown"]["OPTION_B"]["final_score"] > verdict["breakdown"]["OPTION_A"]["final_score"]
+    assert verdict["consensus_reached"] is True
+    assert verdict["resolution_mode"] == "human_unanimity_override"
 
 
 def test_collaborator_invitation_flow(temp_env):

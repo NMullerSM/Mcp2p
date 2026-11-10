@@ -98,7 +98,8 @@ def test_dialectic_consensus_80_threshold_and_human_supremacy():
         contender_nodes=["h1", "h2"]
     )
     assert res_machines_only["consensus_reached"] is False
-    assert res_machines_only["status"] == "provisional_ruling"
+    # En EGM-02 / NEW-01: máquinas solas no pueden forzar quórum ni cerrar el ticket; queda en status 'open'
+    assert res_machines_only["status"] == "open"
     assert res_machines_only["resolution_mode"] == "awaiting_human_votes_machines_cannot_force"
 
     # Escenario 2: 3 subagentes votan OPTION_B, pero los humanos votan unánimemente THIRD_WAY_C
@@ -135,7 +136,8 @@ def test_dialectic_consensus_80_threshold_and_human_supremacy():
     )
     assert res_super["winning_option"] == "THIRD_WAY_C"
     assert res_super["consensus_ratio"] >= 0.80
-    assert res_super["resolution_mode"] == "supermajority_80_percent"
+    # En EGM-02: la supermayoría ponderada (R >= 0.80) se identifica como weighted_supermajority
+    assert res_super["resolution_mode"] == "weighted_supermajority"
 
 
 def test_hitl_deep_inspector_and_okf_precedents_export(tmp_path: Path, monkeypatch):

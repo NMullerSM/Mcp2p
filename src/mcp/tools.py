@@ -6,8 +6,10 @@ Todas las operaciones son deterministas y se ejecutan a coste 0 de tokens sobre 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +18,8 @@ from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
+
+MAX_PROPOSAL_CHARS_IN_PROMPT: int = 8000
 
 
 class MCPToolsHandler:
@@ -877,24 +881,39 @@ class MCPToolsHandler:
             t_id = ticket["ticket_id"]
             votes_summary = self.db.get_jury_votes_summary(t_id)
 
-            # Protección Anti-Sesgo Cognitivo (§2.6)
+            # Protección Anti-Sesgo Cognitivo (§2.6 / NEW-05)
             is_open = ticket.get("status") == "open"
             has_voted = False
+            raw_human_votes = votes_summary.get("human_votes", [])
             if caller_node_uuid:
-                has_voted = any(hv.get("node_uuid") == caller_node_uuid for hv in votes_summary.get("human_votes", []))
+                has_voted = any(hv.get("node_uuid") == caller_node_uuid for hv in raw_human_votes)
+
+            # NEW-05: Redacción de votos humanos individuales antes de cerrar el ticket
+            h_eligible_count = self.bus.eligible_humans_count(
+                ticket.get("project_uuid", ""),
+                [ticket.get("contender_a_node"), ticket.get("contender_b_node")],
+                arbiter_node_uuid=ticket.get("arbiter_node_uuid")
+            )
+            if is_open:
+                human_votes_view = {
+                    "human_votes_cast": len(raw_human_votes),
+                    "human_votes_expected": h_eligible_count
+                }
+            else:
+                human_votes_view = raw_human_votes
 
             # Si el ticket está abierto y no ha votado, ocultar puntajes numéricos de subagentes
             redact_scores = is_open and not has_voted
             if redact_scores:
                 delivered_summary = {
-                    "human_votes": votes_summary.get("human_votes", []),
+                    "human_votes": human_votes_view,
                     "agent_scores": [],
                     "scores_hidden_until_human_vote": True,
                     "notice": "Las puntuaciones numéricas de los subagentes están ocultas hasta que el humano emita su voto para prevenir sesgo de complacencia (anti-sycophancy)."
                 }
             else:
                 delivered_summary = {
-                    "human_votes": votes_summary.get("human_votes", []),
+                    "human_votes": human_votes_view,
                     "agent_scores": votes_summary.get("agent_scores", []),
                     "scores_hidden_until_human_vote": False
                 }
@@ -931,7 +950,7 @@ class MCPToolsHandler:
                     entry["scores"] = j_evals
                 mayeutic_discussions.append(entry)
 
-            # Detección y actualización de matriz desactualizada (Gap #2 Plan Unificado)
+            # Detección y actualización de matriz desactualizada (Gap #2 Plan Unificado / EGM-04)
             is_outdated_matrix = False
             if matrix_list:
                 has_matrix_version = any(m.get("matrix_version") == "2.0.0" for m in matrix_list)
@@ -940,21 +959,15 @@ class MCPToolsHandler:
                     is_outdated_matrix = True
 
             if is_outdated_matrix and upgrade_if_outdated and is_open and not votes_summary.get("human_votes") and not votes_summary.get("agent_scores"):
-                all_nodes = self.db.get_swarm_nodes()
                 fresh_matrix = self.bus.jury_engine.generate_neutral_jury_matrix(
-                    eligible_humans_count=len(all_nodes),
+                    eligible_humans_count=h_eligible_count,
                     ticket_id=t_id,
                     seed=t_id
                 )
                 matrix_list = fresh_matrix.get("evaluators", [])
-                proposal_c = (
-                    f"Síntesis Híbrida (Tercera Vía C): Adoptar la arquitectura base de Tesis ({ticket.get('proposal_a_ref', '')[:80]}) "
-                    f"incorporando las salvaguardas de rendimiento y aislamiento propuestas en Antítesis ({ticket.get('proposal_b_ref', '')[:80]}), "
-                    f"mediante un adaptador desacoplado verificable con contratos de interfaz."
-                )
                 ticket = self.db.update_dispute_synthesis_and_matrix(
                     ticket_id=t_id,
-                    proposal_c_ref=ticket.get("proposal_c_ref") or proposal_c,
+                    proposal_c_ref=ticket.get("proposal_c_ref") or "",
                     jury_matrix=matrix_list
                 )
                 is_outdated_matrix = False
@@ -984,6 +997,29 @@ class MCPToolsHandler:
             return self._wrap_response(project_uuid, res_payload)
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    @staticmethod
+    def _format_clean_room_proposal(option_id: str, raw_text: Optional[str], nonce: str) -> Dict[str, Any]:
+        text = str(raw_text or "")
+        full_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        was_truncated = False
+        omitted_chars = 0
+        if len(text) > MAX_PROPOSAL_CHARS_IN_PROMPT:
+            was_truncated = True
+            omitted_chars = len(text) - MAX_PROPOSAL_CHARS_IN_PROMPT
+            text = text[:MAX_PROPOSAL_CHARS_IN_PROMPT] + f"\n…[TRUNCADO: {omitted_chars} caracteres omitidos; sha256={full_sha}]"
+
+        # Escape '<' and '>' to prevent premature tag closure in LLM context
+        escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        container = f'<untrusted_proposal_context option="{option_id}" nonce="{nonce}">\n{escaped}\n</untrusted_proposal_context nonce="{nonce}">'
+        res: Dict[str, Any] = {
+            "formatted_context": container,
+            "sha256": full_sha,
+            "was_truncated": was_truncated
+        }
+        if was_truncated:
+            res["full_text_available_via"] = "get_dispute_ticket"
+        return res
 
     def get_jury_evaluation_prompt(
         self,
@@ -1028,6 +1064,11 @@ class MCPToolsHandler:
 
             evaluation_packages = []
             for spec in selected_evaluators:
+                nonce = secrets.token_hex(8)
+                opt_a = self._format_clean_room_proposal("OPTION_A", ticket.get("proposal_a_ref"), nonce)
+                opt_b = self._format_clean_room_proposal("OPTION_B", ticket.get("proposal_b_ref"), nonce)
+                opt_c = self._format_clean_room_proposal("THIRD_WAY_C", ticket.get("proposal_c_ref"), nonce)
+
                 evaluation_packages.append({
                     "juror_id": spec.get("juror_id"),
                     "role": spec.get("role"),
@@ -1037,15 +1078,23 @@ class MCPToolsHandler:
                     "clean_room_system_prompt": spec.get("clean_room_prompt") or spec.get("prompt"),
                     "anonymized_dispute": {
                         "collision_reason": ticket.get("collision_reason"),
-                        "thesis_option_a": ticket.get("proposal_a_ref"),
-                        "antithesis_option_b": ticket.get("proposal_b_ref"),
-                        "synthesis_third_way_c": ticket.get("proposal_c_ref")
+                        "nonce": nonce,
+                        "thesis_option_a": opt_a["formatted_context"],
+                        "antithesis_option_b": opt_b["formatted_context"],
+                        "synthesis_third_way_c": opt_c["formatted_context"],
+                        "metadata": {
+                            "OPTION_A": {k: v for k, v in opt_a.items() if k != "formatted_context"},
+                            "OPTION_B": {k: v for k, v in opt_b.items() if k != "formatted_context"},
+                            "THIRD_WAY_C": {k: v for k, v in opt_c.items() if k != "formatted_context"}
+                        }
                     },
                     "submission_instructions": {
                         "target_tool": "submit_agent_jury_evaluation",
                         "scoring_dimensions": ["kiss", "performance", "security", "ux_hicks", "testability"],
                         "score_range": "0 a 100",
-                        "evaluated_options": ["OPTION_A", "OPTION_B", "THIRD_WAY_C"]
+                        "evaluated_options": ["OPTION_A", "OPTION_B", "THIRD_WAY_C"],
+                        "recommended_max_parallel_jurors": 3,
+                        "canonical_option_ids_only": "Refiérase a las opciones exclusivamente como OPTION_A, OPTION_B o THIRD_WAY_C"
                     }
                 })
 
@@ -1149,6 +1198,46 @@ class MCPToolsHandler:
         y sus notas (kiss, performance, security, ux_hicks, testability).
         """
         try:
+            ticket = self.db.get_dispute_ticket(ticket_id)
+            if not ticket:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"Ticket de disputa '{ticket_id}' no encontrado"
+                })
+
+            if ticket.get("status") != "open":
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"No se pueden enviar evaluaciones: el ticket '{ticket_id}' está '{ticket.get('status')}' (no está open)"
+                })
+
+            # NEW-03: Validar que el juror_id esté presente en la matriz neutral del ticket
+            raw_matrix = ticket.get("jury_matrix_json") or "[]"
+            matrix_jurors = set()
+            try:
+                m_list = json.loads(raw_matrix) if raw_matrix else []
+                matrix_jurors = {m.get("juror_id") for m in m_list if m.get("juror_id")}
+            except Exception:
+                pass
+
+            if matrix_jurors and agent_id not in matrix_jurors:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "error": f"Jurado '{agent_id}' no está asignado en la Matriz Neutral del ticket '{ticket_id}'"
+                })
+
+            # NEW-03: Rechazar envíos duplicados para el mismo jurado
+            summary = self.db.get_jury_votes_summary(ticket_id)
+            already_evaluated = any(
+                sc.get("juror_id") == agent_id for sc in summary.get("agent_scores", [])
+            )
+            if already_evaluated:
+                return self._wrap_response(project_uuid, {
+                    "success": False,
+                    "already_submitted": True,
+                    "error": f"El jurado '{agent_id}' ya ha enviado su evaluación para el ticket '{ticket_id}'"
+                })
+
             scores = json.loads(evaluations_json) if isinstance(evaluations_json, str) else (evaluations_json or {})
             res = self.bus.submit_agent_borda_evaluation(
                 ticket_id=ticket_id,
@@ -1157,6 +1246,30 @@ class MCPToolsHandler:
                 rationale=rationale
             )
             return self._wrap_response(project_uuid, {"success": True, "evaluations": res})
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def submit_synthesis(
+        self,
+        project_uuid: str,
+        ticket_id: str,
+        synthesis_text: str
+    ) -> str:
+        """
+        Registra la propuesta real de Tercera Vía C elaborada por un agente sintetizador (NEW-04).
+        """
+        try:
+            ticket = self.db.get_dispute_ticket(ticket_id)
+            if not ticket:
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Ticket '{ticket_id}' no encontrado"})
+            if ticket.get("status") != "open":
+                return self._wrap_response(project_uuid, {"success": False, "error": f"Ticket '{ticket_id}' no está open"})
+
+            updated = self.db.update_dispute_synthesis_and_matrix(
+                ticket_id=ticket_id,
+                proposal_c_ref=synthesis_text.strip()
+            )
+            return self._wrap_response(project_uuid, {"success": True, "ticket": updated})
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 

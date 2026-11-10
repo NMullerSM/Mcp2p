@@ -557,28 +557,35 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                   </div>
                 )}
 
-                {/* Las 3 Vías Dialécticas: colapsadas por defecto (Ley de Hick — reduce la
-                    información simultánea en la vista de lista, igual que la tarjeta de
-                    "En revisión" solo muestra una descripción acotada en reposo). */}
+                {/* Las 3 Vías Dialécticas con Voto Ciego (EGM-07) */}
                 <details style={{ fontSize: '11px', color: 'var(--text-secondary)' }} onClick={(e) => e.stopPropagation()}>
                   <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontWeight: 600 }}>
-                    Ver las 3 propuestas en disputa (A / B / C)
+                    {dispute.has_voted ? 'Ver opciones en disputa y autorías reveladas' : 'Ver opciones anonimizadas en disputa (Voto Ciego)'}
                   </summary>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '11px', backgroundColor: 'var(--bg-surface)', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', marginTop: '6px' }}>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <strong style={{ color: 'var(--accent-primary)' }}>Tesis (A):</strong> {dispute.proposal_a_ref}
-                    </div>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <strong style={{ color: '#c084fc' }}>Antítesis (B):</strong> {dispute.proposal_b_ref}
-                    </div>
-                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      <strong style={{ color: '#10b981' }}>Síntesis (C):</strong> {dispute.proposal_c_ref || 'Tercera vía híbrida sintetizada por jurado neutral'}
-                    </div>
+                    {dispute.options_view ? (
+                      dispute.options_view.map((opt) => (
+                        <div key={opt.alias_id} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>{opt.alias_label}{opt.canonical_option ? ` (${opt.canonical_option}${opt.author ? ` — ${opt.author}` : ''})` : ''}:</strong> {opt.text || '(Pendiente de formulación)'}
+                        </div>
+                      ))
+                    ) : (
+                      <>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>Tesis (A):</strong> {dispute.proposal_a_ref}
+                        </div>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>Antítesis (B):</strong> {dispute.proposal_b_ref}
+                        </div>
+                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>Síntesis (C):</strong> {dispute.proposal_c_ref || 'Pendiente de síntesis'}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </details>
 
-                {/* Enlace a Mayéutica + Tarjeta Kanban asociada (mismo patrón que "Inspeccionar
-                    entrega y criterios" + "Ver rama" de la tarjeta de En Revisión) */}
+                {/* Enlace a Mayéutica + Tarjeta Kanban asociada */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
@@ -620,7 +627,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                   )}
                 </div>
 
-                {/* 3 Botones de Votación: Tesis (A), Antítesis (B) y Síntesis / Tercera Vía (C) */}
+                {/* Botones de Votación Neutros con Voto Ciego (EGM-07) */}
                 {dispute.has_voted ? (
                   <div style={{
                     display: 'flex',
@@ -638,79 +645,113 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     <CheckCircle2 size={13} /> Voto decisorio registrado para este ticket
                   </div>
                 ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginTop: '4px' }} onClick={(e) => e.stopPropagation()}>
-                    <button
-                      disabled={actionInProgress === dispute.ticket_id}
-                      onClick={() => requestDoubleConfirmation({
-                        itemType: 'jury_vote',
-                        itemId: dispute.ticket_id,
-                        decision: 'OPTION_A',
-                        title: `Votar por Tesis (Opción A) en ${dispute.ticket_id}`,
-                        summaryText: `Propuesta A: ${dispute.proposal_a_ref}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
-                        badgeLabel: 'VOTAR TESIS (A)',
-                        badgeColor: 'var(--accent-primary)'
-                      })}
-                      style={{
-                        padding: '7px 4px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        backgroundColor: 'rgba(56, 189, 248, 0.15)',
-                        color: 'var(--accent-primary)',
-                        border: '1px solid rgba(56, 189, 248, 0.35)',
-                        borderRadius: 'var(--radius-sm)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Tesis (A)
-                    </button>
-                    <button
-                      disabled={actionInProgress === dispute.ticket_id}
-                      onClick={() => requestDoubleConfirmation({
-                        itemType: 'jury_vote',
-                        itemId: dispute.ticket_id,
-                        decision: 'OPTION_B',
-                        title: `Votar por Antítesis (Opción B) en ${dispute.ticket_id}`,
-                        summaryText: `Propuesta B: ${dispute.proposal_b_ref}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
-                        badgeLabel: 'VOTAR ANTÍTESIS (B)',
-                        badgeColor: '#a855f7'
-                      })}
-                      style={{
-                        padding: '7px 4px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                        color: '#c084fc',
-                        border: '1px solid rgba(168, 85, 247, 0.35)',
-                        borderRadius: 'var(--radius-sm)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Antítesis (B)
-                    </button>
-                    <button
-                      disabled={actionInProgress === dispute.ticket_id}
-                      onClick={() => requestDoubleConfirmation({
-                        itemType: 'jury_vote',
-                        itemId: dispute.ticket_id,
-                        decision: 'THIRD_WAY_C',
-                        title: `Votar por Síntesis (Tercera Vía C) en ${dispute.ticket_id}`,
-                        summaryText: `Síntesis C: ${dispute.proposal_c_ref || 'Tercera vía sintetizada'}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
-                        badgeLabel: 'VOTAR SÍNTESIS (C)',
-                        badgeColor: '#10b981'
-                      })}
-                      style={{
-                        padding: '7px 4px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                        color: '#10b981',
-                        border: '1px solid rgba(16, 185, 129, 0.35)',
-                        borderRadius: 'var(--radius-sm)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Síntesis (C)
-                    </button>
+                  <div style={{ display: 'grid', gridTemplateColumns: dispute.options_view ? `repeat(${dispute.options_view.length}, 1fr)` : '1fr 1fr 1fr', gap: '6px', marginTop: '4px' }} onClick={(e) => e.stopPropagation()}>
+                    {dispute.options_view ? (
+                      dispute.options_view.map((opt) => (
+                        <button
+                          key={opt.alias_id}
+                          disabled={actionInProgress === dispute.ticket_id || !opt.is_available}
+                          onClick={() => requestDoubleConfirmation({
+                            itemType: 'jury_vote',
+                            itemId: dispute.ticket_id,
+                            decision: opt.alias_id,
+                            title: `Votar por ${opt.alias_label} en ${dispute.ticket_id}`,
+                            summaryText: `${opt.alias_label}: ${opt.text}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
+                            badgeLabel: `VOTAR ${opt.alias_id}`,
+                            badgeColor: 'var(--accent-primary)'
+                          })}
+                          style={{
+                            padding: '7px 4px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-sm)',
+                            cursor: opt.is_available ? 'pointer' : 'not-allowed',
+                            opacity: opt.is_available ? 1 : 0.5
+                          }}
+                        >
+                          {opt.alias_label}
+                        </button>
+                      ))
+                    ) : (
+                      <>
+                        <button
+                          disabled={actionInProgress === dispute.ticket_id}
+                          onClick={() => requestDoubleConfirmation({
+                            itemType: 'jury_vote',
+                            itemId: dispute.ticket_id,
+                            decision: 'OPTION_A',
+                            title: `Votar por Opción Alfa en ${dispute.ticket_id}`,
+                            summaryText: `Propuesta A: ${dispute.proposal_a_ref}`,
+                            badgeLabel: 'VOTAR ALFA',
+                            badgeColor: 'var(--accent-primary)'
+                          })}
+                          style={{
+                            padding: '7px 4px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-sm)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Opción Alfa
+                        </button>
+                        <button
+                          disabled={actionInProgress === dispute.ticket_id}
+                          onClick={() => requestDoubleConfirmation({
+                            itemType: 'jury_vote',
+                            itemId: dispute.ticket_id,
+                            decision: 'OPTION_B',
+                            title: `Votar por Opción Beta en ${dispute.ticket_id}`,
+                            summaryText: `Propuesta B: ${dispute.proposal_b_ref}`,
+                            badgeLabel: 'VOTAR BETA',
+                            badgeColor: 'var(--accent-primary)'
+                          })}
+                          style={{
+                            padding: '7px 4px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-sm)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Opción Beta
+                        </button>
+                        <button
+                          disabled={actionInProgress === dispute.ticket_id || !dispute.proposal_c_ref}
+                          onClick={() => requestDoubleConfirmation({
+                            itemType: 'jury_vote',
+                            itemId: dispute.ticket_id,
+                            decision: 'THIRD_WAY_C',
+                            title: `Votar por Opción Gamma en ${dispute.ticket_id}`,
+                            summaryText: `Propuesta C: ${dispute.proposal_c_ref || 'Pendiente de síntesis'}`,
+                            badgeLabel: 'VOTAR GAMMA',
+                            badgeColor: 'var(--accent-primary)'
+                          })}
+                          style={{
+                            padding: '7px 4px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-sm)',
+                            cursor: dispute.proposal_c_ref ? 'pointer' : 'not-allowed',
+                            opacity: dispute.proposal_c_ref ? 1 : 0.5
+                          }}
+                        >
+                          Opción Gamma
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -1068,50 +1109,69 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             {/* Cuerpo Desplegable del Inspector */}
             <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '18px' }}>
 
-              {/* VISTA A: JUICIO DE HONOR (3 FASES + MATRIZ ANTI-SYCOPHANCY + MAYÉUTICA) */}
+              {/* VISTA A: JUICIO DE HONOR (3 FASES + VOTO CIEGO + MAYÉUTICA) */}
               {inspectedItem.type === 'jury_vote' && (
                 <>
                   <div style={{ backgroundColor: 'var(--bg-subtle)', padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '12.5px', color: 'var(--text-primary)' }}>
                     <strong>Motivo de la Colisión Técnica:</strong> {inspectedItem.data.collision_reason}
                     <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                      <span>Contendiente A: {inspectedItem.data.contender_a_node}</span>
-                      <span>Contendiente B: {inspectedItem.data.contender_b_node}</span>
+                      {inspectedItem.data.has_voted ? (
+                        <>
+                          <span>Contendiente A: {inspectedItem.data.contender_a_node || 'N/A'}</span>
+                          <span>Contendiente B: {inspectedItem.data.contender_b_node || 'N/A'}</span>
+                        </>
+                      ) : (
+                        <span>🔒 Voto Ciego Activado: Autorías protegidas contra sesgo hasta emitir tu voto</span>
+                      )}
                       {inspectedItem.data.card_id && <span>Tarjeta: {inspectedItem.data.card_id}</span>}
                     </div>
                   </div>
 
-                  {/* FASE 1: LAS 3 PROPUESTAS (TESIS, ANTÍTESIS Y SÍNTESIS TERCERA VÍA) */}
+                  {/* FASE 1: LAS PROPUESTAS EN DISPUTA */}
                   <div>
                     <h4 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 10px', color: 'var(--text-primary)' }}>
-                      Fase 1 — Exposición de Propuestas y Síntesis (Tercera Vía)
+                      Fase 1 — {inspectedItem.data.has_voted ? 'Exposición de Propuestas (Autorías Reveladas)' : 'Exposición de Propuestas Anonimizadas (Voto Ciego)'}
                     </h4>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '12px' }}>
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(56, 189, 248, 0.35)', backgroundColor: 'rgba(56, 189, 248, 0.06)', minWidth: 0, overflow: 'hidden' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary)', marginBottom: '6px' }}>
-                          TESIS (OPCIÓN A) — {inspectedItem.data.contender_a_node}
-                        </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          {inspectedItem.data.proposal_a_ref}
-                        </p>
-                      </div>
-
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(168, 85, 247, 0.35)', backgroundColor: 'rgba(168, 85, 247, 0.06)', minWidth: 0, overflow: 'hidden' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#c084fc', marginBottom: '6px' }}>
-                          ANTÍTESIS (OPCIÓN B) — {inspectedItem.data.contender_b_node}
-                        </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          {inspectedItem.data.proposal_b_ref}
-                        </p>
-                      </div>
-
-                      <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.35)', backgroundColor: 'rgba(16, 185, 129, 0.06)', minWidth: 0, overflow: 'hidden' }}>
-                        <div style={{ fontSize: '11px', fontWeight: 700, color: '#10b981', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Sparkles size={12} /> SÍNTESIS / TERCERA VÍA (OPCIÓN C)
-                        </div>
-                        <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                          {inspectedItem.data.proposal_c_ref}
-                        </p>
-                      </div>
+                      {inspectedItem.data.options_view ? (
+                        inspectedItem.data.options_view.map((opt) => (
+                          <div key={opt.alias_id} style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-surface)', minWidth: 0, overflow: 'hidden' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                              {opt.alias_label} {opt.canonical_option ? `(${opt.canonical_option}${opt.author ? ` — ${opt.author}` : ''})` : ''}
+                            </div>
+                            <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                              {opt.text || '(Pendiente de formulación)'}
+                            </p>
+                          </div>
+                        ))
+                      ) : (
+                        <>
+                          <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-surface)', minWidth: 0, overflow: 'hidden' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                              OPCIÓN ALFA (TESIS)
+                            </div>
+                            <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                              {inspectedItem.data.proposal_a_ref}
+                            </p>
+                          </div>
+                          <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-surface)', minWidth: 0, overflow: 'hidden' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                              OPCIÓN BETA (ANTÍTESIS)
+                            </div>
+                            <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                              {inspectedItem.data.proposal_b_ref}
+                            </p>
+                          </div>
+                          <div style={{ padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-surface)', minWidth: 0, overflow: 'hidden' }}>
+                            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
+                              OPCIÓN GAMMA (SÍNTESIS)
+                            </div>
+                            <p style={{ fontSize: '12px', margin: 0, lineHeight: 1.5, color: 'var(--text-primary)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
+                              {inspectedItem.data.proposal_c_ref || 'Pendiente de síntesis'}
+                            </p>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -1122,7 +1182,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                         Fase 2 — Proceso de Mayéutica (Subagentes Neutrales Clean-Room)
                       </h4>
                       <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <Lock size={11} /> Veredictos numéricos ocultos antes de tu voto para evitar sesgo
+                        <Lock size={11} /> {inspectedItem.data.has_voted ? 'Veredictos revelados tras tu voto' : 'Veredictos numéricos ocultos antes de tu voto'}
                       </span>
                     </div>
 
@@ -1142,14 +1202,16 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
                             <span style={{ fontSize: '12px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
-                              Jurado #{idx + 1}: {juror.juror_id}
+                              {juror.juror_id} ({juror.role})
                             </span>
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', color: 'var(--accent-primary)' }}>
-                                Temp: {juror.temperature} ({juror.temperature_profile})
-                              </span>
-                              {(juror.focus_vectors && juror.focus_vectors.length > 0 ? juror.focus_vectors : ['NEUTRAL_ZERO_FOCUS']).map(fv => (
-                                <span key={fv} style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'rgba(168, 85, 247, 0.12)', color: '#c084fc' }}>
+                              {juror.temperature !== undefined && (
+                                <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', color: 'var(--accent-primary)' }}>
+                                  Temp: {juror.temperature} ({juror.temperature_profile || 'strict'})
+                                </span>
+                              )}
+                              {(juror.focus_labels && juror.focus_labels.length > 0 ? juror.focus_labels : (juror.focus_vectors || ['Evaluación Holística'])).map(fv => (
+                                <span key={fv} style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', padding: '2px 6px', borderRadius: '4px', backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}>
                                   {fv}
                                 </span>
                               ))}
@@ -1176,80 +1238,130 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
                       Fase 3 — Emisión de Voto Humano Decisorio con Firma Criptográfica
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                      <button
-                        disabled={inspectedItem.data.has_voted}
-                        onClick={() => requestDoubleConfirmation({
-                          itemType: 'jury_vote',
-                          itemId: inspectedItem.data.ticket_id,
-                          decision: 'OPTION_A',
-                          title: `Votar por Tesis (Opción A) en ${inspectedItem.data.ticket_id}`,
-                          summaryText: `Propuesta A: ${inspectedItem.data.proposal_a_ref}`,
-                          badgeLabel: 'VOTAR TESIS (A)',
-                          badgeColor: 'var(--accent-primary)'
-                        })}
-                        style={{
-                          padding: '9px',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          backgroundColor: 'var(--accent-primary)',
-                          color: '#ffffff',
-                          cursor: inspectedItem.data.has_voted ? 'default' : 'pointer'
-                        }}
-                      >
-                        Votar por Tesis (A)
-                      </button>
-                      <button
-                        disabled={inspectedItem.data.has_voted}
-                        onClick={() => requestDoubleConfirmation({
-                          itemType: 'jury_vote',
-                          itemId: inspectedItem.data.ticket_id,
-                          decision: 'OPTION_B',
-                          title: `Votar por Antítesis (Opción B) en ${inspectedItem.data.ticket_id}`,
-                          summaryText: `Propuesta B: ${inspectedItem.data.proposal_b_ref}`,
-                          badgeLabel: 'VOTAR ANTÍTESIS (B)',
-                          badgeColor: '#a855f7'
-                        })}
-                        style={{
-                          padding: '9px',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          backgroundColor: '#a855f7',
-                          color: '#ffffff',
-                          cursor: inspectedItem.data.has_voted ? 'default' : 'pointer'
-                        }}
-                      >
-                        Votar por Antítesis (B)
-                      </button>
-                      <button
-                        disabled={inspectedItem.data.has_voted}
-                        onClick={() => requestDoubleConfirmation({
-                          itemType: 'jury_vote',
-                          itemId: inspectedItem.data.ticket_id,
-                          decision: 'THIRD_WAY_C',
-                          title: `Votar por Síntesis (Tercera Vía C) en ${inspectedItem.data.ticket_id}`,
-                          summaryText: `Síntesis C: ${inspectedItem.data.proposal_c_ref}`,
-                          badgeLabel: 'VOTAR SÍNTESIS (C)',
-                          badgeColor: '#10b981'
-                        })}
-                        style={{
-                          padding: '9px',
-                          fontSize: '12px',
-                          fontWeight: 700,
-                          borderRadius: 'var(--radius-sm)',
-                          border: 'none',
-                          backgroundColor: '#10b981',
-                          color: '#ffffff',
-                          cursor: inspectedItem.data.has_voted ? 'default' : 'pointer'
-                        }}
-                      >
-                        Votar por Síntesis (C)
-                      </button>
-                    </div>
+                    {inspectedItem.data.has_voted ? (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px',
+                        padding: '10px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        color: 'var(--accent-success)',
+                        fontSize: '12px',
+                        fontWeight: 600
+                      }}>
+                        <CheckCircle2 size={15} /> Tu voto decisorio ya fue emitido y firmado para este juicio
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gridTemplateColumns: inspectedItem.data.options_view ? `repeat(${inspectedItem.data.options_view.length}, 1fr)` : '1fr 1fr 1fr', gap: '10px' }}>
+                        {inspectedItem.data.options_view ? (
+                          inspectedItem.data.options_view.map((opt) => (
+                            <button
+                              key={opt.alias_id}
+                              disabled={!opt.is_available}
+                              onClick={() => requestDoubleConfirmation({
+                                itemType: 'jury_vote',
+                                itemId: inspectedItem.data.ticket_id,
+                                decision: opt.alias_id,
+                                title: `Votar por ${opt.alias_label} en ${inspectedItem.data.ticket_id}`,
+                                summaryText: `${opt.alias_label}: ${opt.text}\n\nTu voto decisorio con firma criptográfica humana resolverá el conflicto sobre el pool de subagentes.`,
+                                badgeLabel: `VOTAR ${opt.alias_id}`,
+                                badgeColor: 'var(--accent-primary)'
+                              })}
+                              style={{
+                                padding: '9px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: opt.is_available ? 'pointer' : 'not-allowed',
+                                opacity: opt.is_available ? 1 : 0.5
+                              }}
+                            >
+                              Votar {opt.alias_label}
+                            </button>
+                          ))
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => requestDoubleConfirmation({
+                                itemType: 'jury_vote',
+                                itemId: inspectedItem.data.ticket_id,
+                                decision: 'OPTION_A',
+                                title: `Votar por Opción Alfa en ${inspectedItem.data.ticket_id}`,
+                                summaryText: `Propuesta A: ${inspectedItem.data.proposal_a_ref}`,
+                                badgeLabel: 'VOTAR ALFA',
+                                badgeColor: 'var(--accent-primary)'
+                              })}
+                              style={{
+                                padding: '9px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Votar Opción Alfa
+                            </button>
+                            <button
+                              onClick={() => requestDoubleConfirmation({
+                                itemType: 'jury_vote',
+                                itemId: inspectedItem.data.ticket_id,
+                                decision: 'OPTION_B',
+                                title: `Votar por Opción Beta en ${inspectedItem.data.ticket_id}`,
+                                summaryText: `Propuesta B: ${inspectedItem.data.proposal_b_ref}`,
+                                badgeLabel: 'VOTAR BETA',
+                                badgeColor: 'var(--accent-primary)'
+                              })}
+                              style={{
+                                padding: '9px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Votar Opción Beta
+                            </button>
+                            <button
+                              disabled={!inspectedItem.data.proposal_c_ref}
+                              onClick={() => requestDoubleConfirmation({
+                                itemType: 'jury_vote',
+                                itemId: inspectedItem.data.ticket_id,
+                                decision: 'THIRD_WAY_C',
+                                title: `Votar por Opción Gamma en ${inspectedItem.data.ticket_id}`,
+                                summaryText: `Propuesta C: ${inspectedItem.data.proposal_c_ref || 'Pendiente de síntesis'}`,
+                                badgeLabel: 'VOTAR GAMMA',
+                                badgeColor: 'var(--accent-primary)'
+                              })}
+                              style={{
+                                padding: '9px',
+                                fontSize: '12px',
+                                fontWeight: 700,
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: inspectedItem.data.proposal_c_ref ? 'pointer' : 'not-allowed',
+                                opacity: inspectedItem.data.proposal_c_ref ? 1 : 0.5
+                              }}
+                            >
+                              Votar Opción Gamma
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </>
               )}

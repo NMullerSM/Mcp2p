@@ -8,6 +8,7 @@ sincronización bidireccional YAML <-> SQLite y worktrees por tarea.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1186,17 +1187,41 @@ graph TD
         if rulings_dir.is_dir():
             for y_file in sorted(rulings_dir.glob("*.yaml")):
                 try:
-                    data = yaml.safe_load(y_file.read_text(encoding="utf-8")) or {}
+                    raw_bytes = y_file.read_bytes()
+                    file_sha = hashlib.sha256(raw_bytes).hexdigest()
+                    data = yaml.safe_load(raw_bytes.decode("utf-8")) or {}
+
+                    verdict_data = data.get("verdict")
+                    if not isinstance(verdict_data, dict):
+                        v3 = data.get("phases", {}).get("phase_3_voting", {}) if isinstance(data.get("phases"), dict) else {}
+                        verdict_data = {
+                            "winning_option": data.get("winning_option") or v3.get("winning_option"),
+                            "winning_ratio": v3.get("consensus_ratio"),
+                            "consensus_reached": (data.get("status") == "ratified") or bool(v3.get("consensus_reached")),
+                            "resolution_mode": data.get("resolution_mode"),
+                            "override_applied": False
+                        }
+
+                    # EGM-10: Indexar únicamente los dictámenes ratificados
+                    is_ratified = (data.get("status") == "ratified") or bool(verdict_data.get("consensus_reached"))
+                    if not is_ratified:
+                        continue
+
+                    ts = data.get("timestamp") or data.get("updated_at") or ""
+
                     precedents.append({
                         "id": data.get("ruling_id", y_file.stem),
+                        "ticket_id": data.get("ticket_id", ""),
+                        "verdict": data.get("status") or (data.get("verdict") if isinstance(data.get("verdict"), str) else "ratified"),
                         "type": "JURY_RULING",
                         "title": data.get("title", y_file.stem),
-                        "winning_option": data.get("verdict", {}).get("winning_option"),
-                        "winning_ratio": data.get("verdict", {}).get("winning_ratio"),
-                        "consensus_reached": data.get("verdict", {}).get("consensus_reached"),
+                        "winning_option": verdict_data.get("winning_option"),
+                        "winning_ratio": verdict_data.get("winning_ratio"),
+                        "consensus_reached": verdict_data.get("consensus_reached"),
                         "card_id": data.get("card_id"),
                         "file": f"architecture/rulings/{y_file.name}",
-                        "timestamp": data.get("timestamp")
+                        "timestamp": ts,
+                        "sha256": file_sha
                     })
                 except Exception as e:
                     logger.debug("Error leyendo ruling %s: %s", y_file, e)
@@ -1204,27 +1229,37 @@ graph TD
         if adrs_dir.is_dir():
             for md_file in sorted(adrs_dir.glob("*.md")):
                 try:
-                    text = md_file.read_text(encoding="utf-8", errors="ignore")
+                    raw_bytes = md_file.read_bytes()
+                    file_sha = hashlib.sha256(raw_bytes).hexdigest()
+                    text = raw_bytes.decode("utf-8", errors="ignore")
                     title_match = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+                    mtime_iso = datetime.fromtimestamp(md_file.stat().st_mtime, tz=timezone.utc).isoformat()
                     precedents.append({
                         "id": md_file.stem,
                         "type": "ADR",
                         "title": title_match.group(1).strip() if title_match else md_file.stem,
-                        "file": f"architecture/adrs/{md_file.name}"
+                        "file": f"architecture/adrs/{md_file.name}",
+                        "timestamp": mtime_iso,
+                        "sha256": file_sha
                     })
                 except Exception as e:
                     logger.debug("Error leyendo ADR %s: %s", md_file, e)
 
+        # EGM-10: Determinismo en generated_at usando max de timestamps indexados
+        all_timestamps = [p.get("timestamp") for p in precedents if p.get("timestamp")]
+        generated_at = max(all_timestamps) if all_timestamps else "1970-01-01T00:00:00+00:00"
+
         index_payload = {
             "schema_version": "okf.precedents.v2",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": generated_at,
             "total_precedents": len(precedents),
             "precedents": precedents
         }
         index_path = arch_dir / "precedents_index.yaml"
-        index_path.write_text(
-            yaml.safe_dump(index_payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8"
+        from src.storage.fs_utils import atomic_write_text
+        atomic_write_text(
+            index_path,
+            yaml.safe_dump(index_payload, sort_keys=False, allow_unicode=True)
         )
         return index_path
 

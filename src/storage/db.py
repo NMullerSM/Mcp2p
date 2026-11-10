@@ -162,7 +162,7 @@ class DatabaseManager:
                     if "alignment_dossier_markdown" not in p_cols:
                         conn.execute("ALTER TABLE projects ADD COLUMN alignment_dossier_markdown TEXT DEFAULT '';")
 
-                    # Migración para dispute_tickets (Síntesis Tercera Vía y Matriz Neutral Anti-Sycophancy)
+                    # Migración para dispute_tickets (Síntesis Tercera Vía, Matriz Neutral, Árbitro y EGM)
                     dt_info = conn.execute("PRAGMA table_info(dispute_tickets);").fetchall()
                     dt_cols = [c["name"] for c in dt_info]
                     if dt_cols:
@@ -172,6 +172,26 @@ class DatabaseManager:
                             conn.execute("ALTER TABLE dispute_tickets ADD COLUMN jury_matrix_json TEXT DEFAULT '[]';")
                         if "escalation_recommendation" not in dt_cols:
                             conn.execute("ALTER TABLE dispute_tickets ADD COLUMN escalation_recommendation TEXT DEFAULT '';")
+                        if "resolution_mode" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN resolution_mode TEXT DEFAULT '';")
+                        if "arbiter_node_uuid" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN arbiter_node_uuid TEXT DEFAULT '';")
+                        if "injection_suspected" not in dt_cols:
+                            conn.execute("ALTER TABLE dispute_tickets ADD COLUMN injection_suspected INTEGER DEFAULT 0;")
+
+                    # Migración para human_jury_votes (autenticación Ed25519)
+                    cur_hj = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='human_jury_votes';")
+                    if cur_hj.fetchone():
+                        hj_info = conn.execute("PRAGMA table_info(human_jury_votes);").fetchall()
+                        hj_cols = [c["name"] for c in hj_info]
+                        if "public_key" not in hj_cols:
+                            conn.execute("ALTER TABLE human_jury_votes ADD COLUMN public_key TEXT DEFAULT '';")
+                        if "signed_at" not in hj_cols:
+                            conn.execute("ALTER TABLE human_jury_votes ADD COLUMN signed_at TEXT DEFAULT '';")
+                        if "content_sha256" not in hj_cols:
+                            conn.execute("ALTER TABLE human_jury_votes ADD COLUMN content_sha256 TEXT DEFAULT '';")
+                        if "project_uuid" not in hj_cols:
+                            conn.execute("ALTER TABLE human_jury_votes ADD COLUMN project_uuid TEXT DEFAULT '';")
 
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
@@ -251,6 +271,9 @@ class DatabaseManager:
                     escalation_recommendation TEXT DEFAULT '',
                     jury_matrix_json TEXT DEFAULT '[]',
                     status TEXT CHECK(status IN ('open', 'provisional_ruling', 'ratified', 'challenged', 'resolved_hitl')) NOT NULL DEFAULT 'open',
+                    resolution_mode TEXT DEFAULT '',
+                    arbiter_node_uuid TEXT DEFAULT '',
+                    injection_suspected INTEGER DEFAULT 0,
                     winning_quadrant TEXT CHECK(winning_quadrant IN ('OPTION_A', 'OPTION_B', 'ASYMMETRIC_HYBRID', 'THIRD_WAY_C')),
                     provisional_branch TEXT,
                     objection_deadline DATETIME,
@@ -285,6 +308,10 @@ class DatabaseManager:
                     voted_option TEXT CHECK(voted_option IN ('OPTION_A', 'OPTION_B', 'THIRD_WAY_C')) NOT NULL,
                     weight REAL DEFAULT 2.0,
                     signature_ed25519 TEXT NOT NULL,
+                    public_key TEXT DEFAULT '',
+                    signed_at TEXT DEFAULT '',
+                    content_sha256 TEXT DEFAULT '',
+                    project_uuid TEXT DEFAULT '',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (ticket_id) REFERENCES dispute_tickets(ticket_id) ON DELETE CASCADE
                 );
@@ -313,6 +340,24 @@ class DatabaseManager:
                     approved_at DATETIME,
                     PRIMARY KEY (project_uuid, node_uuid),
                     FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
+                );
+
+                -- 8b. Árbitros Humanos Externos Pre-registrados (EGM-01)
+                CREATE TABLE IF NOT EXISTS project_arbiters (
+                    project_uuid TEXT NOT NULL,
+                    node_uuid TEXT NOT NULL,
+                    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (project_uuid, node_uuid),
+                    FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
+                );
+
+                -- 8c. Registro de Entrega de Votación y Ventana de Gracia (EGM-01)
+                CREATE TABLE IF NOT EXISTS dispute_vote_delivery (
+                    ticket_id TEXT NOT NULL,
+                    node_uuid TEXT NOT NULL,
+                    delivered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (ticket_id, node_uuid),
+                    FOREIGN KEY (ticket_id) REFERENCES dispute_tickets(ticket_id) ON DELETE CASCADE
                 );
 
                 -- 9. Configuraciones Locales de la Aplicación (Key-Value)
@@ -354,7 +399,8 @@ class DatabaseManager:
         project_uuid: Optional[str] = None,
         reviewer_sla_hours: int = 24,
         okf_alignment_status: str = "aligned_okf",
-        alignment_dossier_markdown: str = ""
+        alignment_dossier_markdown: str = "",
+        owner_public_key: str = ""
     ) -> Dict[str, Any]:
         """
         Crea un nuevo proyecto en el subsistema.
@@ -469,6 +515,7 @@ class DatabaseManager:
         self.add_or_request_collaborator(
             project_uuid=p_uuid,
             node_uuid=local_node,
+            public_key=owner_public_key,
             role="owner",
             status="approved"
         )
@@ -1173,11 +1220,14 @@ class DatabaseManager:
         card_id: Optional[str] = None,
         proposal_c_ref: str = "",
         jury_matrix_json: str = "[]",
-        escalation_recommendation: Optional[str] = None
+        escalation_recommendation: Optional[str] = None,
+        arbiter_node_uuid: str = "",
+        injection_suspected: bool = False
     ) -> Dict[str, Any]:
-        """Crea un nuevo ticket de arbitraje técnico con soporte para Tercera Vía (Síntesis), Matriz Neutral y recomendación de escalamiento."""
+        """Crea un nuevo ticket de arbitraje técnico con soporte para Tercera Vía (Síntesis), Matriz Neutral, Árbitro y flags de inyección."""
         now_str = datetime.now(timezone.utc).isoformat()
         esc_rec = escalation_recommendation or ""
+        inj_flag = 1 if injection_suspected else 0
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
@@ -1185,12 +1235,13 @@ class DatabaseManager:
                     INSERT INTO dispute_tickets (
                         ticket_id, project_uuid, card_id, title, collision_reason,
                         contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
-                        proposal_c_ref, jury_matrix_json, status, escalation_recommendation, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?);
+                        proposal_c_ref, jury_matrix_json, status, escalation_recommendation,
+                        arbiter_node_uuid, injection_suspected, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?);
                     """,
                     (ticket_id, project_uuid, card_id, title, collision_reason,
                      contender_a_node, contender_b_node, proposal_a_ref, proposal_b_ref,
-                     proposal_c_ref, jury_matrix_json, esc_rec, now_str)
+                     proposal_c_ref, jury_matrix_json, esc_rec, arbiter_node_uuid, inj_flag, now_str)
                 )
         return self.get_dispute_ticket(ticket_id) or {}
 
@@ -1309,22 +1360,30 @@ class DatabaseManager:
         node_uuid: str,
         developer_name: str,
         voted_option: str,
-        signature_ed25519: str
+        signature_ed25519: str,
+        weight: float = 2.0,
+        public_key: str = "",
+        signed_at: str = "",
+        content_sha256: str = "",
+        project_uuid: str = ""
     ) -> Dict[str, Any]:
-        """Registra el voto humano directo de un desarrollador (Peso fijo 2.0)."""
+        """Registra el voto humano directo autenticado con Ed25519."""
         now_str = datetime.now(timezone.utc).isoformat()
+        s_at = signed_at or now_str
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
                     """
                     INSERT INTO human_jury_votes (
                         vote_uuid, ticket_id, node_uuid, developer_name,
-                        voted_option, weight, signature_ed25519, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 2.0, ?, ?);
+                        voted_option, weight, signature_ed25519,
+                        public_key, signed_at, content_sha256, project_uuid, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
-                    (vote_uuid, ticket_id, node_uuid, developer_name, voted_option, signature_ed25519, now_str)
+                    (vote_uuid, ticket_id, node_uuid, developer_name, voted_option,
+                     weight, signature_ed25519, public_key, s_at, content_sha256, project_uuid, now_str)
                 )
-        return {"vote_uuid": vote_uuid, "weight": 2.0, "voted_option": voted_option}
+        return {"vote_uuid": vote_uuid, "weight": weight, "voted_option": voted_option}
 
     def get_jury_votes_summary(self, ticket_id: str) -> Dict[str, Any]:
         """Recupera los votos humanos y de agentes emitidos para un ticket."""
@@ -1335,21 +1394,103 @@ class DatabaseManager:
             human_votes = [dict(r) for r in human_cur.fetchall()]
             return {"agent_scores": agent_scores, "human_votes": human_votes}
 
-    def resolve_dispute_ticket(
+    def update_dispute_status(
         self,
         ticket_id: str,
-        winning_option: str,
+        status: str,
+        resolution_mode: str = "",
+        winning_option: Optional[str] = None,
         final_adr_path: Optional[str] = None
     ) -> bool:
-        """Actualiza el ticket a ratificado y registra el ganador final."""
+        """Actualiza el estado de un ticket de disputa validando el estado y guardando resolution_mode."""
+        valid_statuses = {"open", "provisional_ruling", "ratified", "challenged", "resolved_hitl"}
+        if status not in valid_statuses:
+            raise ValueError(f"Estado de disputa inválido: {status}")
+
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 cur = conn.execute(
                     """
                     UPDATE dispute_tickets
-                    SET status = 'ratified', winning_quadrant = ?, final_adr_path = ?
+                    SET status = ?, resolution_mode = ?,
+                        winning_quadrant = COALESCE(?, winning_quadrant),
+                        final_adr_path = COALESCE(?, final_adr_path)
                     WHERE ticket_id = ?;
                     """,
-                    (winning_option, final_adr_path, ticket_id)
+                    (status, resolution_mode, winning_option, final_adr_path, ticket_id)
                 )
                 return cur.rowcount > 0
+
+    def resolve_dispute_ticket(
+        self,
+        ticket_id: str,
+        winning_option: str,
+        final_adr_path: Optional[str] = None,
+        resolution_mode: str = "ratified_legacy"
+    ) -> bool:
+        """Wrapper de compatibilidad para update_dispute_status con status='ratified'."""
+        return self.update_dispute_status(
+            ticket_id=ticket_id,
+            status="ratified",
+            resolution_mode=resolution_mode,
+            winning_option=winning_option,
+            final_adr_path=final_adr_path
+        )
+
+    def set_project_arbiter(self, project_uuid: str, node_uuid: str) -> bool:
+        """Registra o actualiza el árbitro humano externo pre-registrado para el proyecto."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO project_arbiters (project_uuid, node_uuid, registered_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(project_uuid, node_uuid) DO UPDATE SET registered_at = excluded.registered_at;
+                    """,
+                    (project_uuid, node_uuid, now_str)
+                )
+                return True
+
+    def clear_project_arbiter(self, project_uuid: str, node_uuid: str) -> bool:
+        """Elimina a un árbitro registrado de un proyecto."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "DELETE FROM project_arbiters WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                )
+                return cur.rowcount > 0
+
+    def list_project_arbiters(self, project_uuid: str) -> List[Dict[str, Any]]:
+        """Lista los árbitros humanos externos registrados para el proyecto."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM project_arbiters WHERE project_uuid = ? ORDER BY registered_at ASC;",
+                (project_uuid,)
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def record_vote_delivery(self, ticket_id: str, node_uuid: str, delivered_at: Optional[str] = None) -> bool:
+        """Registra la entrega/notificación de la ventana de votación de un ticket a un nodo elegible."""
+        now_str = delivered_at or datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO dispute_vote_delivery (ticket_id, node_uuid, delivered_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(ticket_id, node_uuid) DO NOTHING;
+                    """,
+                    (ticket_id, node_uuid, now_str)
+                )
+                return True
+
+    def get_vote_deliveries(self, ticket_id: str) -> List[Dict[str, Any]]:
+        """Recupera los registros de entrega de un ticket."""
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM dispute_vote_delivery WHERE ticket_id = ?;",
+                (ticket_id,)
+            )
+            return [dict(r) for r in cur.fetchall()]

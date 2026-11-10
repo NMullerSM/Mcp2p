@@ -251,10 +251,11 @@ def test_ruling_and_precedents_atomic_commit(mcp_setup):
     )
     t_id = ticket["ticket_id"]
 
-    # Voto humano
+    # Voto humano del desarrollador registrado en el proyecto (EGM-05 anti-Sybil)
+    owner_node = db.get_project_collaborators(p_uuid)[0]["node_uuid"]
     bus.submit_human_jury_vote(
         ticket_id=t_id,
-        node_uuid="node_human",
+        node_uuid=owner_node,
         developer_name="Human Dev",
         voted_option="OPTION_A",
         signature_ed25519="sig_human_test"
