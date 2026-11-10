@@ -1,5 +1,6 @@
 import React from 'react';
 import { Sun, Moon, Settings, Plus, ArrowLeft, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
+import BrandMark from './BrandMark';
 
 export function AppHeader({
   theme,
@@ -30,24 +31,7 @@ export function AppHeader({
     }}>
       {/* 1. SECCIÓN IZQUIERDA: Marca, Botón Hub y Nombre de Proyecto Limpio (Sin UUID) */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0, height: '100%' }}>
-        <span style={{
-          background: 'var(--accent-primary)',
-          color: '#ffffff',
-          fontWeight: 900,
-          fontSize: '13px',
-          height: '32px',
-          padding: '0 11px',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          lineHeight: 1,
-          borderRadius: 'var(--radius-sm)',
-          fontFamily: 'var(--font-mono)',
-          letterSpacing: '0.6px',
-          boxShadow: 'var(--shadow-sm)'
-        }}>
-          MCP2P
-        </span>
+        <BrandMark size={28} />
 
         <span style={{ color: 'var(--border-subtle)', fontWeight: 300, display: 'inline-flex', alignItems: 'center' }}>|</span>
 

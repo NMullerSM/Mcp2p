@@ -1,4 +1,8 @@
-# MCP2P: Plataforma de Colaboración Agéntica y Gobernanza OKF
+<p align="center">
+  <img src="brand/png/logo-mcp2p-dark-800w.png" alt="MCP²P Logo" width="500" />
+</p>
+
+# MCP²P: Plataforma de Colaboración Agéntica y Gobernanza OKF
 
 > Ver [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
 

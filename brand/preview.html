@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP²P &middot; Kit Oficial de Marca y Assets</title>
+  <style>
+    :root {
+      --bg: #090D16;
+      --card-bg: #111827;
+      --border: #1F2937;
+      --text: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --accent: #10B981;
+      --accent-mint: #34D399;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 0;
+      margin: 0;
+    }
+    header {
+      background: linear-gradient(180deg, #111827 0%, rgba(17, 24, 39, 0.95) 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 2.25rem 2rem 1.75rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .header-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .badge-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-mint);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+    }
+    h1 { font-size: 1.85rem; font-weight: 800; letter-spacing: -0.025em; color: #FFF; }
+    .subtitle { color: var(--text-muted); font-size: 0.92rem; margin-top: 0.25rem; }
+
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2.5rem 2rem 4rem;
+    }
+
+    .section-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2rem;
+      margin-bottom: 2.5rem;
+    }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+      margin-bottom: 1.75rem;
+    }
+    .section-title { font-size: 1.3rem; font-weight: 700; color: #FFF; }
+    .section-path { font-family: monospace; font-size: 0.78rem; color: var(--accent-mint); background: #0B0F19; padding: 0.3rem 0.75rem; border-radius: 6px; border: 1px solid #1F2937; }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .asset-box {
+      background: #0B0F19;
+      border: 1px solid #1F2937;
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      position: relative;
+    }
+    .asset-box.light-mode {
+      background: #F0FDF4;
+      color: #0F172A;
+    }
+    .asset-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-top: 1rem;
+      color: var(--text-muted);
+    }
+
+    .favicons-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2rem;
+      align-items: center;
+      justify-content: space-around;
+      background: #0B0F19;
+      border: 1px solid #1F2937;
+      border-radius: 14px;
+      padding: 2rem 1.5rem;
+    }
+    .fav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .fav-name { font-family: monospace; font-size: 0.75rem; color: #9CA3AF; }
+
+    .color-swatches {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .swatch {
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #1F2937;
+      background: #0B0F19;
+    }
+    .swatch-color { height: 48px; width: 100%; }
+    .swatch-info { padding: 0.75rem; }
+    .swatch-name { font-size: 0.82rem; font-weight: 700; color: #FFF; }
+    .swatch-hex { font-size: 0.75rem; color: var(--accent-mint); font-family: monospace; }
+    .swatch-desc { font-size: 0.72rem; color: #6B7280; margin-top: 0.25rem; }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      margin-top: 4rem;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-container">
+      <div>
+        <span class="badge-pill">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+          Identidad Oficial Aprobada &middot; Pure Emerald &amp; White
+        </span>
+        <h1>MCP²P &middot; Repositorio Oficial de Marca</h1>
+        <p class="subtitle">Assets vectoriales, favicons multi-resolución, renders PNG y directrices de implementación.</p>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- SECTION 1: CORE VECTOR ASSETS -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">1. Logotipos Principales e Isotipos Vectoriales</div>
+        <div class="section-path">brand/core/</div>
+      </div>
+      <div class="grid-2">
+        <div class="asset-box">
+          <img src="core/logo-mcp2p-dark.svg" alt="MCP²P Logo Dark" style="max-width: 380px; width: 100%;">
+          <div class="asset-label">logo-mcp2p-dark.svg &bull; Modo Oscuro Oficial</div>
+        </div>
+        <div class="asset-box light-mode">
+          <img src="core/logo-mcp2p-light.svg" alt="MCP²P Logo Light" style="max-width: 380px; width: 100%;">
+          <div class="asset-label" style="color: #065F46;">logo-mcp2p-light.svg &bull; Modo Claro Oficial</div>
+        </div>
+      </div>
+      <div class="grid-2" style="margin-top: 1.5rem;">
+        <div class="asset-box">
+          <img src="core/icon-dialectic-shield.svg" alt="Escudo Dark" style="width: 80px; height: 80px;">
+          <div class="asset-label">icon-dialectic-shield.svg &bull; Escudo con Contenedor</div>
+        </div>
+        <div class="asset-box">
+          <img src="core/icon-dialectic-shield-transparent.svg" alt="Escudo Transparent" style="width: 80px; height: 80px;">
+          <div class="asset-label">icon-dialectic-shield-transparent.svg &bull; Escudo Transparente</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 2: FAVICONS -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">2. Favicons y Web Icons del Sistema</div>
+        <div class="section-path">brand/favicons/</div>
+      </div>
+      <div class="favicons-row">
+        <div class="fav-item">
+          <img src="favicons/icon-512x512.png" style="width: 64px; height: 64px; border-radius: 14px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+          <span class="fav-name">512&times;512 px</span>
+        </div>
+        <div class="fav-item">
+          <img src="favicons/android-chrome-192x192.png" style="width: 48px; height: 48px; border-radius: 10px;">
+          <span class="fav-name">192&times;192 px</span>
+        </div>
+        <div class="fav-item">
+          <img src="favicons/favicon-48x48.png" style="width: 48px; height: 48px; border-radius: 8px;">
+          <span class="fav-name">48&times;48 px</span>
+        </div>
+        <div class="fav-item">
+          <img src="favicons/favicon-32x32.png" style="width: 32px; height: 32px; border-radius: 6px;">
+          <span class="fav-name">32&times;32 px (Retina)</span>
+        </div>
+        <div class="fav-item">
+          <img src="favicons/favicon-16x16.png" style="width: 16px; height: 16px; border-radius: 3px;">
+          <span class="fav-name">16&times;16 px (Tab)</span>
+        </div>
+        <div class="fav-item">
+          <div style="background: #1F2937; padding: 0.4rem 0.8rem; border-radius: 8px; font-family: monospace; font-size: 0.78rem; color: #34D399;">
+            favicon.ico (Multi-size)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 3: COLOR PALETTE -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">3. Paleta Cromática y Tokens Oficiales</div>
+        <div class="section-path">Pure Emerald &amp; White</div>
+      </div>
+      <div class="color-swatches">
+        <div class="swatch">
+          <div class="swatch-color" style="background-color: #10B981;"></div>
+          <div class="swatch-info">
+            <div class="swatch-name">Verde Esmeralda Primario</div>
+            <div class="swatch-hex">#10B981</div>
+            <div class="swatch-desc">Corchetes, superíndice ² y acento de éxito</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-color" style="background-color: #34D399;"></div>
+          <div class="swatch-info">
+            <div class="swatch-name">Verde Menta Neón</div>
+            <div class="swatch-hex">#34D399</div>
+            <div class="swatch-desc">Subtítulo, iluminación y estados activos</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-color" style="background-color: #FFFFFF;"></div>
+          <div class="swatch-info">
+            <div class="swatch-name">Blanco Puro</div>
+            <div class="swatch-hex">#FFFFFF</div>
+            <div class="swatch-desc">Palabras MCP y P en modo oscuro, puente central</div>
+          </div>
+        </div>
+        <div class="swatch">
+          <div class="swatch-color" style="background-color: #0B0F19;"></div>
+          <div class="swatch-info">
+            <div class="swatch-name">Dark Slate Canvas</div>
+            <div class="swatch-hex">#0B0F19</div>
+            <div class="swatch-desc">Fondo para launchers, favicons y contenedor</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SECTION 4: SOCIAL ASSETS -->
+    <div class="section-card">
+      <div class="section-header">
+        <div class="section-title">4. Redes Sociales y Documentación</div>
+        <div class="section-path">brand/social/</div>
+      </div>
+      <div class="grid-2">
+        <div class="asset-box">
+          <img src="social/github-social-preview-1280x640.png" alt="GitHub Social Preview" style="width: 100%; border-radius: 8px;">
+          <div class="asset-label">github-social-preview-1280x640.png &bull; Cabecera GitHub</div>
+        </div>
+        <div class="asset-box">
+          <img src="social/og-image-1200x630.png" alt="OG Image" style="width: 100%; border-radius: 8px;">
+          <div class="asset-label">og-image-1200x630.png &bull; Open Graph / Social Card</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer>
+    <p><strong>MCP²P Brand System</strong> &middot; Documentación oficial: <code>docs/okf/GUIA_IMPLEMENTACION_REDISENO_MARCA_MCP2P.md</code></p>
+  </footer>
+
+</body>
+</html>
