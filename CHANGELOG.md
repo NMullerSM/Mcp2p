@@ -5,6 +5,8 @@ Todas las versiones siguen [SemVer](https://semver.org/lang/es/). Fuente única 
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-11-10
+
 ### Seguridad
 - **Cierre de Quórum Humano y Prevención de Primer Voto (NEW-01, EGM-01)**: `is_quorum_closed` exige unanimidad de votos o el transcurso de una ventana de gracia (48h) tras recepción confirmada (`dispute_vote_delivery`), o 168h de timeout por estancamiento. Se elimina la vulnerabilidad donde un único voto humano prematuro cerraba la disputa.
 - **Autenticación Ed25519 y Anti-Sybil en Votación (EGM-05)**: Los votos humanos requieren firma criptográfica válida sobre el contenido canónico (`VOTE:{option}:TICKET:{id}:PROJECT:{uuid}`) cruzada con la clave pública del colaborador aprobado. Nodos no registrados o atacantes Sybil se aíslan en `rejected_unknown_votes` sin diluir el denominador de elegibles. Exclusión estricta de contendientes en $N \ge 3$ y exclusión de árbitros en rondas regulares.
