@@ -17,8 +17,6 @@ import {
   X,
   Info,
   CheckSquare,
-  FileCode,
-  FolderTree,
   Scale
 } from 'lucide-react';
 
@@ -514,56 +512,41 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
         {subTab === 'graph' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>REPOSITORIO:</span>
-            <div style={{
-              display: 'inline-flex',
-              backgroundColor: 'var(--bg-subtle)',
-              padding: '2px',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)'
-            }}>
-              <button
-                onClick={() => setRepoTarget('app')}
-                title="Ver código fuente y ramas de desarrollo"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  backgroundColor: repoTarget === 'app' ? '#6366f1' : 'transparent',
-                  color: repoTarget === 'app' ? '#ffffff' : 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
-              >
-                <FileCode size={12} /> Repositorio de desarrollo
-              </button>
-
-              <button
-                onClick={() => setRepoTarget('gov')}
-                title="Ver documentación OKF y ramas de gobernanza"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-sm)',
-                  border: 'none',
-                  backgroundColor: repoTarget === 'gov' ? '#10b981' : 'transparent',
-                  color: repoTarget === 'gov' ? '#ffffff' : 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
-              >
-                <FolderTree size={12} /> Repositorio de documentación
-              </button>
-            </div>
+            <select
+              value={repoTarget}
+              onChange={(e) => setRepoTarget(e.target.value)}
+              title={repoTarget === 'gov' ? 'Repositorio de documentación' : 'Repositorio de desarrollo'}
+              style={{
+                // Mismo fix de contraste en modo oscuro que el select de Rama activa: el
+                // cuadro cerrado usa el widget nativo salvo que se quite la apariencia.
+                WebkitAppearance: 'none',
+                MozAppearance: 'none',
+                appearance: 'none',
+                backgroundColor: 'var(--bg-app)',
+                border: '1px solid var(--border-subtle)',
+                color: repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '12px',
+                fontWeight: 600,
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-sm)',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="app">Repositorio de desarrollo</option>
+              <option value="gov">Repositorio de documentación</option>
+            </select>
           </div>
         )}
       </div>
+
+      {/* Migaja de pan para orientar de un vistazo en qué repo+rama se está trabajando */}
+      {subTab === 'graph' && (
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          Proyecto {project?.name || ''} › {repoTarget === 'gov' ? 'Documentación' : 'Desarrollo'} › {selectedBranch}
+        </div>
+      )}
 
       {/* Banner de Feedback si hay acción */}
       {feedback && (
@@ -574,7 +557,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
           display: 'flex',
           alignItems: 'flex-start',
           gap: '8px',
-          backgroundColor: feedback.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+          backgroundColor: feedback.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.12)' : 'rgba(239, 68, 68, 0.12)',
           border: `1px solid ${feedback.type === 'success' ? 'var(--accent-success)' : '#ef4444'}`,
           color: feedback.type === 'success' ? 'var(--accent-success)' : '#ef4444'
         }}>
@@ -610,7 +593,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
             {/* Rama Activa y Creador */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <GitBranch size={16} color={repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)'} />
+                <GitBranch size={16} color={repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)'} />
                 <span style={{ fontSize: '13px', fontWeight: 600 }}>Rama activa:</span>
                 <select
                   value={selectedBranch}
@@ -624,7 +607,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     appearance: 'none',
                     backgroundColor: 'var(--bg-app)',
                     border: '1px solid var(--border-subtle)',
-                    color: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    color: repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: '12px',
                     fontWeight: 600,
@@ -669,29 +652,8 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               </button>
             </div>
 
-            {/* Operaciones Git (Fetch, Pull, Merge, Push, 3 Tiers Sync) */}
+            {/* Operaciones Git (Fetch, Pull, Merge, Push) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <button
-                onClick={handleSyncThreeTiers}
-                disabled={actionLoading}
-                title="Sincroniza el enjambre P2P en memoria, metadatos y git"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid rgba(99, 102, 241, 0.4)',
-                  backgroundColor: 'rgba(99, 102, 241, 0.12)',
-                  color: '#818cf8',
-                  cursor: actionLoading ? 'wait' : 'pointer'
-                }}
-              >
-                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Sincronizar P2P (3 Niveles)
-              </button>
-
               <button
                 onClick={handleFetch}
                 disabled={actionLoading}
@@ -754,7 +716,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     fontWeight: 500,
                     borderRadius: 'var(--radius-sm)',
                     border: '1px solid var(--border-subtle)',
-                    backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(99, 102, 241, 0.12)',
+                    backgroundColor: selectedBranch === 'main' ? 'var(--bg-subtle)' : 'rgba(var(--accent-primary-rgb), 0.12)',
                     color: selectedBranch === 'main' ? 'var(--text-muted)' : 'var(--accent-primary)',
                     cursor: (actionLoading || selectedBranch === 'main') ? 'not-allowed' : 'pointer'
                   }}
@@ -782,7 +744,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     fontWeight: 600,
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
-                    backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                    backgroundColor: repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)',
                     color: '#ffffff',
                     cursor: actionLoading ? 'wait' : 'pointer',
                     boxShadow: 'var(--shadow-sm)'
@@ -792,6 +754,37 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                 </button>
               )}
             </div>
+
+            {/* Acción secundaria poco comprendida por el usuario: se saca de la fila
+                primaria de botones y se guarda en una revelación discreta, igual que
+                las "3 Vías Dialécticas" en HumanApprovalsView. */}
+            <details style={{ fontSize: '11px', color: 'var(--text-muted)', width: '100%' }}>
+              <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Más acciones
+              </summary>
+              <div style={{ marginTop: '6px' }}>
+                <button
+                  onClick={handleSyncThreeTiers}
+                  disabled={actionLoading}
+                  title="Sincroniza el enjambre P2P en memoria, metadatos y git"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid rgba(var(--accent-primary-rgb), 0.4)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                    color: 'var(--accent-primary)',
+                    cursor: actionLoading ? 'wait' : 'pointer'
+                  }}
+                >
+                  <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Sincronizar P2P (3 Niveles)
+                </button>
+              </div>
+            </details>
           </div>
 
           {/* Aviso de commits sin enviar: cuando se comitea una card/ruling, MCP2P intenta
@@ -890,7 +883,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     fontWeight: 600,
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
-                    backgroundColor: '#6366f1',
+                    backgroundColor: 'var(--accent-indigo)',
                     color: '#ffffff',
                     cursor: actionLoading ? 'wait' : 'pointer',
                     boxShadow: 'var(--shadow-sm)'
@@ -916,7 +909,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                       fontWeight: 600,
                       borderRadius: 'var(--radius-sm)',
                       border: 'none',
-                      backgroundColor: repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)',
+                      backgroundColor: repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)',
                       color: '#ffffff',
                       cursor: actionLoading ? 'wait' : 'pointer',
                       boxShadow: 'var(--shadow-sm)'
@@ -961,7 +954,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <GitCommit size={18} color={repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)'} />
+                <GitCommit size={18} color={repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)'} />
                 <h3 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
                   {repoTarget === 'app' ? 'Grafo de Commits del Repositorio de Desarrollo' : 'Grafo del Repositorio de Documentación'}
                 </h3>
@@ -1059,7 +1052,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                           paddingRight: '16px',
                           borderBottom: '1px solid var(--border-subtle)',
                           backgroundColor: isSelected
-                            ? 'rgba(99, 102, 241, 0.12)'
+                            ? 'rgba(var(--accent-primary-rgb), 0.12)'
                             : isHovered
                             ? 'var(--bg-subtle)'
                             : 'transparent',
@@ -1099,7 +1092,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                                 fontWeight: 700,
                                 padding: '2px 7px',
                                 borderRadius: '10px',
-                                backgroundColor: c.is_head ? (repoTarget === 'gov' ? '#10b981' : 'var(--accent-primary)') : 'var(--bg-subtle)',
+                                backgroundColor: c.is_head ? (repoTarget === 'gov' ? 'var(--brand-emerald)' : 'var(--accent-indigo)') : 'var(--bg-subtle)',
                                 color: c.is_head ? '#ffffff' : 'var(--text-primary)',
                                 border: '1px solid var(--border-subtle)',
                                 whiteSpace: 'nowrap'
@@ -1127,8 +1120,8 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                                   fontWeight: 700,
                                   padding: '2px 7px',
                                   borderRadius: '6px',
-                                  border: '1px solid rgba(99, 102, 241, 0.4)',
-                                  backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                  border: '1px solid rgba(var(--accent-primary-rgb), 0.4)',
+                                  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                                   color: 'var(--accent-primary)',
                                   cursor: 'pointer'
                                 }}
@@ -1310,8 +1303,8 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                               fontFamily: 'var(--font-mono)',
                               padding: '2px 8px',
                               borderRadius: '6px',
-                              border: '1px solid rgba(99, 102, 241, 0.4)',
-                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                              border: '1px solid rgba(var(--accent-primary-rgb), 0.4)',
+                              backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                               color: 'var(--accent-primary)',
                               cursor: 'pointer'
                             }}
@@ -1359,7 +1352,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                           fontWeight: 700,
                           padding: '3px 10px',
                           borderRadius: '4px',
-                          backgroundColor: isAccepted ? 'rgba(16, 185, 129, 0.15)' : isCompromise ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                          backgroundColor: isAccepted ? 'rgba(var(--accent-primary-rgb), 0.15)' : isCompromise ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
                           color: isAccepted ? 'var(--accent-success)' : isCompromise ? 'var(--accent-warning)' : '#ef4444'
                         }}>
                           {verdict || 'EN CURSO'}
@@ -1612,7 +1605,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
                     fontSize: '12px',
                     borderRadius: 'var(--radius-sm)',
                     border: 'none',
-                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.15)',
                     color: 'var(--accent-primary)',
                     cursor: actionLoading ? 'wait' : 'pointer',
                     fontWeight: 600

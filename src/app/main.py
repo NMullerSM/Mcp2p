@@ -26,7 +26,28 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--db-path", type=str, default=None, help="Ruta a la base de datos SQLite local")
     parser.add_argument("--headless", action="store_true", help="Ejecutar en modo sin cabeza (CI/CD o tests)")
     parser.add_argument("--debug", action="store_true", help="Habilitar herramientas de desarrollador en PyWebView")
+    parser.add_argument(
+        "--mcp-server", action="store_true",
+        help="Ejecutar este mismo binario como servidor MCP (sin abrir la GUI de escritorio)",
+    )
+    parser.add_argument(
+        "--transport", type=str, default="stdio", choices=["stdio", "sse"],
+        help="Transporte MCP a usar junto con --mcp-server",
+    )
     return parser.parse_args()
+
+
+def _run_as_mcp_server(args: argparse.Namespace) -> int:
+    """Arranca el servidor MCP en el mismo proceso del binario empaquetado.
+
+    El transporte stdio reserva stdout exclusivamente para los mensajes JSON-RPC,
+    así que nada en esta ruta debe hacer print() ni tocar PyWebView/P2P.
+    """
+    from src.mcp.server import create_mcp_server
+
+    server = create_mcp_server(db_path=args.db_path, transport=args.transport)
+    server.run(transport=args.transport)
+    return 0
 
 
 def get_ui_target() -> str:
@@ -48,6 +69,9 @@ def get_ui_target() -> str:
 
 def main() -> int:
     args = parse_arguments()
+
+    if args.mcp_server:
+        return _run_as_mcp_server(args)
 
     if args.db_path:
         os.environ["MCP2P_DB_PATH"] = args.db_path

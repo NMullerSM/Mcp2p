@@ -169,9 +169,9 @@ export function ProjectWorkspace({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden', minHeight: 0 }}>
       {/* Main Workspace View Content */}
-      <div style={{ flex: 1, overflow: 'hidden', padding: '16px 20px' }}>
+      <div style={{ flex: 1, overflow: 'hidden', padding: '16px 20px', minHeight: 0 }}>
         {activeTab === 'kanban' && (
           <KanbanBoard
             cards={cards}

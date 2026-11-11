@@ -15,7 +15,8 @@ hiddenimports = [
     'yaml', 'msgpack', 'cbor2', 'src', 'src.app', 'src.app.api_bridge', 'src.app.auto_updater',
     'src.app.paths', 'src.storage', 'src.storage.db', 'src.storage.okf_adapter',
     'src.storage.github_sync', 'src.storage.code_scanner', 'src.p2p', 'src.p2p.network',
-    'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine'
+    'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
+    'src.mcp', 'src.mcp.server', 'src.mcp.tools'
 ]
 for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml'):
     tmp_ret = collect_all(pkg)
@@ -45,7 +46,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # upx=False: UPX es conocido por corromper el recurso de icono embebido en el .exe
+    # de Windows (el icono queda como un cuadrado genérico en taskbar/escritorio aunque
+    # el .ico pasado en icon= esté bien formado). El COLLECT de abajo sigue usando UPX
+    # para las DLLs empaquetadas, donde este problema no aplica.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

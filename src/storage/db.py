@@ -193,6 +193,13 @@ class DatabaseManager:
                         if "project_uuid" not in hj_cols:
                             conn.execute("ALTER TABLE human_jury_votes ADD COLUMN project_uuid TEXT DEFAULT '';")
 
+                    # Migración para swarm_nodes.node_kind (distingue humano vs. agente IA)
+                    cur_sn = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='swarm_nodes';")
+                    if cur_sn.fetchone():
+                        sn_cols = [c["name"] for c in conn.execute("PRAGMA table_info(swarm_nodes);").fetchall()]
+                        if "node_kind" not in sn_cols:
+                            conn.execute("ALTER TABLE swarm_nodes ADD COLUMN node_kind TEXT DEFAULT 'agent';")
+
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
                 CREATE TABLE IF NOT EXISTS projects (
@@ -215,6 +222,7 @@ class DatabaseManager:
                     node_uuid TEXT PRIMARY KEY,
                     developer_name TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
+                    node_kind TEXT DEFAULT 'agent',
                     public_key TEXT,
                     reviewer_sla_hours INTEGER DEFAULT 24,
                     status TEXT CHECK(status IN ('online', 'offline', 'busy')) DEFAULT 'offline',
@@ -942,7 +950,8 @@ class DatabaseManager:
         agent_id: str,
         reviewer_sla_hours: int = 72,
         status: str = "online",
-        p2p_endpoint: Optional[str] = None
+        p2p_endpoint: Optional[str] = None,
+        node_kind: str = "agent"
     ) -> Dict[str, Any]:
         """Registra o actualiza el pulso de un nodo colaborador."""
         now_str = datetime.now(timezone.utc).isoformat()
@@ -950,17 +959,18 @@ class DatabaseManager:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO swarm_nodes (node_uuid, developer_name, agent_id, reviewer_sla_hours, status, last_heartbeat, p2p_endpoint)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO swarm_nodes (node_uuid, developer_name, agent_id, reviewer_sla_hours, status, last_heartbeat, p2p_endpoint, node_kind)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(node_uuid) DO UPDATE SET
                         developer_name = excluded.developer_name,
                         agent_id = excluded.agent_id,
                         reviewer_sla_hours = excluded.reviewer_sla_hours,
                         status = excluded.status,
                         last_heartbeat = excluded.last_heartbeat,
-                        p2p_endpoint = excluded.p2p_endpoint;
+                        p2p_endpoint = excluded.p2p_endpoint,
+                        node_kind = excluded.node_kind;
                     """,
-                    (node_uuid, developer_name, agent_id, reviewer_sla_hours, status, now_str, p2p_endpoint)
+                    (node_uuid, developer_name, agent_id, reviewer_sla_hours, status, now_str, p2p_endpoint, node_kind)
                 )
         with self.get_connection() as conn:
             row = conn.execute("SELECT * FROM swarm_nodes WHERE node_uuid = ?;", (node_uuid,))
@@ -1128,7 +1138,7 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cur = conn.execute(
                 """
-                SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours
+                SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours, n.node_kind
                 FROM project_collaborators c
                 LEFT JOIN swarm_nodes n ON c.node_uuid = n.node_uuid
                 WHERE c.project_uuid = ?

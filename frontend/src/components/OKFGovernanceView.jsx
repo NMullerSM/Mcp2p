@@ -137,7 +137,7 @@ export function OKFGovernanceView({ project, api }) {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{
-                      backgroundColor: 'rgba(79, 70, 229, 0.15)',
+                      backgroundColor: 'rgba(var(--accent-primary-rgb), 0.15)',
                       color: 'var(--accent-primary)',
                       fontFamily: 'var(--font-mono)',
                       fontSize: '11px',
@@ -198,8 +198,8 @@ export function OKFGovernanceView({ project, api }) {
                       fontWeight: 700,
                       padding: '2px 6px',
                       borderRadius: '3px',
-                      backgroundColor: sk.area === 'backend' ? 'rgba(79, 70, 229, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                      color: sk.area === 'backend' ? 'var(--accent-primary)' : 'var(--accent-success)'
+                      backgroundColor: sk.area === 'backend' ? 'rgba(var(--accent-indigo-rgb), 0.15)' : 'rgba(var(--accent-primary-rgb), 0.15)',
+                      color: sk.area === 'backend' ? 'var(--accent-indigo)' : 'var(--accent-success)'
                     }}>
                       {sk.area.toUpperCase()}
                     </span>
