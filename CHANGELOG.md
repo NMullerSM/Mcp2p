@@ -5,6 +5,11 @@ Todas las versiones siguen [SemVer](https://semver.org/lang/es/). Fuente única 
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-10
+
+### Corregido
+- **Crash inmediato al abrir en Windows (1.0.4)**: `webview.start()` recibía `mcp2p.png` como icono en lugar de `mcp2p.ico`. El backend WinForms de PyWebView debe convertir un PNG a `Icon` vía `GetHicon()`/`Icon.FromHandle()`, y clonar un icono creado así desde un handle nativo dispara `System.Drawing.IconException`/`ArgumentException` no controlada en WinForms x64, matando el hilo de UI sin dejar proceso ni ventana visibles (compatible con build `--noconsole`). Ahora se pasa `mcp2p.ico` explícitamente en Windows (con fallback a `.ico` también en otras plataformas si el `.png` no existe), evitando por completo la ruta de conversión/clonado defectuosa.
+
 ## [1.0.4] - 2026-11-10
 
 ### Seguridad
