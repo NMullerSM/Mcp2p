@@ -105,9 +105,13 @@ def main() -> int:
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
         start_kwargs = {"debug": args.debug}
-        icon_path = Path(get_bundle_dir()) / "mcp2p.png"
-        if icon_path.exists():
-            start_kwargs["icon"] = str(icon_path)
+        bundle_dir = Path(get_bundle_dir())
+        icon_name = "mcp2p.ico" if sys.platform == "win32" else "mcp2p.png"
+        icon_cand = bundle_dir / icon_name
+        if not icon_cand.exists() and sys.platform != "win32":
+            icon_cand = bundle_dir / "mcp2p.ico"
+        if icon_cand.exists():
+            start_kwargs["icon"] = str(icon_cand)
         webview.start(**start_kwargs)
     finally:
         p2p_network.stop_lan_server()
