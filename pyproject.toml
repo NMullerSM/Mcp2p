@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp2p"
-version = "1.0.7"
+version = "1.0.8"
 description = "Local-first P2P multi-agent collaboration platform powered by MCP & PyWebView"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,8 @@ dependencies = [
     "msgpack>=1.0.8",
     "cbor2>=5.6.0",
     "cryptography>=42.0.0",
-    "PyYAML>=6.0.0"
+    "PyYAML>=6.0.0",
+    "certifi>=2024.0.0"
 ]
 
 [project.optional-dependencies]
