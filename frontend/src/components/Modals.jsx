@@ -749,7 +749,7 @@ export function CardDetailModal({ isOpen, card, api, project, onClose, onSave, o
                       gap: '4px',
                       background: 'transparent',
                       border: 'none',
-                      color: '#10b981',
+                      color: 'var(--accent-success)',
                       fontSize: '11px',
                       fontWeight: 600,
                       cursor: 'pointer',

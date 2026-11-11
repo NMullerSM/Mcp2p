@@ -3,9 +3,9 @@ import { Lock, User, GitBranch, CheckSquare, Maximize2, Minimize2 } from 'lucide
 
 const COLUMNS = [
   { id: 'backlog', title: 'Por Hacer', dotColor: '#94a3b8' },
-  { id: 'in_progress', title: 'En Proceso', dotColor: '#6366f1' },
+  { id: 'in_progress', title: 'En Proceso', dotColor: 'var(--accent-indigo)' },
   { id: 'in_review', title: 'En Revisión', dotColor: '#f59e0b' },
-  { id: 'merged', title: 'Fusionado / Consolidado', dotColor: '#10b981' }
+  { id: 'merged', title: 'Fusionado / Consolidado', dotColor: 'var(--accent-success)' }
 ];
 
 export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
@@ -54,6 +54,8 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
       gap: '16px',
       height: '100%',
       width: '100%',
+      minHeight: 0,
+      minWidth: 0,
       overflowX: 'auto',
       padding: '4px 0',
       scrollBehavior: 'smooth'
@@ -151,7 +153,7 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    backgroundColor: isExpanded ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
+                    backgroundColor: isExpanded ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'transparent',
                     border: 'none',
                     color: isExpanded ? 'var(--accent-primary)' : 'var(--text-muted)',
                     borderRadius: 'var(--radius-sm)',
@@ -222,7 +224,7 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
                               alignItems: 'center',
                               gap: '2px',
                               fontSize: '10px',
-                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                              backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                               color: 'var(--accent-primary)',
                               padding: '1px 5px',
                               borderRadius: '3px'

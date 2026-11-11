@@ -287,7 +287,8 @@ class MCPToolsHandler:
                 developer_name=developer_name,
                 agent_id=agent_id,
                 reviewer_sla_hours=reviewer_sla_hours,
-                status="online"
+                status="online",
+                node_kind="agent"
             )
             return json.dumps({
                 "success": True,

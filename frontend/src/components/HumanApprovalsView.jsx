@@ -20,6 +20,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
   // { itemType, itemId, decision, title, summaryText, badgeLabel, badgeColor }
   const [confirmChecked, setConfirmChecked] = useState(false);
   const [confirmComment, setConfirmComment] = useState('');
+  const [historyExpanded, setHistoryExpanded] = useState(false);
 
   const loadApprovals = useCallback(async () => {
     if (!api || !project) return;
@@ -232,7 +233,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 title: 'Ratificar Dossier de Alineación Inicial OKF v2',
                 summaryText: `Se estampará tu firma sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado alineado (ALIGNED_OKF) y se inicializará la gobernanza documental sin modificar tu código fuente.`,
                 badgeLabel: 'RATIFICAR OKF',
-                badgeColor: '#10b981'
+                badgeColor: 'var(--accent-success)'
               })}
               style={{
                 display: 'flex',
@@ -243,7 +244,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                 fontWeight: 700,
                 borderRadius: 'var(--radius-sm)',
                 border: 'none',
-                backgroundColor: '#10b981',
+                backgroundColor: 'var(--accent-success)',
                 color: '#ffffff',
                 cursor: 'pointer'
               }}
@@ -261,8 +262,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '9px 16px',
-          backgroundColor: 'rgba(16, 185, 129, 0.05)',
-          border: '1px solid rgba(16, 185, 129, 0.25)',
+          backgroundColor: 'rgba(var(--accent-primary-rgb), 0.05)',
+          border: '1px solid rgba(var(--accent-primary-rgb), 0.25)',
           borderRadius: 'var(--radius-sm)',
           fontSize: '12px'
         }}>
@@ -271,15 +272,15 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
               fontSize: '10px',
               fontFamily: 'var(--font-mono)',
               fontWeight: 700,
-              backgroundColor: 'rgba(16, 185, 129, 0.15)',
-              color: '#10b981',
+              backgroundColor: 'rgba(var(--accent-primary-rgb), 0.15)',
+              color: 'var(--accent-success)',
               padding: '2px 6px',
               borderRadius: '4px'
             }}>
               ALIGNED_OKF
             </span>
             <span style={{ color: 'var(--text-secondary)' }}>
-              Gobernanza viva activa. Modo 2: Auditoría de deriva continua habilitada.
+              Auditoría de deriva continua activa.
             </span>
           </div>
           <button
@@ -636,8 +637,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     gap: '6px',
                     padding: '8px',
                     borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.1)',
+                    border: '1px solid rgba(var(--accent-primary-rgb), 0.3)',
                     color: 'var(--accent-success)',
                     fontSize: '11px',
                     fontWeight: 600
@@ -900,7 +901,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       title: `Aprobar y Fusionar Tarea ${pr.card_id}: ${pr.title}`,
                       summaryText: `Rama asociada: ${pr.branch_ref || 'main'}\nCriterios verificados: ${pr.acceptance_criteria || 'Estándar OKF'}\n\nSe fusionará la rama y la tarjeta pasará a estado Consolidado (merged) bajo tu firma Ed25519.`,
                       badgeLabel: 'APROBAR Y FUSIONAR',
-                      badgeColor: '#10b981'
+                      badgeColor: 'var(--accent-success)'
                     })}
                     style={{
                       flex: 1,
@@ -908,7 +909,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: '6px',
-                      backgroundColor: '#10b981',
+                      backgroundColor: 'var(--accent-success)',
                       color: '#ffffff',
                       border: 'none',
                       padding: '7px',
@@ -955,7 +956,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-            {approvals.history_precedents.map((item, idx) => (
+            {(historyExpanded ? approvals.history_precedents : approvals.history_precedents.slice(0, 3)).map((item, idx) => (
               <div
                 key={item.id || idx}
                 onClick={() => openInspector(item.type === 'JURY_RULING' ? 'ruling' : 'decision', item, item.id)}
@@ -981,8 +982,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     fontWeight: 600,
                     padding: '2px 6px',
                     borderRadius: '4px',
-                    backgroundColor: item.type === 'JURY_RULING' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                    color: item.type === 'JURY_RULING' ? '#c084fc' : '#10b981',
+                    backgroundColor: item.type === 'JURY_RULING' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(var(--accent-primary-rgb), 0.15)',
+                    color: item.type === 'JURY_RULING' ? '#c084fc' : 'var(--accent-success)',
                     flexShrink: 0
                   }}>
                     {item.type === 'JURY_RULING' ? 'JUICIO RATIFICADO' : 'ADR'}
@@ -1028,6 +1029,30 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
               </div>
             ))}
           </div>
+
+          {approvals.history_precedents.length > 3 && (
+            <button
+              type="button"
+              onClick={() => setHistoryExpanded(prev => !prev)}
+              style={{
+                alignSelf: 'center',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                color: 'var(--accent-primary)',
+                background: 'transparent',
+                border: 'none',
+                padding: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              {historyExpanded
+                ? 'Ver menos'
+                : `Ver ${approvals.history_precedents.length - 3} más`}
+            </button>
+          )}
         </div>
       )}
 
@@ -1246,8 +1271,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                         gap: '6px',
                         padding: '10px',
                         borderRadius: 'var(--radius-sm)',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        backgroundColor: 'rgba(var(--accent-primary-rgb), 0.1)',
+                        border: '1px solid rgba(var(--accent-primary-rgb), 0.3)',
                         color: 'var(--accent-success)',
                         fontSize: '12px',
                         fontWeight: 600
@@ -1502,7 +1527,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           title: `Aprobar y Fusionar ${inspectedItem.data.card_id}: ${inspectedItem.data.title}`,
                           summaryText: `Rama asociada: ${inspectedItem.data.branch_ref || 'main'}\n\nSe fusionará la entrega y la tarjeta pasará a estado Consolidado (merged) con tu firma Ed25519.`,
                           badgeLabel: 'APROBAR Y FUSIONAR',
-                          badgeColor: '#10b981'
+                          badgeColor: 'var(--accent-success)'
                         })}
                         style={{
                           padding: '8px 18px',
@@ -1510,7 +1535,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           fontWeight: 700,
                           borderRadius: 'var(--radius-sm)',
                           border: 'none',
-                          backgroundColor: '#10b981',
+                          backgroundColor: 'var(--accent-success)',
                           color: '#ffffff',
                           cursor: 'pointer'
                         }}
@@ -1560,7 +1585,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                   <div style={{ backgroundColor: 'var(--bg-subtle)', padding: '12px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '12.5px', color: 'var(--text-primary)' }}>
                     <div><strong>Título:</strong> {inspectedItem.data.title}</div>
                     <div style={{ marginTop: '4px' }}>
-                      <strong>Estado:</strong> <span style={{ color: '#10b981', fontWeight: 600 }}>{inspectedItem.data.status}</span>
+                      <strong>Estado:</strong> <span style={{ color: 'var(--accent-success)', fontWeight: 600 }}>{inspectedItem.data.status}</span>
                       {inspectedItem.data.resolution_mode && <span style={{ marginLeft: '12px', color: 'var(--text-secondary)' }}>Modo: {inspectedItem.data.resolution_mode}</span>}
                     </div>
                   </div>
@@ -1584,7 +1609,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           </p>
                         </div>
                         <div style={{ padding: '10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}>
-                          <strong style={{ fontSize: '11px', color: '#10b981' }}>Síntesis (Opción C):</strong>
+                          <strong style={{ fontSize: '11px', color: 'var(--accent-success)' }}>Síntesis (Opción C):</strong>
                           <p style={{ fontSize: '11.5px', margin: '4px 0 0', color: 'var(--text-secondary)' }}>
                             {inspectedItem.data.phases.phase_2_synthesis?.summary}
                           </p>
@@ -1600,7 +1625,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                       </h4>
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <div>Opción Ganadora: <strong style={{ color: 'var(--accent-primary)' }}>{inspectedItem.data.phases.phase_3_voting.winning_option}</strong></div>
-                        <div>Consenso Alcanzado: <strong style={{ color: '#10b981' }}>{inspectedItem.data.phases.phase_3_voting.consensus_reached ? 'Sí' : 'No'}</strong> (Ratio: {inspectedItem.data.phases.phase_3_voting.consensus_ratio})</div>
+                        <div>Consenso Alcanzado: <strong style={{ color: 'var(--accent-success)' }}>{inspectedItem.data.phases.phase_3_voting.consensus_reached ? 'Sí' : 'No'}</strong> (Ratio: {inspectedItem.data.phases.phase_3_voting.consensus_ratio})</div>
                         <div>Humanos Elegibles: {inspectedItem.data.phases.phase_3_voting.eligible_humans} | Jurados Subagentes: {inspectedItem.data.phases.phase_3_voting.agent_jurors_count}</div>
                       </div>
                     </div>
@@ -1725,7 +1750,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           title: 'Ratificar Dossier de Alineación Inicial OKF v2',
                           summaryText: `Se estampará tu firma sobre el expediente inicial de gobernanza.\n\nEl proyecto pasará formalmente a estado alineado (ALIGNED_OKF) y se inicializará la gobernanza documental sin modificar tu código fuente.`,
                           badgeLabel: 'RATIFICAR OKF',
-                          badgeColor: '#10b981'
+                          badgeColor: 'var(--accent-success)'
                         })}
                         style={{
                           padding: '9px 20px',
@@ -1733,7 +1758,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                           fontWeight: 700,
                           borderRadius: 'var(--radius-sm)',
                           border: 'none',
-                          backgroundColor: '#10b981',
+                          backgroundColor: 'var(--accent-success)',
                           color: '#ffffff',
                           cursor: 'pointer',
                           display: 'flex',
@@ -1852,8 +1877,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
               gap: '9px',
               padding: '10px 12px',
               borderRadius: 'var(--radius-sm)',
-              backgroundColor: confirmChecked ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-subtle)',
-              border: `1px solid ${confirmChecked ? 'rgba(16, 185, 129, 0.4)' : 'var(--border-subtle)'}`,
+              backgroundColor: confirmChecked ? 'rgba(var(--accent-primary-rgb), 0.1)' : 'var(--bg-subtle)',
+              border: `1px solid ${confirmChecked ? 'rgba(var(--accent-primary-rgb), 0.4)' : 'var(--border-subtle)'}`,
               cursor: 'pointer',
               fontSize: '12px',
               fontWeight: 600,

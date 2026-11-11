@@ -64,7 +64,8 @@ class ApiBridge:
             developer_name=default_user,
             agent_id=f"agent_{default_user}",
             reviewer_sla_hours=24,
-            status="online"
+            status="online",
+            node_kind="human"
         )
 
     def _ensure_active_project(self) -> None:
@@ -349,7 +350,8 @@ class ApiBridge:
                     developer_name=payload.get("sender_github") or f"Peer {sender_node[:8]}",
                     agent_id=f"agent_{sender_node[:8]}",
                     reviewer_sla_hours=24,
-                    status="online"
+                    status="online",
+                    node_kind="human"
                 )
                 self.db.add_or_request_collaborator(
                     project_uuid=p_uuid,
@@ -561,13 +563,24 @@ class ApiBridge:
 
             proj = self.db.get_project_by_uuid(target_uuid)
             p_name = proj["name"] if proj else "Proyecto MCP2P"
-            python_path = sys.executable
+
+            # En el binario empaquetado (PyInstaller) sys.executable es Mcp2p.exe/Mcp2p,
+            # que no acepta "-m <modulo>" porque no es un interprete de Python: el propio
+            # binario debe invocarse con --mcp-server para que arranque el servidor MCP
+            # en el mismo proceso. En modo desarrollo sys.executable sigue siendo el
+            # python del venv, así que "-m src.mcp.server" funciona como antes.
+            if getattr(sys, "frozen", False):
+                mcp_command = sys.executable
+                mcp_args = ["--mcp-server", "--transport", "stdio"]
+            else:
+                mcp_command = sys.executable
+                mcp_args = ["-m", "src.mcp.server", "--transport", "stdio"]
 
             mcp_json_config = {
                 "mcpServers": {
                     "mcp2p": {
-                        "command": python_path,
-                        "args": ["-m", "src.mcp.server", "--transport", "stdio"],
+                        "command": mcp_command,
+                        "args": mcp_args,
                         "env": {
                             "MCP2P_ACTIVE_PROJECT": target_uuid or ""
                         }
@@ -1397,7 +1410,8 @@ class ApiBridge:
                 developer_name="Desarrollador Local (Tú)",
                 agent_id="agent_local_developer",
                 reviewer_sla_hours=24,
-                status="online"
+                status="online",
+                node_kind="human"
             )
         except Exception:
             pass

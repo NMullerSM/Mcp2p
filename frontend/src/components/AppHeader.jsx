@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sun, Moon, Settings, Plus, ArrowLeft, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
 import BrandMark from './BrandMark';
 
@@ -14,6 +14,16 @@ export function AppHeader({
   githubStatus,
   projectsCount = 0
 }) {
+  // Por debajo de 900px, los botones de acción de la derecha pasan a modo compacto (solo icono)
+  const COMPACT_BREAKPOINT = 900;
+  const [isCompact, setIsCompact] = useState(() => window.innerWidth < COMPACT_BREAKPOINT);
+
+  useEffect(() => {
+    const handleResize = () => setIsCompact(window.innerWidth < COMPACT_BREAKPOINT);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   return (
     <header style={{
       height: '64px',
@@ -111,7 +121,8 @@ export function AppHeader({
             borderRadius: 'var(--radius-md)',
             gap: '4px',
             border: '1px solid var(--border-subtle)',
-            overflowX: 'auto'
+            overflowX: 'auto',
+            overflowY: 'hidden'
           }}>
             {[
               { id: 'kanban', label: 'Tablero Kanban', icon: null },
@@ -160,13 +171,14 @@ export function AppHeader({
           <button
             onClick={onNewTask}
             title="Nueva Tarea (Ctrl+N)"
+            aria-label="Nueva Tarea"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '6px',
               height: '36px',
-              padding: '0 14px',
+              padding: isCompact ? '0 10px' : '0 14px',
               fontSize: '12.5px',
               fontWeight: 600,
               borderRadius: 'var(--radius-md)',
@@ -178,7 +190,8 @@ export function AppHeader({
               transition: 'var(--transition)'
             }}
           >
-            <Plus size={15} /> Nueva Tarea
+            <Plus size={15} />
+            {!isCompact && 'Nueva Tarea'}
           </button>
         )}
 
@@ -195,7 +208,7 @@ export function AppHeader({
             justifyContent: 'center',
             gap: '6px',
             height: '36px',
-            padding: '0 12px',
+            padding: isCompact ? '0 10px' : '0 12px',
             fontSize: '12px',
             fontWeight: 500,
             borderRadius: 'var(--radius-md)',
@@ -214,16 +227,18 @@ export function AppHeader({
             backgroundColor: githubStatus?.authenticated ? 'var(--accent-success)' : 'var(--text-muted)',
             display: 'inline-block'
           }} />
-          <span style={{
-            fontSize: '11.5px',
-            fontFamily: 'var(--font-mono)',
-            maxWidth: '110px',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
-          }}>
-            {githubStatus?.authenticated ? `@${githubStatus.username}` : 'GitHub'}
-          </span>
+          {!isCompact && (
+            <span style={{
+              fontSize: '11.5px',
+              fontFamily: 'var(--font-mono)',
+              maxWidth: '110px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}>
+              {githubStatus?.authenticated ? `@${githubStatus.username}` : 'GitHub'}
+            </span>
+          )}
         </button>
 
         {/* Alternar Tema */}

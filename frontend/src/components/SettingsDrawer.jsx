@@ -667,8 +667,8 @@ export function SettingsDrawer({
                 <div style={{
                   padding: '10px 14px',
                   borderRadius: 'var(--radius-md)',
-                  backgroundColor: 'rgba(99, 102, 241, 0.08)',
-                  border: '1px solid rgba(99, 102, 241, 0.25)',
+                  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.08)',
+                  border: '1px solid rgba(var(--accent-primary-rgb), 0.25)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '10px'
@@ -702,7 +702,7 @@ export function SettingsDrawer({
                     fontWeight: 600,
                     padding: '2px 8px',
                     borderRadius: 'var(--radius-sm)',
-                    backgroundColor: githubStatus?.authenticated ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    backgroundColor: githubStatus?.authenticated ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'rgba(239, 68, 68, 0.15)',
                     color: githubStatus?.authenticated ? 'var(--accent-success)' : 'var(--accent-danger)'
                   }}>
                     {githubStatus?.authenticated ? 'Sesión Activa' : 'No Conectado'}
@@ -744,9 +744,9 @@ export function SettingsDrawer({
                   padding: '10px 12px',
                   borderRadius: 'var(--radius-sm)',
                   fontSize: '11px',
-                  backgroundColor: patMessage.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                  backgroundColor: patMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'rgba(239, 68, 68, 0.15)',
                   color: patMessage.type === 'success' ? 'var(--accent-success)' : 'var(--accent-danger)',
-                  border: `1px solid ${patMessage.type === 'success' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+                  border: `1px solid ${patMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
                 }}>
                   {patMessage.text}
                 </div>

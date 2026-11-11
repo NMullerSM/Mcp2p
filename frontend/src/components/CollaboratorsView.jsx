@@ -108,7 +108,7 @@ export function CollaboratorsView({ project, api }) {
             width: '38px',
             height: '38px',
             borderRadius: 'var(--radius-md)',
-            backgroundColor: 'rgba(99, 102, 241, 0.12)',
+            backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -218,10 +218,21 @@ export function CollaboratorsView({ project, api }) {
                         fontWeight: 700,
                         padding: '1px 6px',
                         borderRadius: '3px',
-                        backgroundColor: isOwner ? 'rgba(79, 70, 229, 0.15)' : 'var(--bg-subtle)',
+                        backgroundColor: isOwner ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'var(--bg-subtle)',
                         color: isOwner ? 'var(--accent-primary)' : 'var(--text-secondary)'
                       }}>
                         {c.role ? c.role.toUpperCase() : 'MEMBER'}
+                      </span>
+                      <span style={{
+                        fontSize: '10px',
+                        fontFamily: 'var(--font-mono)',
+                        fontWeight: 700,
+                        padding: '1px 6px',
+                        borderRadius: '3px',
+                        backgroundColor: c.node_kind === 'human' ? 'var(--badge-lease)' : 'rgba(var(--accent-indigo-rgb), 0.12)',
+                        color: c.node_kind === 'human' ? 'var(--badge-lease-text)' : 'var(--accent-indigo)'
+                      }}>
+                        {c.node_kind === 'human' ? 'HUMANO' : 'AGENTE'}
                       </span>
                     </div>
 
@@ -295,7 +306,7 @@ export function CollaboratorsView({ project, api }) {
                         gap: '4px',
                         fontSize: '11px',
                         color: c.status === 'rejected' ? 'var(--accent-danger)' : 'var(--accent-success)',
-                        backgroundColor: c.status === 'rejected' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+                        backgroundColor: c.status === 'rejected' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(var(--accent-primary-rgb), 0.12)',
                         padding: '4px 8px',
                         borderRadius: 'var(--radius-sm)',
                         fontWeight: 600
@@ -362,7 +373,7 @@ export function CollaboratorsView({ project, api }) {
                 gap: '5px',
                 fontSize: '11px',
                 fontFamily: 'var(--font-mono)',
-                backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                 color: 'var(--accent-success)',
                 padding: '2px 8px',
                 borderRadius: '10px',
@@ -418,7 +429,7 @@ export function CollaboratorsView({ project, api }) {
                     width: '32px',
                     height: '32px',
                     borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -442,6 +453,17 @@ export function CollaboratorsView({ project, api }) {
                       }}>
                         {ag.agent_id}
                       </span>
+                      <span style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        backgroundColor: ag.node_kind === 'human' ? 'var(--badge-lease)' : 'rgba(var(--accent-indigo-rgb), 0.12)',
+                        color: ag.node_kind === 'human' ? 'var(--badge-lease-text)' : 'var(--accent-indigo)',
+                        padding: '1px 6px',
+                        borderRadius: '3px'
+                      }}>
+                        {ag.node_kind === 'human' ? 'HUMANO' : 'AGENTE'}
+                      </span>
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                       Nodo: {ag.node_uuid} • SLA de Revisión: {ag.reviewer_sla_hours}h
@@ -458,7 +480,7 @@ export function CollaboratorsView({ project, api }) {
                     fontWeight: 600,
                     padding: '2px 8px',
                     borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
                     color: 'var(--accent-success)'
                   }}>
                     <Radio size={10} /> En Línea

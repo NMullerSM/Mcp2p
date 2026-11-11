@@ -300,7 +300,7 @@ export default function App() {
       />
 
       {/* Main View Area */}
-      <main style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex' }}>
+      <main style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex', minHeight: 0, minWidth: 0 }}>
         {activeProject ? (
           <ProjectWorkspace
             project={activeProject}
