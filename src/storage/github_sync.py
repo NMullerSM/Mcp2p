@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import threading
 import time
@@ -28,6 +29,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.proc_utils import run_hidden
 
 logger = logging.getLogger("mcp2p.github")
+
+# Un binario empaquetado con PyInstaller no hereda de forma confiable el almacén de
+# certificados raíz del sistema operativo (en Windows, la actualización automática de
+# raíces vía Windows Update puede no estar disponible/habilitada), lo que produce
+# "CERTIFICATE_VERIFY_FAILED: unable to get issuer certificate" al validar la cadena de
+# api.github.com. certifi empaqueta un bundle de CAs de Mozilla autocontenido que no
+# depende del almacén del SO; lo usamos como contexto HTTPS por defecto del proceso.
+try:
+    import certifi
+    ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    logger.warning("certifi no está instalado; se usará el almacén de certificados del sistema operativo.")
 
 AUTH_STATUS_TTL_S: float = 60.0
 GIT_ID_TTL_S: float = 60.0

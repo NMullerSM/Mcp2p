@@ -65,6 +65,7 @@ def build():
         "--collect-all=cryptography",
         "--collect-all=mcp",
         "--collect-all=yaml",
+        "--collect-all=certifi",
         "--hidden-import=yaml",
         "--hidden-import=msgpack",
         "--hidden-import=cbor2",

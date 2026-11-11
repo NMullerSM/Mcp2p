@@ -18,7 +18,7 @@ hiddenimports = [
     'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
     'src.mcp', 'src.mcp.server', 'src.mcp.tools'
 ]
-for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml'):
+for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml', 'certifi'):
     tmp_ret = collect_all(pkg)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
