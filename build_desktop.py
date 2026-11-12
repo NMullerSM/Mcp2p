@@ -66,6 +66,13 @@ def build():
         "--collect-all=mcp",
         "--collect-all=yaml",
         "--collect-all=certifi",
+        "--collect-all=aiortc",
+        "--collect-all=websockets",
+        # av is a mandatory transitive dependency of aiortc (not an optional
+        # media extra) and bundles its own ffmpeg shared libraries, so it needs
+        # the same --collect-all treatment as aiortc itself or the frozen
+        # binary risks failing to import aiortc at all (see Mcp2p.spec).
+        "--collect-all=av",
         "--hidden-import=yaml",
         "--hidden-import=msgpack",
         "--hidden-import=cbor2",

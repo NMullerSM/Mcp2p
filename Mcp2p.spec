@@ -18,7 +18,14 @@ hiddenimports = [
     'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
     'src.mcp', 'src.mcp.server', 'src.mcp.tools'
 ]
-for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml', 'certifi'):
+# 'av' is collected explicitly even though nothing in this project imports it
+# directly: it is a MANDATORY transitive dependency of aiortc (av<20.0.0,>=14.0.0
+# in aiortc's own install_requires), not an optional media extra, and it bundles
+# its own ffmpeg shared libraries. Without collect_all('av') here, the frozen
+# binary can import aiortc fine in dev but fail to import it once packaged —
+# this project already hit the same class of bug with certifi/SSL bundling
+# (see commits 03ee047 / d95fb7e), so av is collected the same way aiortc itself is.
+for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml', 'certifi', 'aiortc', 'websockets', 'av'):
     tmp_ret = collect_all(pkg)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
