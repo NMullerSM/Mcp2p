@@ -15,7 +15,7 @@ import subprocess
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
 
@@ -37,6 +37,76 @@ def _run_git_logged(args: List[str], cwd: Path, creationflags: int = 0) -> subpr
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", get_default_db_path())
+
+# Umbrales de rate-limit para solicitudes de colaboración (join requests) P2P.
+# Clave de identidad: public_key Ed25519 persistente del solicitante (nunca node_uuid
+# ni github_username, que pueden colisionar o cambiar trivialmente).
+_JOIN_LOCK_THRESHOLD_SHORT = 3   # a partir de este número de rechazos, bloqueo corto
+_JOIN_LOCK_THRESHOLD_LONG = 5    # a partir de este número de rechazos, bloqueo largo
+_JOIN_LOCK_DURATION_SHORT = timedelta(minutes=30)
+_JOIN_LOCK_DURATION_LONG = timedelta(hours=24)
+_JOIN_HOURLY_CAP = 3            # máximo de intentos permitidos dentro de la ventana de 1 hora
+_JOIN_HOURLY_WINDOW = timedelta(hours=1)
+
+
+def _compute_lock_until(
+    rejection_count: int,
+    last_rejected_at: Optional[datetime],
+    now: datetime
+) -> Optional[datetime]:
+    """
+    Calcula el instante (UTC) hasta el cual un solicitante permanece bloqueado para
+    volver a pedir unirse a un proyecto, en función de su historial de rechazos.
+
+    - <= 2 rechazos: sin bloqueo.
+    - 3-4 rechazos: bloqueo de 30 minutos desde el último rechazo.
+    - >= 5 rechazos: bloqueo de 24 horas desde el último rechazo.
+
+    Devuelve None si no hay bloqueo vigente (incluyendo el caso en que la ventana
+    de bloqueo ya expiró).
+    """
+    if rejection_count < _JOIN_LOCK_THRESHOLD_SHORT or last_rejected_at is None:
+        return None
+
+    if rejection_count < _JOIN_LOCK_THRESHOLD_LONG:
+        duration = _JOIN_LOCK_DURATION_SHORT
+    else:
+        duration = _JOIN_LOCK_DURATION_LONG
+
+    lock_until = last_rejected_at + duration
+    if now > lock_until:
+        return None
+    return lock_until
+
+
+def _hourly_cap_exceeded(
+    rejection_count: int,
+    request_window_start: Optional[datetime],
+    request_window_count: int,
+    now: datetime
+) -> bool:
+    """
+    True si el solicitante ha superado el máximo de intentos de unión permitidos
+    dentro de la ventana deslizante de 1 hora. Solo se aplica una vez que el
+    solicitante acumula al menos `_JOIN_LOCK_THRESHOLD_SHORT` rechazos previos.
+    """
+    if rejection_count < _JOIN_LOCK_THRESHOLD_SHORT:
+        return False
+    if request_window_start is None:
+        return False
+    if now - request_window_start > _JOIN_HOURLY_WINDOW:
+        return False
+    return request_window_count > _JOIN_HOURLY_CAP
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Convierte una cadena ISO8601 (o None) en un datetime aware UTC, o None."""
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 class DatabaseManager:
@@ -161,6 +231,8 @@ class DatabaseManager:
                         conn.execute("ALTER TABLE projects ADD COLUMN okf_alignment_status TEXT DEFAULT 'aligned_okf';")
                     if "alignment_dossier_markdown" not in p_cols:
                         conn.execute("ALTER TABLE projects ADD COLUMN alignment_dossier_markdown TEXT DEFAULT '';")
+                    if "join_status" not in p_cols:
+                        conn.execute("ALTER TABLE projects ADD COLUMN join_status TEXT DEFAULT 'active';")
 
                     # Migración para dispute_tickets (Síntesis Tercera Vía, Matriz Neutral, Árbitro y EGM)
                     dt_info = conn.execute("PRAGMA table_info(dispute_tickets);").fetchall()
@@ -200,6 +272,19 @@ class DatabaseManager:
                         if "node_kind" not in sn_cols:
                             conn.execute("ALTER TABLE swarm_nodes ADD COLUMN node_kind TEXT DEFAULT 'agent';")
 
+                    # Migración para project_collaborators (rate-limit de solicitudes de unión HITL)
+                    cur_pc = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='project_collaborators';")
+                    if cur_pc.fetchone():
+                        pc_cols = [c["name"] for c in conn.execute("PRAGMA table_info(project_collaborators);").fetchall()]
+                        if "rejection_count" not in pc_cols:
+                            conn.execute("ALTER TABLE project_collaborators ADD COLUMN rejection_count INTEGER DEFAULT 0;")
+                        if "last_rejected_at" not in pc_cols:
+                            conn.execute("ALTER TABLE project_collaborators ADD COLUMN last_rejected_at TEXT;")
+                        if "request_window_start" not in pc_cols:
+                            conn.execute("ALTER TABLE project_collaborators ADD COLUMN request_window_start TEXT;")
+                        if "request_window_count" not in pc_cols:
+                            conn.execute("ALTER TABLE project_collaborators ADD COLUMN request_window_count INTEGER DEFAULT 0;")
+
                 conn.executescript("""
                 -- 1. Subsistema de Proyectos (Multi-Tenant Local)
                 CREATE TABLE IF NOT EXISTS projects (
@@ -213,6 +298,7 @@ class DatabaseManager:
                     default_sla_hours INTEGER DEFAULT 24,
                     okf_alignment_status TEXT DEFAULT 'aligned_okf',
                     alignment_dossier_markdown TEXT DEFAULT '',
+                    join_status TEXT DEFAULT 'active',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -344,6 +430,10 @@ class DatabaseManager:
                     public_key TEXT DEFAULT '',
                     role TEXT CHECK(role IN ('owner', 'collaborator', 'guest')) DEFAULT 'collaborator',
                     status TEXT CHECK(status IN ('pending_approval', 'approved', 'rejected')) DEFAULT 'pending_approval',
+                    rejection_count INTEGER DEFAULT 0,
+                    last_rejected_at TEXT,
+                    request_window_start TEXT,
+                    request_window_count INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     approved_at DATETIME,
                     PRIMARY KEY (project_uuid, node_uuid),
@@ -1097,6 +1187,15 @@ class DatabaseManager:
         approved_at = now_str if status == "approved" else None
         with self._write_lock, self.get_connection() as conn:
             with conn:
+                existing = conn.execute(
+                    "SELECT public_key FROM project_collaborators WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                ).fetchone()
+                existing_public_key = existing["public_key"] if existing else ""
+                if existing_public_key and public_key and existing_public_key != public_key:
+                    # Review Focus: un node_uuid colisionado (p. ej. mismo hostname) nunca debe
+                    # permitir que una clave pública distinta tome el estado de rate-limit de otra.
+                    raise ValueError("node_uuid ya está asociado a otra clave pública")
                 conn.execute(
                     """
                     INSERT INTO project_collaborators (project_uuid, node_uuid, github_username, public_key, role, status, created_at, approved_at)
@@ -1133,6 +1232,112 @@ class DatabaseManager:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_collaborator_by_pubkey(self, project_uuid: str, public_key: str) -> Optional[Dict[str, Any]]:
+        """
+        Recupera la fila de colaborador/solicitud por su clave pública Ed25519 persistente.
+        Esta es la identidad canónica para el rate-limit de solicitudes de unión: a diferencia
+        de node_uuid (derivado del hostname, puede colisionar) o github_username (cambiable
+        trivialmente), la clave pública identifica de forma estable al solicitante.
+        """
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM project_collaborators WHERE project_uuid = ? AND public_key = ?;",
+                (project_uuid, public_key)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_join_rate_limit_state(self, project_uuid: str, public_key: str) -> Dict[str, Any]:
+        """
+        Evalúa si un solicitante (identificado por su clave pública) puede intentar unirse
+        a un proyecto ahora mismo, en función de su historial de rechazos y de la ventana
+        horaria de intentos.
+        """
+        now = datetime.now(timezone.utc)
+        row = self.get_collaborator_by_pubkey(project_uuid, public_key)
+        if row is None:
+            return {"allowed": True, "locked_until": None, "reason": "no_previous_attempts"}
+
+        rejection_count = row.get("rejection_count") or 0
+        last_rejected_at = _parse_iso_datetime(row.get("last_rejected_at"))
+        request_window_start = _parse_iso_datetime(row.get("request_window_start"))
+        request_window_count = row.get("request_window_count") or 0
+
+        lock_until = _compute_lock_until(rejection_count, last_rejected_at, now)
+        if lock_until is not None:
+            return {"allowed": False, "locked_until": lock_until.isoformat(), "reason": "locked_due_to_rejections"}
+
+        if _hourly_cap_exceeded(rejection_count, request_window_start, request_window_count, now):
+            return {"allowed": False, "locked_until": None, "reason": "hourly_request_cap_exceeded"}
+
+        return {"allowed": True, "locked_until": None, "reason": "ok"}
+
+    def record_join_attempt(self, project_uuid: str, public_key: str) -> None:
+        """
+        Registra un intento de solicitud de unión permitido (allowed=True), actualizando
+        la ventana deslizante horaria de conteo de intentos para ese solicitante.
+        """
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT request_window_start, request_window_count FROM project_collaborators "
+                    "WHERE project_uuid = ? AND public_key = ?;",
+                    (project_uuid, public_key)
+                ).fetchone()
+                if row is None:
+                    return
+                window_start = _parse_iso_datetime(row["request_window_start"])
+                window_count = row["request_window_count"] or 0
+                if window_start is None or (now - window_start) > _JOIN_HOURLY_WINDOW:
+                    new_window_start = now_str
+                    new_window_count = 1
+                else:
+                    new_window_start = row["request_window_start"]
+                    new_window_count = window_count + 1
+                conn.execute(
+                    "UPDATE project_collaborators SET request_window_start = ?, request_window_count = ? "
+                    "WHERE project_uuid = ? AND public_key = ?;",
+                    (new_window_start, new_window_count, project_uuid, public_key)
+                )
+
+    def record_rejection(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
+        """
+        Rechaza explícitamente la solicitud de un colaborador (reutilizando reject_collaborator)
+        e incrementa su contador de rechazos, recalculando el bloqueo resultante.
+        """
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        self.reject_collaborator(project_uuid, node_uuid)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE project_collaborators
+                    SET rejection_count = rejection_count + 1, last_rejected_at = ?
+                    WHERE project_uuid = ? AND node_uuid = ?;
+                    """,
+                    (now_str, project_uuid, node_uuid)
+                )
+                row = conn.execute(
+                    "SELECT rejection_count, last_rejected_at FROM project_collaborators "
+                    "WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                ).fetchone()
+
+        if row is None:
+            return {"success": False, "rejection_count": 0, "locked_until": None}
+
+        rejection_count = row["rejection_count"]
+        last_rejected_at = _parse_iso_datetime(row["last_rejected_at"])
+        lock_until = _compute_lock_until(rejection_count, last_rejected_at, now)
+        return {
+            "success": True,
+            "rejection_count": rejection_count,
+            "locked_until": lock_until.isoformat() if lock_until is not None else None
+        }
+
     def get_project_collaborators(self, project_uuid: str) -> List[Dict[str, Any]]:
         """Lista todos los colaboradores y solicitudes pendientes de un proyecto."""
         with self.get_connection() as conn:
@@ -1154,7 +1359,13 @@ class DatabaseManager:
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 cur = conn.execute(
-                    "UPDATE project_collaborators SET status = 'approved', approved_at = ? WHERE project_uuid = ? AND node_uuid = ?;",
+                    """
+                    UPDATE project_collaborators
+                    SET status = 'approved', approved_at = ?,
+                        rejection_count = 0, last_rejected_at = NULL,
+                        request_window_start = NULL, request_window_count = 0
+                    WHERE project_uuid = ? AND node_uuid = ?;
+                    """,
                     (now_str, project_uuid, node_uuid)
                 )
                 return cur.rowcount > 0
