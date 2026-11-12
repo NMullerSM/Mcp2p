@@ -141,6 +141,13 @@ class _SignalingClient:
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
 
+        # Esta implementación intercambia una única oferta/respuesta (no hace
+        # trickle ICE candidato por candidato), así que hay que esperar a que
+        # termine la recolección de candidatos ICE antes de leer/enviar
+        # localDescription.sdp, o la oferta llegaría al par sin candidatos.
+        while self.pc.iceGatheringState != "complete":
+            await asyncio.sleep(0.05)
+
         offer_msg: Dict[str, Any] = {
             "type": "offer",
             "rendezvous_id": rendezvous_id,
