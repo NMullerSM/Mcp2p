@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock } from 'lucide-react';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock, ClipboardPaste } from 'lucide-react';
 
 /**
  * Formatea el tiempo restante de un bloqueo de solicitud de unión (`locked_until`,
@@ -31,6 +31,10 @@ export function CollaboratorsView({ project, api }) {
   const [inviteUrl, setInviteUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Ingesta manual (nivel 2) de un código de solicitud de unión pegado por el dueño.
+  const [requestCodeInput, setRequestCodeInput] = useState('');
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestMessage, setIngestMessage] = useState(null); // { type: 'success' | 'error', text }
 
   const loadData = async (isInitial = false) => {
     if (!api || !project) return;
@@ -94,6 +98,45 @@ export function CollaboratorsView({ project, api }) {
       }
     } catch (err) {
       alert("Error removiendo colaborador: " + (err.message || String(err)));
+    }
+  };
+
+  // Hallazgo C1 de la revisión final: sin esto, el dueño no tenía ninguna forma de
+  // ingresar el código de solicitud que JoinRequestPending le pide al solicitante
+  // compartir "fuera de banda", así que el flujo manual (el único que funciona sin
+  // transporte en vivo) nunca llegaba a mostrar una fila pendiente que aprobar. Se pasa
+  // el project_uuid de ESTE proyecto como destino explícito; el backend sigue exigiendo
+  // que coincida con el project_uuid firmado dentro del código.
+  const handleIngestRequestCode = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const code = requestCodeInput.trim();
+    if (!api || !project || !code || ingesting) return;
+    setIngesting(true);
+    setIngestMessage(null);
+    try {
+      const res = await api.ingest_join_request(code, project.project_uuid);
+      if (res?.success) {
+        setRequestCodeInput('');
+        setIngestMessage({
+          type: 'success',
+          text: res.status === 'approved'
+            ? 'Este solicitante ya estaba aprobado en el proyecto.'
+            : 'Solicitud registrada. Revísala abajo para aceptarla o rechazarla.'
+        });
+        await loadData(false);
+      } else if (res?.status === 'locked') {
+        const remaining = formatLockRemaining(res.locked_until);
+        setIngestMessage({
+          type: 'error',
+          text: 'Solicitud bloqueada temporalmente por rechazos previos' + (remaining ? ` (${remaining} restantes).` : '.')
+        });
+      } else {
+        setIngestMessage({ type: 'error', text: res?.error || 'No se pudo registrar el código de solicitud.' });
+      }
+    } catch (err) {
+      setIngestMessage({ type: 'error', text: 'Error de comunicación: ' + (err?.message || String(err)) });
+    } finally {
+      setIngesting(false);
     }
   };
 
@@ -170,6 +213,104 @@ export function CollaboratorsView({ project, api }) {
           {copied ? '¡Enlace Copiado!' : 'Copiar Enlace P2P'}
         </button>
       </div>
+
+      {/* 1b. SECCIÓN INGESTA MANUAL DE CÓDIGO DE SOLICITUD (nivel 2) */}
+      <form
+        onSubmit={handleIngestRequestCode}
+        data-testid="ingest-request-code-form"
+        style={{
+          backgroundColor: 'var(--bg-card)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          padding: '16px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px',
+          boxShadow: 'var(--shadow-sm)'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '38px',
+            height: '38px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--accent-primary)',
+            flexShrink: 0
+          }}>
+            <ClipboardPaste size={18} />
+          </div>
+          <div>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Pegar código de solicitud
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              Si alguien te envió su código de solicitud de unión (por chat, email, etc.), pégalo aquí para revisarlo.
+            </div>
+          </div>
+        </div>
+
+        {ingestMessage && (
+          <div
+            data-testid="ingest-request-code-message"
+            role={ingestMessage.type === 'error' ? 'alert' : 'status'}
+            style={{
+              padding: '8px 10px',
+              borderRadius: 'var(--radius-sm)',
+              fontSize: '12px',
+              backgroundColor: ingestMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'rgba(239, 68, 68, 0.15)',
+              color: ingestMessage.type === 'success' ? 'var(--accent-success)' : 'var(--accent-danger)',
+              border: `1px solid ${ingestMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+            }}
+          >
+            {ingestMessage.text}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            type="text"
+            aria-label="Código de solicitud de unión"
+            placeholder="Pega aquí el código de solicitud"
+            value={requestCodeInput}
+            onChange={(e) => setRequestCodeInput(e.target.value)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: '8px 10px',
+              fontSize: '12px',
+              fontFamily: 'var(--font-mono)',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--bg-subtle)',
+              color: 'var(--text-primary)',
+              outline: 'none'
+            }}
+          />
+          <button
+            type="submit"
+            disabled={ingesting || !requestCodeInput.trim()}
+            style={{
+              padding: '7px 16px',
+              fontSize: '12px',
+              fontWeight: 600,
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              backgroundColor: 'var(--accent-primary)',
+              color: '#ffffff',
+              cursor: ingesting || !requestCodeInput.trim() ? 'not-allowed' : 'pointer',
+              opacity: ingesting || !requestCodeInput.trim() ? 0.6 : 1,
+              whiteSpace: 'nowrap',
+              boxShadow: 'var(--shadow-sm)'
+            }}
+          >
+            {ingesting ? 'Registrando...' : 'Registrar Solicitud'}
+          </button>
+        </div>
+      </form>
 
       {/* 2. SECCIÓN COLABORADORES HUMANOS */}
       <div style={{

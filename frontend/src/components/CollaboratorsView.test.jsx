@@ -16,7 +16,8 @@ function makeApi({ collaborators = [] } = {}) {
       connected_agents: []
     })),
     approve_collaborator: vi.fn(() => Promise.resolve({ success: true })),
-    reject_collaborator: vi.fn(() => Promise.resolve({ success: true }))
+    reject_collaborator: vi.fn(() => Promise.resolve({ success: true })),
+    ingest_join_request: vi.fn(() => Promise.resolve({ success: true, status: 'pending_approval' }))
   };
 }
 
@@ -170,5 +171,88 @@ describe('CollaboratorsView - estado de bloqueo por rate-limit', () => {
 
     await screen.findByText('Aprobado');
     expect(screen.queryByTestId('collab-lock-state')).toBeNull();
+  });
+});
+
+describe('CollaboratorsView - pegar código de solicitud (ingesta manual, nivel 2)', () => {
+  const OWNER_ROW = { node_uuid: 'node_owner', status: 'approved', role: 'owner', node_kind: 'human', locked_until: null };
+  const PENDING_ROW = { node_uuid: 'node_req', github_username: 'requester', status: 'pending_approval', role: 'collaborator', node_kind: 'human', locked_until: null };
+
+  async function renderAndFill(api, code) {
+    render(<CollaboratorsView project={PROJECT} api={api} />);
+    const input = await screen.findByLabelText('Código de solicitud de unión');
+    fireEvent.change(input, { target: { value: code } });
+    return input;
+  }
+
+  it('llama a ingest_join_request con el código y el project_uuid, y refresca la lista mostrando la nueva fila pendiente', async () => {
+    const api = makeApi({ collaborators: [OWNER_ROW] });
+    api.get_project_collaborators
+      .mockResolvedValueOnce({ success: true, collaborators: [OWNER_ROW] })
+      .mockResolvedValue({ success: true, collaborators: [OWNER_ROW, PENDING_ROW] });
+
+    const input = await renderAndFill(api, '  req_code_abc  ');
+    expect(screen.queryByText('Pendiente de Aprobación')).toBeNull();
+
+    fireEvent.click(screen.getByText('Registrar Solicitud'));
+
+    await waitFor(() => expect(api.ingest_join_request).toHaveBeenCalledWith('req_code_abc', 'proj_abc123'));
+    expect(await screen.findByText('Pendiente de Aprobación')).toBeTruthy();
+    expect(screen.getByTitle('Aprobar acceso a este colaborador')).toBeTruthy();
+    expect(api.get_project_collaborators).toHaveBeenCalledTimes(2);
+    expect(input.value).toBe('');
+    const msg = screen.getByTestId('ingest-request-code-message');
+    expect(msg.textContent).toContain('Solicitud registrada');
+  });
+
+  it('muestra el estado de bloqueo cuando el backend responde locked', async () => {
+    const api = makeApi({ collaborators: [OWNER_ROW] });
+    const future = new Date(Date.now() + 29 * 60000).toISOString();
+    api.ingest_join_request = vi.fn(() => Promise.resolve({ success: false, status: 'locked', error: 'bloqueada', locked_until: future }));
+
+    const input = await renderAndFill(api, 'req_code_locked');
+    fireEvent.click(screen.getByText('Registrar Solicitud'));
+
+    const msg = await screen.findByTestId('ingest-request-code-message');
+    expect(msg.textContent).toContain('bloqueada temporalmente');
+    expect(msg.textContent).toContain('29min');
+    // No se limpia el campo ni se registra ninguna fila nueva.
+    expect(input.value).toBe('req_code_locked');
+    expect(screen.queryByText('Pendiente de Aprobación')).toBeNull();
+  });
+
+  it('muestra el error del backend (p. ej. código de otro proyecto) sin refrescar como éxito', async () => {
+    const api = makeApi({ collaborators: [OWNER_ROW] });
+    api.ingest_join_request = vi.fn(() => Promise.resolve({
+      success: false,
+      error: 'El código de solicitud corresponde a un proyecto distinto a este'
+    }));
+
+    await renderAndFill(api, 'req_code_other_project');
+    fireEvent.click(screen.getByText('Registrar Solicitud'));
+
+    const msg = await screen.findByTestId('ingest-request-code-message');
+    expect(msg.textContent).toBe('El código de solicitud corresponde a un proyecto distinto a este');
+    expect(api.get_project_collaborators).toHaveBeenCalledTimes(1);
+  });
+
+  it('muestra un error de comunicación si la llamada lanza', async () => {
+    const api = makeApi({ collaborators: [OWNER_ROW] });
+    api.ingest_join_request = vi.fn(() => Promise.reject(new Error('bridge caído')));
+
+    await renderAndFill(api, 'req_code_x');
+    fireEvent.click(screen.getByText('Registrar Solicitud'));
+
+    const msg = await screen.findByTestId('ingest-request-code-message');
+    expect(msg.textContent).toContain('bridge caído');
+  });
+
+  it('no llama a ingest_join_request con el campo vacío (botón deshabilitado)', async () => {
+    const api = makeApi({ collaborators: [OWNER_ROW] });
+    await renderAndFill(api, '   ');
+    const button = screen.getByText('Registrar Solicitud').closest('button');
+    expect(button.disabled).toBe(true);
+    fireEvent.submit(screen.getByTestId('ingest-request-code-form'));
+    expect(api.ingest_join_request).not.toHaveBeenCalled();
   });
 });
