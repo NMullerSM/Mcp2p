@@ -870,15 +870,33 @@ class ApiBridge:
                     except Exception as push_err:
                         logger.debug(f"Push de trusted_nodes omitido: {push_err}")
 
-            return {"success": True, "invitations": invitations_sent, **({"gov_commit_error": gov_commit_error} if gov_commit_error else {})}
+            result = {"success": True, "invitations": invitations_sent, **({"gov_commit_error": gov_commit_error} if gov_commit_error else {})}
+
+            # Tarea 8: notificación en vivo best-effort al requester (lado receptor ya
+            # cableado en Tarea 9 via _handle_transport_message). Nunca debe afectar el
+            # resultado de esta aprobación: si el transporte no está conectado o falla al
+            # enviar, la aprobación en BD/GitHub/gobernanza ya ocurrió y debe reportarse
+            # como éxito; el requester sigue teniendo el fallback manual ("Reintentar").
+            try:
+                self.transport.send({
+                    "type": "join_decision",
+                    "decision": "approved",
+                    "project_uuid": project_uuid,
+                    "node_uuid": node_uuid,
+                })
+            except Exception as notify_err:
+                logger.debug(f"No se pudo enviar join_decision en vivo: {notify_err}")
+
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def reject_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
-        """Rechaza la solicitud de un colaborador."""
+        """Rechaza la solicitud de un colaborador, registrando el rechazo en el contador de
+        rate-limit (Tarea 1) para que acumule rejection_count/locked_until en vez de limitarse
+        a marcar status='rejected'."""
         try:
-            res = self.db.reject_collaborator(project_uuid, node_uuid)
-            return {"success": res}
+            return self.db.record_rejection(project_uuid, node_uuid)
         except Exception as e:
             return {"success": False, "error": str(e)}
 

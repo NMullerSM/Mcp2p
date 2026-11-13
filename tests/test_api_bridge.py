@@ -985,3 +985,68 @@ def test_handle_transport_message_ignores_malformed_input():
     bridge._handle_transport_message({"type": "join_decision", "decision": "approved"})  # falta project_uuid
     bridge._handle_transport_message(None)  # tipo totalmente inesperado
     bridge._handle_transport_message("not-a-dict")  # tipo totalmente inesperado
+
+
+# --- Tarea 8: rate-limit real y notificación en vivo cableadas en approve/reject ---
+
+def seed_pending_collaborator(bridge, project_uuid, node_uuid, public_key=""):
+    """Crea un proyecto local y una fila pending_approval para node_uuid, sin pasar por el
+    protocolo P2P completo de invitación/join -- estos tests ejercitan approve_collaborator/
+    reject_collaborator en aislamiento, no el flujo de ingesta."""
+    bridge.db.create_project(name=project_uuid, project_uuid=project_uuid)
+    bridge.active_project_uuid = project_uuid
+    bridge.db.add_or_request_collaborator(project_uuid, node_uuid, public_key=public_key)
+
+
+class FakeConnectedTransport:
+    """Doble de P2PTransport que SÍ registra los mensajes enviados (a diferencia de
+    FakeTransport, arriba, cuyo send() siempre devuelve False sin registrar nada) -- para
+    que los tests de notificación en vivo puedan inspeccionar qué se envió realmente."""
+
+    def __init__(self):
+        self.sent = []
+
+    def try_connect(self, peer_rendezvous_id, timeout_s=8.0):
+        return True
+
+    def send(self, message):
+        self.sent.append(message)
+        return True
+
+    def on_message(self, callback):
+        self.registered_callback = callback
+
+    def close(self):
+        return None
+
+
+def test_reject_collaborator_returns_rejection_count_and_lock():
+    bridge = ApiBridge(db_manager=make_test_db())
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+    for i in range(3):
+        res = bridge.reject_collaborator("proj_x", "node_1")
+    assert res["rejection_count"] == 3
+    assert res["locked_until"] is not None
+
+
+def test_approve_collaborator_sends_live_notification_when_transport_connected():
+    fake_transport = FakeConnectedTransport()
+    bridge = ApiBridge(db_manager=make_test_db(), transport=fake_transport)
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+    bridge.approve_collaborator("proj_x", "node_1")
+    assert fake_transport.sent[-1]["type"] == "join_decision"
+    assert fake_transport.sent[-1]["decision"] == "approved"
+
+
+def test_approve_collaborator_does_not_fail_if_transport_send_raises():
+    class ExplodingTransport:
+        def send(self, message):
+            raise RuntimeError("boom")
+
+        def on_message(self, callback):
+            self.registered_callback = callback
+
+    bridge = ApiBridge(db_manager=make_test_db(), transport=ExplodingTransport())
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+    res = bridge.approve_collaborator("proj_x", "node_1")
+    assert res["success"] is True
