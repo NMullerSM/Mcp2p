@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { usePyWebView } from './hooks/usePyWebView';
 import { AppHeader } from './components/AppHeader';
 import { Footer } from './components/Footer';
-import { ProjectsHub } from './components/ProjectsHub';
+import { ProjectsHub, isPendingJoinStub } from './components/ProjectsHub';
 import { ProjectWorkspace } from './components/ProjectWorkspace';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import {
@@ -189,18 +189,43 @@ export default function App() {
         setIsNewTaskOpen(false);
         setIsJoinP2POpen(false);
         setProjectToDelete(null);
-        setPendingJoinRequest(null);
+        if (pendingJoinRequest) {
+          // Igual que "Volver a Proyectos": refrescar la lista para que el stub recién
+          // creado aparezca en el hub (antes Escape dejaba la lista obsoleta).
+          setPendingJoinRequest(null);
+          loadProjects();
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleTheme, activeProject]);
+  }, [toggleTheme, activeProject, pendingJoinRequest, loadProjects]);
 
   // Acciones de Proyecto
   const handleSelectProject = async (proj) => {
+    // Hallazgo C2 de la revisión final: un stub de unión todavía pendiente no tiene
+    // repositorios reales, así que nunca debe abrirse como un espacio de trabajo normal
+    // (allí el botón Sync, las invitaciones, etc. lo tratarían como un proyecto real; el
+    // backend además lo rechaza en select_project). Se muestra la pantalla de espera, con
+    // el código de solicitud regenerado (el original de join_p2p_project no se persiste).
+    if (isPendingJoinStub(proj)) {
+      let requestCode = '';
+      if (api && typeof api.get_pending_join_request_code === 'function') {
+        try {
+          const res = await api.get_pending_join_request_code(proj.project_uuid);
+          if (res?.success) requestCode = res.request_code || '';
+        } catch { /* la pantalla sigue siendo útil para reintentar sin el código */ }
+      }
+      setPendingJoinRequest({ project: proj, requestCode });
+      return;
+    }
     if (api) {
-      await api.select_project(proj.project_uuid);
+      const res = await api.select_project(proj.project_uuid);
+      if (res && res.success === false) {
+        alert("No se pudo abrir el proyecto: " + (res.error || "Error desconocido"));
+        return;
+      }
     }
     setActiveProject(proj);
     setActiveTab('kanban');
@@ -267,7 +292,9 @@ export default function App() {
         return undefined;
       }
       if (res.status === 'still_pending') {
-        return "Todavía pendiente de aprobación por el dueño del proyecto. Inténtalo de nuevo en un momento.";
+        // Hallazgo I2: un rechazo nunca se comunica al solicitante, así que este mismo
+        // estado cubre también una solicitud ya rechazada -- el mensaje debe decirlo.
+        return "Todavía sin aprobación del dueño del proyecto. Si la rechazó, la aplicación no puede saberlo: si esto se prolonga, confírmalo directamente con el dueño. Inténtalo de nuevo en un momento.";
       }
       if (res.status === 'no_remote_repos') {
         // Estado terminal (Tarea 7): el dueño no ha publicado repositorios remotos

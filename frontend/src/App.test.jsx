@@ -85,4 +85,108 @@ describe('App - flujo de unión P2P pendiente', () => {
     await waitFor(() => expect(screen.queryByTestId('join-request-pending')).toBeNull());
     expect(await screen.findByText('Unirse vía P2P')).toBeTruthy();
   });
+
+  it('el mensaje de "todavía pendiente" admite que un rechazo no se notifica (hallazgo I2)', async () => {
+    await renderReadyApp();
+    fireEvent.click(screen.getByText('Unirse vía P2P'));
+    const textarea = await screen.findByPlaceholderText(/mcp2p:\/\/join/);
+    fireEvent.change(textarea, { target: { value: 'mcp2p://join?token=abc' } });
+    fireEvent.click(screen.getByText('Conectar y Desplegar'));
+    await screen.findByTestId('join-request-pending');
+
+    fireEvent.click(screen.getByText('Reintentar'));
+
+    const msg = await screen.findByTestId('join-request-status-message');
+    expect(msg.textContent).toContain('Si la rechazó, la aplicación no puede saberlo');
+  });
+
+  it('Escape en la pantalla de espera vuelve al hub y refresca la lista de proyectos', async () => {
+    const { api } = await renderReadyApp();
+    fireEvent.click(screen.getByText('Unirse vía P2P'));
+    const textarea = await screen.findByPlaceholderText(/mcp2p:\/\/join/);
+    fireEvent.change(textarea, { target: { value: 'mcp2p://join?token=abc' } });
+    fireEvent.click(screen.getByText('Conectar y Desplegar'));
+    await screen.findByTestId('join-request-pending');
+    const callsBefore = api.list_projects.mock.calls.length;
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByTestId('join-request-pending')).toBeNull());
+    await waitFor(() => expect(api.list_projects.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+});
+
+describe('App - stubs de unión pendientes en el hub de proyectos (hallazgo C2)', () => {
+  const NORMAL_PROJECT = {
+    project_uuid: 'proj_normal1',
+    name: 'Proyecto Normal',
+    join_status: 'active',
+    created_at: '2026-11-01T00:00:00+00:00'
+  };
+  const STUB_IN_LIST = { ...PROJECT_STUB, created_at: '2026-11-12T00:00:00+00:00' };
+
+  it('un stub pendiente se distingue en el hub y abre JoinRequestPending (no un espacio de trabajo normal)', async () => {
+    const { api } = await renderReadyApp({
+      list_projects: vi.fn(async () => ({ success: true, projects: [STUB_IN_LIST, NORMAL_PROJECT] })),
+      get_pending_join_request_code: vi.fn(async () => ({ success: true, request_code: 'regenerated_req_code' }))
+    });
+
+    const pendingCard = await screen.findByTestId('project-card-pending');
+    expect(pendingCard.textContent).toContain('Unión pendiente de aprobación');
+    expect(pendingCard.textContent).toContain('Ver Solicitud');
+    expect(pendingCard.textContent).not.toContain('Abrir Espacio');
+
+    fireEvent.click(screen.getByText('Ver Solicitud'));
+
+    expect(await screen.findByTestId('join-request-pending')).toBeTruthy();
+    expect(screen.getByText('regenerated_req_code')).toBeTruthy();
+    expect(api.get_pending_join_request_code).toHaveBeenCalledWith('proj_pending1');
+    // Nunca se selecciona el stub como proyecto activo del backend.
+    expect(api.select_project).not.toHaveBeenCalled();
+  });
+
+  it('el doble clic sobre la tarjeta del stub también abre la pantalla de espera', async () => {
+    const { api } = await renderReadyApp({
+      list_projects: vi.fn(async () => ({ success: true, projects: [STUB_IN_LIST] })),
+      get_pending_join_request_code: vi.fn(async () => ({ success: true, request_code: 'regenerated_req_code' }))
+    });
+
+    fireEvent.doubleClick(await screen.findByTestId('project-card-pending'));
+
+    expect(await screen.findByTestId('join-request-pending')).toBeTruthy();
+    expect(api.select_project).not.toHaveBeenCalled();
+  });
+
+  it('la pantalla de espera sigue abriéndose si no se pudo regenerar el código', async () => {
+    const { api } = await renderReadyApp({
+      list_projects: vi.fn(async () => ({ success: true, projects: [STUB_IN_LIST] })),
+      get_pending_join_request_code: vi.fn(async () => { throw new Error('bridge caído'); })
+    });
+
+    fireEvent.click(await screen.findByText('Ver Solicitud'));
+
+    expect(await screen.findByTestId('join-request-pending')).toBeTruthy();
+    expect(api.select_project).not.toHaveBeenCalled();
+  });
+
+  it('un proyecto normal sigue abriéndose con select_project, no con la pantalla de espera', async () => {
+    const { api } = await renderReadyApp({
+      list_projects: vi.fn(async () => ({ success: true, projects: [NORMAL_PROJECT] })),
+      // Si select_project fallara, App no abre el espacio de trabajo: lo usamos para
+      // observar la decisión de enrutado sin montar todo ProjectWorkspace.
+      select_project: vi.fn(async () => ({ success: false, error: 'detenido en el test' })),
+      get_pending_join_request_code: vi.fn(async () => ({ success: true, request_code: 'x' }))
+    });
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    expect((await screen.findByTestId('project-card')).textContent).toContain('Abrir Espacio');
+    fireEvent.click(screen.getByText('Abrir Espacio'));
+
+    await waitFor(() => expect(api.select_project).toHaveBeenCalledWith('proj_normal1'));
+    expect(api.get_pending_join_request_code).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('join-request-pending')).toBeNull();
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    // Sigue en el hub: no abrió un espacio de trabajo tras un select_project fallido.
+    expect(screen.getByText('Unirse vía P2P')).toBeTruthy();
+  });
 });

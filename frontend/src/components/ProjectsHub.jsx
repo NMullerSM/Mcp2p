@@ -1,5 +1,14 @@
 import React from 'react';
-import { Plus, Link2, Trash2, ArrowRight, FolderKanban } from 'lucide-react';
+import { Plus, Link2, Trash2, ArrowRight, FolderKanban, Clock } from 'lucide-react';
+
+/**
+ * True para un stub de unión P2P todavía no completado (join_status distinto de
+ * 'active'; la columna tiene DEFAULT 'active', así que un valor ausente se trata como un
+ * proyecto normal -- mismo criterio que ApiBridge._is_pending_join_stub en el backend).
+ */
+export function isPendingJoinStub(proj) {
+  return Boolean(proj && proj.join_status && proj.join_status !== 'active');
+}
 
 export function ProjectsHub({ projects, onSelectProject, onNewProject, onJoinP2P, onDeleteProject }) {
   return (
@@ -70,9 +79,12 @@ export function ProjectsHub({ projects, onSelectProject, onNewProject, onJoinP2P
         gap: '18px',
         paddingBottom: '30px'
       }}>
-        {projects.map((proj) => (
+        {projects.map((proj) => {
+          const isPending = isPendingJoinStub(proj);
+          return (
           <div
             key={proj.project_uuid}
+            data-testid={isPending ? 'project-card-pending' : 'project-card'}
             onDoubleClick={() => onSelectProject(proj)}
             style={{
               backgroundColor: 'var(--bg-card)',
@@ -120,6 +132,22 @@ export function ProjectsHub({ projects, onSelectProject, onNewProject, onJoinP2P
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     Creado {new Date(proj.created_at).toLocaleDateString()}
                   </span>
+                  {isPending && (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      marginLeft: '8px',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      color: 'var(--accent-warning)',
+                      backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                      padding: '1px 6px',
+                      borderRadius: 'var(--radius-sm)'
+                    }}>
+                      <Clock size={10} /> Unión pendiente de aprobación
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -181,11 +209,12 @@ export function ProjectsHub({ projects, onSelectProject, onNewProject, onJoinP2P
                   cursor: 'pointer'
                 }}
               >
-                Abrir Espacio <ArrowRight size={13} />
+                {isPending ? 'Ver Solicitud' : 'Abrir Espacio'} <ArrowRight size={13} />
               </button>
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {/* Tarjeta Nuevo Proyecto */}
         <div
