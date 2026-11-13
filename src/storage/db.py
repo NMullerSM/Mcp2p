@@ -1269,6 +1269,52 @@ class DatabaseManager:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_unresolved_or_approved_collaborator_by_pubkey(
+        self, project_uuid: str, public_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Busca, para esta public_key, una fila que ya esté resuelta en sentido positivo --
+        'pending_approval' (ya registrada, aún sin decisión) o 'approved' (ya aceptada) --
+        usada EXCLUSIVAMENTE por la comprobación de idempotencia de
+        ingest_join_request/join_p2p_project (ver api_bridge.py).
+
+        Hallazgo de revisión Task 11 (ronda 3 -- regresión introducida por el propio fix
+        de get_collaborator_by_pubkey en la ronda anterior): esa función ahora ordena a
+        propósito para priorizar la fila con MÁS historial de rechazos -- correcto para
+        get_join_rate_limit_state, pero SI ingest_join_request reutilizara ese mismo
+        resultado para su chequeo de idempotencia, un escenario realista con varias filas
+        bajo la misma public_key (una por dispositivo/node_uuid, por el mecanismo de
+        desambiguación de Tareas 5/6) -- p. ej. una fila 'approved' bajo node_aaa_dev1 y
+        una fila 'rejected' no relacionada bajo node_zzz_dev2 -- haría que
+        get_collaborator_by_pubkey devolviera la fila RECHAZADA (tiene historial de
+        rechazos) en vez de la fila APROBADA real que se busca al reingerir el
+        request_code de node_aaa_dev1, concluyendo erróneamente que la solicitud sigue
+        sin resolver y degradando en silencio la fila ya aprobada -- exactamente la clase
+        de bug de degradación que las Tareas 5/6 arreglaron.
+
+        Esta consulta filtra por status ANTES de ordenar (nunca puede devolver una fila
+        'rejected'), así que es inmune a esa regresión independientemente de cómo
+        get_collaborator_by_pubkey decida ordenar para el rate-limiting. Si más de una
+        fila calificara (approved + pending_approval simultáneos para la misma clave --
+        no debería ocurrir en un flujo real, pero se ordena igualmente de forma
+        determinista por si acaso), se prefiere 'approved' sobre 'pending_approval', y
+        luego la más reciente.
+        """
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT * FROM project_collaborators
+                WHERE project_uuid = ? AND public_key = ? AND status IN ('pending_approval', 'approved')
+                ORDER BY
+                    CASE WHEN status = 'approved' THEN 0 ELSE 1 END ASC,
+                    created_at DESC
+                LIMIT 1;
+                """,
+                (project_uuid, public_key)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def get_join_rate_limit_state(self, project_uuid: str, public_key: str) -> Dict[str, Any]:
         """
         Evalúa si un solicitante (identificado por su clave pública) puede intentar unirse

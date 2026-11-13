@@ -721,14 +721,29 @@ class ApiBridge:
             # por WebRTC como pegado manualmente después), no debe volver a contar contra
             # el límite horario de intentos ni crear una fila duplicada. Se identifica al
             # solicitante por su clave pública persistente (no por node_uuid, que puede
-            # colisionar -- ver más abajo), igual que get_join_rate_limit_state. Cubre
-            # tanto 'pending_approval' (solicitud ya registrada, aún sin decisión) como
-            # 'approved' (p. ej. la solicitud ya llegó en vivo por WebRTC y el dueño ya
-            # decidió, y el mismo request_code llega después por la vía manual): en
-            # ningún caso debe tocarse la fila. Una fila 'rejected' SÍ debe continuar por
-            # el camino normal, para que el rate-limit por rechazos siga aplicando.
-            existing = self.db.get_collaborator_by_pubkey(project_uuid, public_key)
-            if existing is not None and existing.get("status") in ("pending_approval", "approved"):
+            # colisionar -- ver más abajo). Cubre tanto 'pending_approval' (solicitud ya
+            # registrada, aún sin decisión) como 'approved' (p. ej. la solicitud ya llegó
+            # en vivo por WebRTC y el dueño ya decidió, y el mismo request_code llega
+            # después por la vía manual): en ningún caso debe tocarse la fila. Una fila
+            # 'rejected' SÍ debe continuar por el camino normal, para que el rate-limit
+            # por rechazos siga aplicando.
+            #
+            # Importante (hallazgo de revisión Task 11, ronda 3): esto usa
+            # get_unresolved_or_approved_collaborator_by_pubkey -- NO
+            # get_collaborator_by_pubkey (la consulta que usa get_join_rate_limit_state) --
+            # a propósito. get_collaborator_by_pubkey ordena deliberadamente para
+            # priorizar la fila con MÁS historial de rechazos (correcto para el
+            # rate-limiting), así que si esta misma public_key tiene varias filas bajo
+            # distintos node_uuid (una por dispositivo, por la desambiguación de Tareas
+            # 5/6) -- p. ej. una fila 'approved' bajo node_aaa_dev1 y una 'rejected' no
+            # relacionada bajo node_zzz_dev2 -- reutilizar ese resultado aquí devolvería
+            # la fila RECHAZADA en vez de la APROBADA real que se busca al reingerir el
+            # request_code de node_aaa_dev1, concluyendo erróneamente que la solicitud
+            # sigue sin resolver y degradando en silencio la fila ya aprobada. La consulta
+            # dedicada filtra por status ANTES de ordenar, así que nunca puede devolver
+            # una fila 'rejected' aquí.
+            existing = self.db.get_unresolved_or_approved_collaborator_by_pubkey(project_uuid, public_key)
+            if existing is not None:
                 return {"success": True, "status": existing.get("status"), "collaborator": existing}
 
             rate_state = self.db.get_join_rate_limit_state(project_uuid, public_key)

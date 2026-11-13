@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -189,6 +190,107 @@ def test_get_collaborator_by_pubkey_ignores_an_approved_row_in_favor_of_an_unres
     assert row["status"] == "rejected"
 
 
+def _old_two_step_record_rejection(db, project_uuid, node_uuid, pause_event=None, resume_event=None):
+    """
+    Reconstrucción FIEL de la implementación ANTERIOR (previa a la ronda de fix de
+    Task 11) de record_rejection: el UPDATE de status (vía reject_collaborator, que
+    adquiere y LIBERA su propio _write_lock al retornar) y el incremento del contador
+    de rechazos corrían como DOS adquisiciones SEPARADAS de _write_lock, con una
+    ventana real -- sin el lock sostenido -- entre ambas. Existe únicamente para
+    reproducir el bug TOCTOU en un test (ver test_old_two_step_record_rejection_...
+    abajo); NO es código de producción -- la producción (db.record_rejection) ya no
+    tiene esta estructura.
+
+    pause_event/resume_event, si se proveen, pausan la ejecución JUSTO en esa ventana
+    -- después de que reject_collaborator() ya devolvió (lock liberado) y antes de que
+    arranque la segunda transacción -- para que un test pueda forzar deliberadamente
+    una operación concurrente a correr ahí.
+    """
+    now = datetime.now(timezone.utc)
+    now_str = now.isoformat()
+    db.reject_collaborator(project_uuid, node_uuid)
+    if pause_event is not None:
+        pause_event.set()
+        if resume_event is not None:
+            resume_event.wait(timeout=2)
+    with db._write_lock, db.get_connection() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE project_collaborators
+                SET rejection_count = rejection_count + 1, last_rejected_at = ?
+                WHERE project_uuid = ? AND node_uuid = ?;
+                """,
+                (now_str, project_uuid, node_uuid)
+            )
+            row = conn.execute(
+                "SELECT rejection_count, last_rejected_at FROM project_collaborators "
+                "WHERE project_uuid = ? AND node_uuid = ?;",
+                (project_uuid, node_uuid)
+            ).fetchone()
+    return dict(row) if row else None
+
+
+def test_old_two_step_record_rejection_is_vulnerable_to_concurrent_rerequest_demotion(tmp_path):
+    """
+    Review finding (test-quality, Task 11 fix round 2): the previous version of this
+    test paused INSIDE the status-update SQL execute() call, which -- for BOTH the old
+    two-step structure and the new merged one -- happens while the enclosing `with
+    self._write_lock:` block is still active (Python doesn't exit a `with` block until
+    the paused statement inside it returns). So that pause point never actually opened
+    the lock-released gap the old bug depended on, and the test passed against a
+    reconstructed old implementation too -- a false sense of coverage.
+
+    This test fixes that: `_old_two_step_record_rejection` pauses via an explicit
+    Python-level hook placed AFTER reject_collaborator() has fully returned (and so
+    genuinely released _write_lock) and BEFORE the second transaction acquires it
+    again -- the literal historical gap. It proves the bug reproduces: with the lock
+    truly free during the pause, a concurrent add_or_request_collaborator for the same
+    node_uuid runs to completion immediately (not blocked), re-inserting the row as
+    'pending_approval' before the counter increment lands on top of it -- silently
+    undoing the owner's rejection.
+    """
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    db.create_project(name="p", project_uuid="proj_x", init_git=False)
+    db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1", status="pending_approval")
+
+    paused = threading.Event()
+    resume = threading.Event()
+    result = {}
+
+    def do_old_rejection():
+        result["row"] = _old_two_step_record_rejection(db, "proj_x", "node_1", paused, resume)
+
+    rejecter = threading.Thread(target=do_old_rejection)
+    rejecter.start()
+    assert paused.wait(timeout=2), "old-style record_rejection never reached its pause point"
+
+    rerequest_done = threading.Event()
+
+    def do_rerequest():
+        db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1", status="pending_approval")
+        rerequest_done.set()
+
+    rerequester = threading.Thread(target=do_rerequest)
+    rerequester.start()
+    # The whole point: with the OLD structure, _write_lock is genuinely free during this
+    # pause, so the concurrent re-request is NOT blocked -- it must complete promptly.
+    assert rerequest_done.wait(timeout=2), (
+        "the concurrent re-request was blocked -- this reconstruction no longer "
+        "reproduces the historical released-lock gap"
+    )
+
+    resume.set()
+    rejecter.join(timeout=2)
+    rerequester.join(timeout=2)
+
+    row = db.get_collaborator("proj_x", "node_1")
+    # The bug: the owner's rejection is silently lost -- status ends up back at
+    # 'pending_approval' even though the rejection counter DID get incremented.
+    assert row["status"] == "pending_approval"
+    assert row["rejection_count"] == 1
+
+
 def test_record_rejection_is_atomic_against_a_concurrent_rerequest(tmp_path, monkeypatch):
     """
     Review finding (TOCTOU, Task 11 fix round): record_rejection used to perform the
@@ -197,14 +299,19 @@ def test_record_rejection_is_atomic_against_a_concurrent_rerequest(tmp_path, mon
     acquisitions. A concurrent add_or_request_collaborator landing in the gap between
     them (e.g. a live join_request arriving over the P2P transport) could flip the row
     back to 'pending_approval' while the counter still held its PRE-increment value,
-    silently undoing the owner's rejection.
+    silently undoing the owner's rejection -- reproduced directly, against a faithful
+    reconstruction of that old structure, by
+    test_old_two_step_record_rejection_is_vulnerable_to_concurrent_rerequest_demotion
+    above.
 
-    This test forces exactly that interleaving attempt: it pauses record_rejection
-    immediately after its status-update statement (simulating the old gap) and, while
-    paused, starts a concurrent add_or_request_collaborator for the same node_uuid.
-    With the fix (both statements under one unbroken _write_lock acquisition), that
-    concurrent call must BLOCK until record_rejection's entire transaction completes,
-    never observing or writing the intermediate state.
+    This test exercises the REAL, fixed record_rejection and proves the gap is closed:
+    it pauses mid-transaction, immediately after the status-update statement executes
+    but still inside the single unbroken _write_lock acquisition that now wraps both
+    statements, and, while paused, starts a concurrent add_or_request_collaborator for
+    the same node_uuid. That concurrent call must BLOCK (unlike the paired old-code
+    test above, where the equivalent operation completes immediately) until
+    record_rejection's entire transaction completes, never observing or writing the
+    intermediate state.
     """
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
     db.create_project(name="p", project_uuid="proj_x", init_git=False)
@@ -270,3 +377,50 @@ def test_record_rejection_is_atomic_against_a_concurrent_rerequest(tmp_path, mon
     row = db.get_collaborator("proj_x", "node_1")
     assert row["status"] == "pending_approval"
     assert row["rejection_count"] == 1
+
+
+def test_record_rejection_opens_exactly_one_connection_per_call(tmp_path):
+    """
+    Deterministic, non-timing-dependent structural regression guard, complementing the
+    two threading tests above (which rely on real thread scheduling and a specific
+    pause point). The fixed record_rejection wraps its status-update and
+    rejection-counter-increment statements in a SINGLE `with self._write_lock,
+    self.get_connection() as conn:` block -- i.e. exactly one get_connection() /
+    _write_lock acquisition per call. The old, vulnerable two-step structure called
+    get_connection() TWICE per call (once inside the nested reject_collaborator(),
+    once in record_rejection's own second block) -- that second, independent
+    acquisition is exactly what let a concurrent write land in between. This test
+    fails immediately, with no race window needed, if record_rejection is ever
+    restructured back into two separate acquisitions -- verified empirically below by
+    running the identical assertion against a reconstruction of the old structure.
+    """
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    db.create_project(name="p", project_uuid="proj_x", init_git=False)
+    db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1", status="pending_approval")
+
+    with patch.object(db, "get_connection", wraps=db.get_connection) as spy:
+        db.record_rejection("proj_x", "node_1")
+        assert spy.call_count == 1, (
+            f"record_rejection opened {spy.call_count} connections/_write_lock "
+            "acquisitions, not 1 -- the status-update and counter-increment are no "
+            "longer a single atomic transaction, reopening the TOCTOU gap"
+        )
+
+
+def test_old_two_step_record_rejection_opens_two_connections_per_call(tmp_path):
+    """
+    Proof, demanded by the Task 11 review, that the assertion in
+    test_record_rejection_opens_exactly_one_connection_per_call above actually
+    DISTINGUISHES the fixed structure from the vulnerable one -- run against
+    _old_two_step_record_rejection (the faithful reconstruction of the pre-fix
+    implementation), the identical spy-based assertion observes 2 connections, not 1.
+    If someone reverted db.record_rejection to this structure, the other test would
+    fail with exactly this count.
+    """
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    db.create_project(name="p", project_uuid="proj_x", init_git=False)
+    db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1", status="pending_approval")
+
+    with patch.object(db, "get_connection", wraps=db.get_connection) as spy:
+        _old_two_step_record_rejection(db, "proj_x", "node_1")
+        assert spy.call_count == 2

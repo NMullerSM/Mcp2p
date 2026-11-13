@@ -591,6 +591,62 @@ def test_ingest_join_request_does_not_demote_an_already_approved_collaborator():
     assert row_after["node_uuid"] == row_before["node_uuid"]
 
 
+def test_ingest_join_request_does_not_demote_approved_row_when_same_pubkey_has_an_unrelated_rejected_row():
+    """
+    Review finding (Task 11, ronda 3): get_collaborator_by_pubkey's deterministic
+    ORDER BY (added earlier in this fix round to stop rejection history from being
+    hidden behind a clean duplicate row -- correct for get_join_rate_limit_state)
+    introduced a REGRESSION in ingest_join_request's idempotency check if it reused
+    that same query: a single public key can legitimately span multiple rows under
+    different node_uuid values (one per device, per Tareas 5/6's disambiguation
+    mechanism). Here PK ends up with an 'approved' row under node_A (rejection_count
+    reset to 0 by approve_collaborator) AND an unrelated 'rejected' row under node_B
+    (rejection_count=1). get_collaborator_by_pubkey's rejection-history-prioritizing
+    ordering would return node_B (it has rejection history) instead of node_A (the
+    real target of this request_code) -- so re-ingesting node_A's own request_code
+    would wrongly conclude "unresolved" and silently demote the already-approved
+    node_A row back to pending_approval. ingest_join_request must use the separate
+    get_unresolved_or_approved_collaborator_by_pubkey query instead, which filters by
+    status BEFORE ordering and so can never return node_B's rejected row here.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    p_uuid = invite_project_uuid(invite)
+    bridge_owner.active_project_uuid = p_uuid
+
+    first = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert first["success"] is True
+    node_a = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    assert bridge_owner.db.approve_collaborator(p_uuid, node_a) is True
+
+    public_key = bridge_joiner.crypto.public_key_base64
+    # An unrelated rejected row for the SAME public key, under a DIFFERENT node_uuid --
+    # reachable in reality via the same "retry from a different device" path exercised
+    # by test_get_collaborator_by_pubkey_prefers_row_with_rejection_history_over_a_clean_duplicate
+    # in tests/test_join_rate_limit.py.
+    bridge_owner.db.add_or_request_collaborator(p_uuid, "node_B_other_device", public_key=public_key, status="pending_approval")
+    bridge_owner.db.record_rejection(p_uuid, "node_B_other_device")
+
+    # Sanity check reproducing the regression's precondition: the rate-limiting lookup
+    # (unchanged, intentionally) now does return the rejected row, not the approved one.
+    rate_lookup_row = bridge_owner.db.get_collaborator_by_pubkey(p_uuid, public_key)
+    assert rate_lookup_row["node_uuid"] == "node_B_other_device"
+    assert rate_lookup_row["status"] == "rejected"
+
+    # Re-ingesting node_A's own request_code must still recognize it as already
+    # approved and must NOT touch node_A's row.
+    second = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert second["success"] is True
+    assert second["status"] == "approved"
+
+    node_a_row = bridge_owner.db.get_collaborator(p_uuid, node_a)
+    assert node_a_row["status"] == "approved"
+    node_b_row = bridge_owner.db.get_collaborator(p_uuid, "node_B_other_device")
+    assert node_b_row["status"] == "rejected"
+    assert node_b_row["rejection_count"] == 1
+
+
 def test_ingest_join_request_disambiguates_collision_with_legacy_empty_pubkey_row():
     """
     Review finding (Critical #2): la desambiguación de node_uuid solo disparaba cuando la
