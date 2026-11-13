@@ -11,6 +11,7 @@ import {
   JoinP2PModal,
   DeleteProjectModal
 } from './components/Modals';
+import { JoinRequestPending } from './components/JoinRequestPending';
 import { APP_VERSION } from './version';
 import { UpdateNotificationPill } from './components/UpdateNotificationPill';
 import { UpdateModal } from './components/UpdateModal';
@@ -49,6 +50,7 @@ export default function App() {
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
+  const [pendingJoinRequest, setPendingJoinRequest] = useState(null); // { project, requestCode }
   const [projectToDelete, setProjectToDelete] = useState(null);
   const [taskTrigger, setTaskTrigger] = useState(0);
 
@@ -224,17 +226,60 @@ export default function App() {
     if (!api) return;
     try {
       const res = await api.join_p2p_project(inviteStr);
-      if (res.success) {
+      if (res.success && res.status === 'pending_approval') {
+        // Nuevo flujo HITL (Tarea 5): el stub del proyecto ya existe localmente, pero
+        // nada se clonó todavía -- queda a la espera de que el dueño apruebe al
+        // colaborador. Mostramos la pantalla de espera en vez del alert() de éxito.
+        setIsJoinP2POpen(false);
+        setPendingJoinRequest({ project: res.project, requestCode: res.request_code });
+      } else if (res.success) {
+        // El proyecto ya estaba registrado localmente (p. ej. una unión anterior ya
+        // aprobada y clonada): reactivar el contexto normalmente.
         setIsJoinP2POpen(false);
         await loadProjects();
         setActiveProject(res.project);
         setActiveTab('kanban');
         alert(res.message || "¡Conectado exitosamente!");
+      } else if (res.status === 'locked') {
+        const until = res.locked_until ? ` (hasta ${res.locked_until})` : '';
+        alert("Solicitud de unión bloqueada temporalmente por rechazos previos" + until + ".");
       } else {
         alert("Error al unirse: " + res.error);
       }
     } catch (e) {
       alert("Error de comunicación: " + e);
+    }
+  };
+
+  const handleRetryJoinRequest = async () => {
+    if (!api || !pendingJoinRequest?.project?.project_uuid) return;
+    try {
+      const res = await api.check_join_request_status(pendingJoinRequest.project.project_uuid);
+      if (res.success && (res.status === 'active' || res.status === 'already_active')) {
+        // La unión se completó (el dueño aprobó y el clonado terminó, o ya estaba
+        // activa de un reintento anterior): proceder exactamente como el flujo de
+        // éxito existente.
+        setPendingJoinRequest(null);
+        await loadProjects();
+        setActiveProject(res.project);
+        setActiveTab('kanban');
+        return undefined;
+      }
+      if (res.status === 'still_pending') {
+        return "Todavía pendiente de aprobación por el dueño del proyecto. Inténtalo de nuevo en un momento.";
+      }
+      if (res.status === 'no_remote_repos') {
+        // Estado terminal (Tarea 7): el dueño no ha publicado repositorios remotos
+        // todavía. Reintentar no lo resuelve, así que el mensaje no debe sugerirlo.
+        return "El dueño del proyecto todavía no ha publicado sus repositorios remotos. No hay nada que clonar todavía; espera a que el dueño comparta los repositorios.";
+      }
+      if (res.status === 'locked') {
+        const until = res.locked_until ? ` (hasta ${res.locked_until})` : '';
+        return "Solicitud de unión bloqueada temporalmente por rechazos previos" + until + ".";
+      }
+      return res.error || "No se pudo completar la unión. Inténtalo de nuevo más tarde.";
+    } catch (e) {
+      return "Error de comunicación: " + e;
     }
   };
 
@@ -301,7 +346,13 @@ export default function App() {
 
       {/* Main View Area */}
       <main style={{ flex: 1, overflow: 'hidden', position: 'relative', display: 'flex', minHeight: 0, minWidth: 0 }}>
-        {activeProject ? (
+        {pendingJoinRequest ? (
+          <JoinRequestPending
+            project={pendingJoinRequest.project}
+            requestCode={pendingJoinRequest.requestCode}
+            onRetry={handleRetryJoinRequest}
+          />
+        ) : activeProject ? (
           <ProjectWorkspace
             project={activeProject}
             activeTab={activeTab}
