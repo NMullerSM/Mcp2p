@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Clock, Copy, Check, RefreshCw } from 'lucide-react';
+import { Clock, Copy, Check, RefreshCw, ArrowLeft } from 'lucide-react';
 
 /**
  * Pantalla mostrada al SOLICITANTE justo después de que `join_p2p_project` devuelva
@@ -9,11 +9,18 @@ import { Clock, Copy, Check, RefreshCw } from 'lucide-react';
  * `onRetry` es provisto por App.jsx y encapsula la llamada a
  * `api.check_join_request_status(project.project_uuid)` (Tarea 7): cuando esa unión
  * ya se completó, App.jsx navega fuera de esta pantalla directamente (no hay nada que
- * mostrar aquí). En cualquier otro caso (`still_pending`, `no_remote_repos`, `locked`,
- * o un error genérico), App.jsx resuelve la promesa con un mensaje de texto ya listo
- * para el usuario, que esta pantalla simplemente renderiza.
+ * mostrar aquí). En cualquier otro caso (`still_pending`, `no_remote_repos`, o un
+ * error genérico -- nótese que `check_join_request_status` nunca devuelve realmente
+ * `"locked"`, ver api_bridge.py), App.jsx resuelve la promesa con un mensaje de texto
+ * ya listo para el usuario, que esta pantalla simplemente renderiza.
+ *
+ * `onBack` es la única forma de abandonar esta pantalla sin una unión exitosa (p. ej.
+ * el caso terminal `no_remote_repos`, que por diseño nunca se resuelve reintentando):
+ * App.jsx la conecta a la misma lógica de "volver a proyectos" que ya usa el resto de
+ * la app. No afecta nada en el backend -- el stub del proyecto ya quedó persistido en
+ * `join_p2p_project` independientemente de que esta pantalla se muestre o no.
  */
-export function JoinRequestPending({ project, requestCode, onRetry }) {
+export function JoinRequestPending({ project, requestCode, onRetry, onBack }) {
   const [copied, setCopied] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -61,6 +68,27 @@ export function JoinRequestPending({ project, requestCode, onRetry }) {
         gap: '16px',
         boxShadow: 'var(--shadow-sm)'
       }}>
+        {onBack && (
+          <button
+            onClick={onBack}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              alignSelf: 'flex-start',
+              padding: '5px 0',
+              fontSize: '12px',
+              fontWeight: 500,
+              border: 'none',
+              background: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer'
+            }}
+          >
+            <ArrowLeft size={14} /> Volver a Proyectos
+          </button>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{
             width: '38px',

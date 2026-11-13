@@ -189,6 +189,7 @@ export default function App() {
         setIsNewTaskOpen(false);
         setIsJoinP2POpen(false);
         setProjectToDelete(null);
+        setPendingJoinRequest(null);
       }
     };
 
@@ -283,6 +284,19 @@ export default function App() {
     }
   };
 
+  const handleCancelPendingJoin = () => {
+    // El stub del proyecto (join_status='pending_approval', o 'no_remote_repos' en la
+    // práctica si el dueño nunca publicó repositorios) ya quedó persistido en
+    // join_p2p_project independientemente de que esta pantalla esté visible o no -- es
+    // la misma fila que sobreviviría a un reinicio de la app. Salir de esta pantalla no
+    // es una operación destructiva ni deja nada "a medio registrar": solo deja de
+    // mostrar la pantalla de espera y refresca la lista para que el stub aparezca en
+    // el hub de proyectos (desde donde, si hiciera falta, se puede reintentar la unión
+    // más adelante vía CollaboratorsView/retry_p2p_join).
+    setPendingJoinRequest(null);
+    loadProjects();
+  };
+
   const handleDeleteProject = async () => {
     if (!api || !projectToDelete) return;
     try {
@@ -351,6 +365,7 @@ export default function App() {
             project={pendingJoinRequest.project}
             requestCode={pendingJoinRequest.requestCode}
             onRetry={handleRetryJoinRequest}
+            onBack={handleCancelPendingJoin}
           />
         ) : activeProject ? (
           <ProjectWorkspace
