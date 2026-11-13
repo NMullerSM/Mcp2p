@@ -77,10 +77,27 @@ class _SignalingClient:
             self._start_loop()
             assert self._loop is not None
             future = asyncio.run_coroutine_threadsafe(self._negotiate(rendezvous_id, timeout_s), self._loop)
-            return bool(future.result(timeout=timeout_s))
+            try:
+                result = bool(future.result(timeout=timeout_s))
+            except Exception as exc:
+                logger.debug(f"Negociación WebRTC falló o excedió el tiempo de espera: {exc}")
+                result = False
+            if not result:
+                # Tanto si `_negotiate` lanzó/expiró como si retornó False de
+                # forma limpia (p. ej. una respuesta de señalización inválida),
+                # no queda ninguna conexión que mantener viva. `future.cancel()`
+                # cancela la Task de negociación en curso incluso entre hilos
+                # (run_coroutine_threadsafe encadena el cancel() del future
+                # concurrente al cancel() real de la Task vía _chain_future),
+                # y `close()` libera el pc y detiene el loop/hilo de fondo —
+                # sin esto, el hilo quedaría corriendo `run_forever()` para
+                # siempre y cualquier socket/tarea en curso quedaría colgado.
+                future.cancel()
+                self.close()
+            return result
         except Exception as exc:
             logger.debug(f"Señalización WebRTC falló: {exc}")
-            self._stop_loop()
+            self.close()
             return False
 
     def send_data(self, data: str) -> bool:
