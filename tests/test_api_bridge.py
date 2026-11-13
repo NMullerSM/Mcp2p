@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from src.storage.db import DatabaseManager
 from src.app.api_bridge import ApiBridge
+from conftest import make_test_db
 
 
 @pytest.fixture
@@ -16,13 +17,6 @@ def bridge():
         db = DatabaseManager(str(db_path))
         bridge_instance = ApiBridge(db_manager=db)
         yield bridge_instance
-
-
-def make_test_db() -> DatabaseManager:
-    """Crea una base de datos SQLite temporal y aislada para pruebas puntuales."""
-    tmpdir = tempfile.mkdtemp()
-    db_path = Path(tmpdir) / "test_bridge_helper.db"
-    return DatabaseManager(str(db_path))
 
 
 def test_api_bridge_system_info(bridge):
