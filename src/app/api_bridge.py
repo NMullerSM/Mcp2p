@@ -136,7 +136,8 @@ class ApiBridge:
                 name=name.strip(),
                 code_repo_url=code_repo_url,
                 gov_repo_url=gov_repo_url,
-                reviewer_sla_hours=reviewer_sla_hours
+                reviewer_sla_hours=reviewer_sla_hours,
+                owner_public_key=self.crypto.public_key_base64
             )
             self.active_project_uuid = proj["project_uuid"]
 
@@ -298,6 +299,13 @@ class ApiBridge:
                 clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
                 short_id = p_uuid.replace("proj_", "")[:8]
                 base_dir = self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
+                # Persistir las URLs de los repositorios remotos (si vienen en la invitación)
+                # aunque todavía no se clone nada: Task 7's retry_p2p_join las necesitará para
+                # clonar tras la aprobación, y no hay ningún otro lugar donde queden guardadas
+                # (el token de invitación original no se persiste, y ni request_code ni el
+                # futuro join_decision las transportan).
+                code_url = payload.get("code_repo_url", "").strip()
+                gov_url = payload.get("gov_repo_url", "").strip()
                 with self.db._write_lock, self.db.get_connection() as conn:
                     with conn:
                         conn.execute(
@@ -306,9 +314,9 @@ class ApiBridge:
                                 project_uuid, name, base_path, code_repo_path, gov_repo_path,
                                 code_repo_url, gov_repo_url, default_sla_hours, join_status,
                                 created_at, updated_at
-                            ) VALUES (?, ?, ?, '', '', '', '', ?, 'pending_approval', ?, ?);
+                            ) VALUES (?, ?, ?, '', '', ?, ?, ?, 'pending_approval', ?, ?);
                             """,
-                            (p_uuid, p_name, str(base_dir), p_sla, now_str, now_str)
+                            (p_uuid, p_name, str(base_dir), code_url, gov_url, p_sla, now_str, now_str)
                         )
                 existing = self.db.get_project_by_uuid(p_uuid)
 

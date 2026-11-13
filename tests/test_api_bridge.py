@@ -345,3 +345,65 @@ def test_join_blocked_by_rate_limit_returns_locked_status():
     res2 = bridge_joiner.join_p2p_project(invite)
     assert res2["success"] is False
     assert res2["status"] == "locked"
+
+
+def test_join_stub_persists_invite_repo_urls_without_cloning():
+    """
+    Review finding (Important #1): la fila stub de proyecto debe conservar las URLs de
+    repos remotos de la invitación -- solo las RUTAS locales (code_repo_path/gov_repo_path)
+    deben quedar vacías, ya que nadie más persiste esas URLs (ni el token original, ni
+    request_code) y Task 7's retry_p2p_join las necesitará para clonar tras la aprobación.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+    with bridge_owner.db._write_lock, bridge_owner.db.get_connection() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE projects SET code_repo_url = ?, gov_repo_url = ? WHERE project_uuid = ?;",
+                ("https://github.com/owner/app.git", "https://github.com/owner/gov.git", p_uuid)
+            )
+
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    res = bridge_joiner.join_p2p_project(invite)
+    assert res["success"] is True
+
+    stub = bridge_joiner.db.get_project_by_uuid(res["project"]["project_uuid"])
+    assert stub["code_repo_url"] == "https://github.com/owner/app.git"
+    assert stub["gov_repo_url"] == "https://github.com/owner/gov.git"
+    assert stub["code_repo_path"] == ""
+    assert stub["gov_repo_path"] == ""
+
+
+def test_owner_collaborator_row_keeps_real_pubkey_and_guards_against_collision():
+    """
+    Review finding (Important #2): db.create_project() nunca registraba la clave pública
+    real del dueño en su propia fila de colaborador (quedaba vacía), por lo que una
+    solicitud de unión posterior que reutilizara por casualidad el mismo node_uuid por
+    defecto (derivado del hostname -- exactamente el escenario que two_linked_bridges()
+    expone al correr ambos nodos en el mismo host) podía sobrescribir/degradar la fila del
+    dueño sin ningún error. Con la clave real persistida, el guard de colisión de
+    add_or_request_collaborator (Tarea 1) debe disparar un ValueError ruidoso en ese caso,
+    en lugar de una degradación silenciosa.
+    """
+    bridge_owner, _ = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+    owner_node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+
+    owner_row = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
+    assert owner_row is not None
+    assert owner_row["public_key"] == bridge_owner.crypto.public_key_base64
+    assert owner_row["public_key"] != ""
+    assert owner_row["status"] == "approved"
+
+    with pytest.raises(ValueError):
+        bridge_owner.db.add_or_request_collaborator(
+            project_uuid=p_uuid,
+            node_uuid=owner_node_uuid,
+            public_key="some_other_requester_pubkey_different_from_owner",
+            status="pending_approval"
+        )
+
+    # La fila del dueño no debe haber sido alterada por el intento rechazado.
+    owner_row_after = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
+    assert owner_row_after["public_key"] == bridge_owner.crypto.public_key_base64
+    assert owner_row_after["status"] == "approved"
