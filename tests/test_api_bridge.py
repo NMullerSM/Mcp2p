@@ -791,9 +791,156 @@ def test_retry_is_idempotent_against_already_active_project():
 
 # --- Tarea 9: cableado del transporte en __init__ y despacho de mensajes en vivo ---
 
+class FakeTransport:
+    """Doble mínimo de P2PTransport (no hereda de la ABC a propósito: solo necesita
+    exponer on_message para que los tests puedan observar, de forma directa, QUÉ callback
+    quedó registrado -- en lugar de inferirlo indirectamente disparando un mensaje real).
+    Review Focus (hallazgo Importante #1): sin un test que capture el callback mismo, se
+    podría borrar la línea `self.transport.on_message(self._handle_transport_message)` (o
+    la re-registro en set_transport) y los 41 tests existentes seguirían en verde --
+    porque todos ellos llaman a _handle_transport_message directamente, nunca a través de
+    un transporte inyectado."""
+
+    def __init__(self):
+        self.registered_callback = None
+
+    def try_connect(self, peer_rendezvous_id, timeout_s=8.0):
+        return False
+
+    def send(self, message):
+        return False
+
+    def on_message(self, callback):
+        self.registered_callback = callback
+
+    def close(self):
+        return None
+
+
 def test_api_bridge_defaults_to_null_transport_when_none_given():
     bridge = ApiBridge(db_manager=make_test_db())
     assert isinstance(bridge.transport, NullTransportAdapter)
+
+
+def test_init_registers_handle_transport_message_on_injected_transport():
+    """Hallazgo Importante #1: verifica el MECANISMO exacto, no solo su efecto indirecto
+    -- que ApiBridge.__init__ efectivamente llama a on_message(self._handle_transport_message)
+    sobre el transporte inyectado, capturando el callback registrado y comprobando que
+    invocarlo llega al mismo despacho que _handle_transport_message."""
+    fake = FakeTransport()
+    bridge = ApiBridge(db_manager=make_test_db(), transport=fake)
+
+    assert fake.registered_callback is not None
+    assert fake.registered_callback == bridge._handle_transport_message
+
+    # Comprobación comportamental adicional: invocar el callback capturado debe llegar
+    # exactamente al mismo despacho que llamar a _handle_transport_message directamente.
+    bridge.active_project_uuid = "proj_cb"
+    bridge.db.create_project(name="p", project_uuid="proj_cb")
+    invite = bridge.generate_p2p_invite("proj_cb")["token"]
+    joiner = ApiBridge(db_manager=make_test_db())
+    join_res = joiner.join_p2p_project(invite)
+    fake.registered_callback({"type": "join_request", "request_code": join_res["request_code"]})
+    collabs = bridge.db.get_project_collaborators("proj_cb")
+    assert any(c["status"] == "pending_approval" for c in collabs)
+
+
+def test_set_transport_reregisters_handle_transport_message_on_new_transport(monkeypatch):
+    """Hallazgo Importante #1: verifica que set_transport no deja el callback huérfano en
+    el transporte VIEJO (fake1) ni ausente en el NUEVO (fake2) -- debe quedar registrado en
+    fake2, y disparar fake2's callback debe seguir llegando al despacho real."""
+    fake1 = FakeTransport()
+    fake2 = FakeTransport()
+    bridge = ApiBridge(db_manager=make_test_db(), transport=fake1)
+    assert fake1.registered_callback == bridge._handle_transport_message
+
+    bridge.set_transport(fake2)
+
+    assert bridge.transport is fake2
+    assert fake2.registered_callback == bridge._handle_transport_message
+
+    calls = []
+    monkeypatch.setattr(bridge, "retry_p2p_join", lambda project_uuid: calls.append(project_uuid))
+    # Disparar el callback capturado en fake2 (el transporte NUEVO) debe llegar al
+    # despacho real de join_decision -- confirmando que la re-registro ocurrió de verdad,
+    # no solo que el atributo bridge.transport cambió.
+    fake2.registered_callback({"type": "join_decision", "decision": "approved", "project_uuid": "proj_y"})
+    assert calls == ["proj_y"]
+
+
+def test_get_retry_lock_is_stable_per_project_and_distinct_across_projects():
+    """La clave de serialización es el project_uuid: la misma clave debe devolver siempre
+    el MISMO objeto Lock (para que dos hilos distintos de verdad se bloqueen entre sí), y
+    proyectos distintos deben obtener locks distintos (para no serializar innecesariamente
+    retries de proyectos sin relación)."""
+    bridge = ApiBridge(db_manager=make_test_db())
+    lock_a1 = bridge._get_retry_lock("proj_a")
+    lock_a2 = bridge._get_retry_lock("proj_a")
+    lock_b = bridge._get_retry_lock("proj_b")
+    assert lock_a1 is lock_a2
+    assert lock_a1 is not lock_b
+
+
+def test_retry_p2p_join_serializes_concurrent_calls_for_same_project(monkeypatch):
+    """Hallazgo Importante #2 de revisión: una llamada en vivo (que llegaría vía
+    _handle_transport_message, en el hilo del transporte/event-loop WebRTC) y una llamada
+    manual simultánea (botón "Reintentar" o el polling de check_join_request_status, en el
+    hilo de la UI) para el MISMO project_uuid nunca deben ejecutar el cuerpo real de
+    retry_p2p_join (_do_retry_p2p_join) al mismo tiempo. Sin el lock por-proyecto, la
+    segunda llamada podría observar el `.git` parcial que `git clone` crea muy temprano,
+    tratarlo como "ya clonado", y reconciliar OKF / marcar 'active' sobre un checkout
+    incompleto -- la race descrita en la revisión. Se usan threading.Event (no sleeps) para
+    que el test sea determinista: la primera llamada señala que ya entró y queda bloqueada
+    hasta que el test la libera; mientras tanto se lanza la segunda y se comprueba que NO
+    logra entrar en esa ventana."""
+    import threading
+
+    bridge = ApiBridge(db_manager=make_test_db())
+
+    entered = threading.Event()
+    release = threading.Event()
+    counter_lock = threading.Lock()
+    state = {"inside": 0, "overlap": False}
+
+    def fake_body(project_uuid):
+        with counter_lock:
+            state["inside"] += 1
+            if state["inside"] > 1:
+                state["overlap"] = True
+        entered.set()
+        release.wait(timeout=5)
+        with counter_lock:
+            state["inside"] -= 1
+        return {"success": True, "status": "active", "project": {}}
+
+    monkeypatch.setattr(bridge, "_do_retry_p2p_join", fake_body)
+
+    results = []
+
+    def call_once():
+        results.append(bridge.retry_p2p_join("proj_same"))
+
+    t1 = threading.Thread(target=call_once)
+    t1.start()
+    assert entered.wait(timeout=5), "la primera llamada nunca entró a la sección crítica"
+    entered.clear()
+
+    t2 = threading.Thread(target=call_once)
+    t2.start()
+    # Darle a la segunda llamada toda oportunidad de "colarse" si el lock no existiera.
+    entered_in_time = entered.wait(timeout=0.3)
+    assert not entered_in_time, (
+        "la segunda llamada concurrente para el MISMO project_uuid entró a la sección "
+        "crítica antes de que la primera liberase su lock"
+    )
+
+    release.set()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert not state["overlap"], "ambas llamadas estuvieron dentro de _do_retry_p2p_join simultáneamente"
+    assert len(results) == 2
+    assert all(r["status"] == "active" for r in results)
 
 
 def test_incoming_join_request_message_is_ingested():

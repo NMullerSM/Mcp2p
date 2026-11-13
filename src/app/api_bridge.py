@@ -17,6 +17,7 @@ import re
 import secrets
 import subprocess
 import sys
+import threading
 import urllib.parse
 import yaml
 from datetime import datetime, timezone
@@ -51,10 +52,33 @@ class ApiBridge:
         self.github = GitHubSyncManager(db_manager=self.db)
         self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
         self._window: Optional[Any] = None
+        # Tarea 9, hallazgo Importante #2 de revisión: registro de locks por project_uuid
+        # para serializar retry_p2p_join. Sin esto, una llamada en vivo disparada por
+        # _handle_transport_message (hilo del transporte/event-loop WebRTC) y una llamada
+        # manual simultánea desde la UI (botón "Reintentar" o el polling de
+        # check_join_request_status) para el MISMO project_uuid pueden entrelazarse: `git
+        # clone` crea `<dir>/.git` muy temprano, así que la segunda llamada puede ver ese
+        # `.git` y asumir "ya clonado", seguir con ensure_orphan_worktree/reconciliación
+        # OKF sobre un checkout parcial, y marcar el proyecto 'active' prematuramente. El
+        # lock-guard protege la creación de cada Lock() per-proyecto (no el propio clonado).
+        self._retry_locks: Dict[str, threading.Lock] = {}
+        self._retry_locks_guard = threading.Lock()
         self._ensure_local_node()
         self.ensure_local_node_registered()
         self.active_project_uuid: Optional[str] = None
         self._ensure_active_project()
+
+    def _get_retry_lock(self, project_uuid: str) -> threading.Lock:
+        """Obtiene (creando si es necesario) el Lock dedicado a serializar retry_p2p_join
+        para este project_uuid. La creación del Lock en sí se protege con un lock de clase
+        único para que dos llamadas concurrentes para proyectos DISTINTOS nunca se bloqueen
+        entre sí -- solo comparten, brevemente, la creación de la entrada del diccionario."""
+        with self._retry_locks_guard:
+            lock = self._retry_locks.get(project_uuid)
+            if lock is None:
+                lock = threading.Lock()
+                self._retry_locks[project_uuid] = lock
+            return lock
 
     def _ensure_local_node(self) -> None:
         default_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
@@ -454,22 +478,38 @@ class ApiBridge:
         """
         Reintenta -- del lado del SOLICITANTE -- completar una unión P2P cuyo stub de
         proyecto quedó en 'pending_approval' tras join_p2p_project. Se invoca después de
-        que el dueño apruebe al colaborador (botón manual "Reintentar", o -- en una tarea
-        futura -- un manejador de notificación en vivo), pero también puede llamarse
-        especulativamente ANTES de la aprobación: en ese caso debe reportar 'still_pending'
-        (si GitHub ya tiene las URLs pero el acceso todavía no propagó -- un estado
-        realmente transitorio, esperado) en lugar de fallar. Si en cambio el stub nunca
-        recibió URLs de repositorio del dueño, reporta el status terminal distinto
-        'no_remote_repos' -- ese caso NO se resuelve reintentando, así que no debe
-        confundirse con 'still_pending'.
+        que el dueño apruebe al colaborador (botón manual "Reintentar", o -- vía el
+        manejador de notificación en vivo de la Tarea 9, _handle_transport_message), pero
+        también puede llamarse especulativamente ANTES de la aprobación: en ese caso debe
+        reportar 'still_pending' (si GitHub ya tiene las URLs pero el acceso todavía no
+        propagó -- un estado realmente transitorio, esperado) en lugar de fallar. Si en
+        cambio el stub nunca recibió URLs de repositorio del dueño, reporta el status
+        terminal distinto 'no_remote_repos' -- ese caso NO se resuelve reintentando, así
+        que no debe confundirse con 'still_pending'.
 
-        Reconstruye -- a partir de la fila de proyecto por project_uuid, sin re-decodificar
-        ningún token de invitación (ya no existe en este punto) -- la secuencia de clonado
-        + rama huérfana desacoplada + reconciliación OKF + sincronización de tres niveles
-        que originalmente vivía dentro de join_p2p_project (ver git history: commit
-        c650a47, líneas ~259-402 de api_bridge.py, antes de que la Tarea 5 la quitara al
-        introducir el flujo de aprobación HITL).
+        Tarea 9, hallazgo Importante #2 de revisión: serializa el cuerpo completo (desde
+        la comprobación de idempotencia hasta el UPDATE que marca 'active') por
+        project_uuid con _get_retry_lock, porque esta llamada ahora puede llegar
+        concurrentemente desde dos hilos distintos para el MISMO proyecto -- el hilo del
+        transporte en vivo (vía _handle_transport_message, Tarea 9) y el hilo de la UI
+        (botón manual "Reintentar" o el polling de check_join_request_status) -- y `git
+        clone` crea `<dir>/.git` muy temprano en el proceso de clonado, así que sin este
+        lock la segunda llamada podría ver ese `.git` parcial, asumir "ya clonado", y
+        reconciliar OKF / marcar 'active' sobre un checkout incompleto.
         """
+        lock = self._get_retry_lock(project_uuid)
+        with lock:
+            return self._do_retry_p2p_join(project_uuid)
+
+    def _do_retry_p2p_join(self, project_uuid: str) -> Dict[str, Any]:
+        """Cuerpo real de retry_p2p_join, ejecutado siempre bajo el lock por-proyecto que
+        adquiere el método público. Reconstruye -- a partir de la fila de proyecto por
+        project_uuid, sin re-decodificar ningún token de invitación (ya no existe en este
+        punto) -- la secuencia de clonado + rama huérfana desacoplada + reconciliación OKF
+        + sincronización de tres niveles que originalmente vivía dentro de
+        join_p2p_project (ver git history: commit c650a47, líneas ~259-402 de
+        api_bridge.py, antes de que la Tarea 5 la quitara al introducir el flujo de
+        aprobación HITL)."""
         try:
             proj = self.db.get_project_by_uuid(project_uuid)
             if not proj:
