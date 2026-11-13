@@ -2,12 +2,15 @@
 Pruebas unitarias para el puente JavaScript API (src/app/api_bridge.py).
 """
 
+import os
+import platform
 import tempfile
 from pathlib import Path
 import pytest
 from src.storage.db import DatabaseManager
 from src.app.api_bridge import ApiBridge
-from conftest import make_test_db
+from src.p2p.crypto import NodeCryptoManager
+from conftest import make_test_db, register_tmp_dir
 
 
 @pytest.fixture
@@ -17,6 +20,33 @@ def bridge():
         db = DatabaseManager(str(db_path))
         bridge_instance = ApiBridge(db_manager=db)
         yield bridge_instance
+
+
+def two_linked_bridges():
+    """
+    Crea dos instancias de ApiBridge con bases de datos SQLite y claves
+    criptográficas Ed25519 completamente aisladas entre sí, simulando dos
+    nodos P2P distintos: el propietario del proyecto (bridge_owner) y un
+    solicitante que intentará unirse (bridge_joiner).
+
+    Modelado sobre el patrón existente en
+    tests/test_iterA_collab_multi_account.py:168-176 (dos DatabaseManager +
+    ApiBridge independientes en directorios temporales separados).
+    """
+    bridge_owner = ApiBridge(db_manager=make_test_db())
+    bridge_joiner = ApiBridge(db_manager=make_test_db())
+
+    owner_key_dir = tempfile.mkdtemp()
+    joiner_key_dir = tempfile.mkdtemp()
+    register_tmp_dir(owner_key_dir)
+    register_tmp_dir(joiner_key_dir)
+    bridge_owner.crypto = NodeCryptoManager(key_path=Path(owner_key_dir) / "owner_identity.key")
+    bridge_joiner.crypto = NodeCryptoManager(key_path=Path(joiner_key_dir) / "joiner_identity.key")
+
+    proj = bridge_owner.create_project(name="LinkedProject")["project"]
+    bridge_owner.active_project_uuid = proj["project_uuid"]
+
+    return bridge_owner, bridge_joiner
 
 
 def test_api_bridge_system_info(bridge):
@@ -283,5 +313,35 @@ def test_set_signaling_server_url_persists_and_validates():
     assert bad["success"] is False
 
 
+def test_join_creates_pending_stub_without_cloning(monkeypatch):
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    res = bridge_joiner.join_p2p_project(invite)
+    assert res["success"] is True
+    assert res["status"] == "pending_approval"
+    assert "request_code" in res
+    proj = bridge_joiner.db.get_project_by_uuid(res["project"]["project_uuid"])
+    assert proj["join_status"] == "pending_approval"
+    assert proj["code_repo_path"] == "" or not Path(proj["code_repo_path"]).exists()
 
 
+def test_join_request_code_carries_requester_identity():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    res = bridge_joiner.join_p2p_project(invite)
+    is_valid, payload, _ = bridge_joiner.crypto.decode_and_verify_invite_token(res["request_code"])
+    assert is_valid
+    assert payload["public_key"] == bridge_joiner.crypto.public_key_base64
+
+
+def test_join_blocked_by_rate_limit_returns_locked_status():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    bridge_joiner.join_p2p_project(invite)
+    p_uuid = bridge_joiner.active_project_uuid
+    node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    for _ in range(3):
+        bridge_joiner.db.record_rejection(p_uuid, node_uuid)
+    res2 = bridge_joiner.join_p2p_project(invite)
+    assert res2["success"] is False
+    assert res2["status"] == "locked"

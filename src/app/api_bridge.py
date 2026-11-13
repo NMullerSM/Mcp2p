@@ -30,6 +30,7 @@ from src.storage.github_sync import GitHubSyncManager
 from src.storage.validators import InvalidIdentifierError, validate_safe_id
 from src.app.auto_updater import AutoUpdateManager
 from src.app.paths import get_bundle_dir, get_user_data_dir, is_system_installed
+from src.p2p.transport import P2PTransport, NullTransportAdapter
 
 logger = logging.getLogger("mcp2p.api_bridge")
 
@@ -40,11 +41,12 @@ DEFAULT_SIGNALING_URL = ""
 class ApiBridge:
     """Clase puente cuyos métodos son expuestos en window.pywebview.api en el frontend."""
 
-    def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
+    def __init__(self, db_manager: Optional[DatabaseManager] = None, transport: Optional[P2PTransport] = None) -> None:
         self.db = db_manager or DatabaseManager.get_instance()
         self.bus = A2ABus(db=self.db)
         self.okf = OKFAdapter()
         self.crypto = NodeCryptoManager()
+        self.transport = transport or NullTransportAdapter()
         self.github = GitHubSyncManager(db_manager=self.db)
         self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
         self._window: Optional[Any] = None
@@ -228,9 +230,14 @@ class ApiBridge:
 
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
         """
-        Se une a un proyecto P2P a partir de un enlace o token firmado criptográficamente.
-        Si incluye URLs de GitHub, clona ambos repositorios (código y gobernanza),
-        desacopla la rama huérfana de memoria e importa el estado de gobernanza OKF.
+        Solicita unirse a un proyecto P2P a partir de un enlace o token firmado
+        criptográficamente. Esta operación NUNCA clona repositorios ni se auto-aprueba:
+        registra un stub de proyecto local en estado 'pending_approval' (sin rutas de
+        repositorio), deja una solicitud de colaboración pendiente de aprobación HITL
+        por el dueño, e intenta -- de forma best-effort y sin que un fallo de red afecte
+        el resultado -- notificar la solicitud en vivo vía el transporte P2P configurado.
+        El clonado real de los repositorios y la sincronización de tres niveles ocurren
+        más adelante, solo tras la aprobación explícita del dueño (ver retry_p2p_join).
         """
         try:
             raw = invite_str.strip()
@@ -257,112 +264,82 @@ class ApiBridge:
             except InvalidIdentifierError as ve:
                 return {"success": False, "error": str(ve)}
 
-            # Verificar si ya existe localmente
+            # Review Focus: el chequeo de rate-limit debe ser lo PRIMERO que se evalúa
+            # tras validar el token, antes de tocar cualquier fila de proyecto o de
+            # colaborador. De lo contrario, un solicitante ya bloqueado podría reiniciar
+            # su propio bloqueo con solo reenviar la misma invitación.
+            rate_state = self.db.get_join_rate_limit_state(p_uuid, self.crypto.public_key_base64)
+            if not rate_state.get("allowed", True):
+                return {
+                    "success": False,
+                    "status": "locked",
+                    "error": "Solicitud de unión bloqueada temporalmente por rechazos previos.",
+                    "locked_until": rate_state.get("locked_until")
+                }
+
+            # Si el proyecto ya está completamente registrado localmente (p. ej. ya fue
+            # aprobado y clonado en una unión anterior), no es un stub pendiente nuestro:
+            # solo reactivar el contexto, sin reinsertar ni reprocesar nada.
             existing = self.db.get_project_by_uuid(p_uuid)
-            if existing:
+            if existing and existing.get("join_status") != "pending_approval":
                 self.active_project_uuid = p_uuid
                 return {"success": True, "project": existing, "message": "Proyecto ya registrado. Se activó el contexto."}
 
-            code_url = payload.get("code_repo_url", "").strip()
-            gov_url = payload.get("gov_repo_url", "").strip()
-
-            clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
-            short_id = p_uuid.replace("proj_", "")[:8]
-            base_dir = self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
-            app_dir = base_dir / f"app_{clean_name}"
-            gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
-
-            # Si hay repos remotos, clonar de forma segura sin inicializar vacíos
-            if gov_url or code_url:
-                # 1. Intentar aceptar invitaciones pendientes automáticamente en GitHub
-                try:
-                    self.github.accept_pending_invitations()
-                except Exception as acc_e:
-                    logger.debug(f"Auto-accept invitations omitido: {acc_e}")
-
-                # 2. Clonar repositorio de gobernanza OKF
-                if gov_url and not (gov_dir / ".git").exists():
-                    res_gov = self.github.git_clone(gov_url, gov_dir)
-                    if res_gov.get("status") == "pending_access":
-                        return {
-                            "success": False,
-                            "status": "pending_access",
-                            "error": "Acceso denegado a los repositorios de GitHub. Acepta la invitación de repositorio o verifica tus credenciales PAT.",
-                            "project_uuid": p_uuid,
-                            "sender_github": payload.get("sender_github")
-                        }
-                    if not res_gov.get("success"):
-                        return {"success": False, "error": f"Fallo al clonar repositorio de gobernanza: {res_gov.get('error')}"}
-
-                # 3. Clonar repositorio de código
-                if code_url and not (app_dir / ".git").exists():
-                    res_app = self.github.git_clone(code_url, app_dir)
-                    if res_app.get("status") == "pending_access":
-                        return {
-                            "success": False,
-                            "status": "pending_access",
-                            "error": "Acceso denegado a los repositorios de GitHub. Acepta la invitación de repositorio o verifica tus credenciales PAT.",
-                            "project_uuid": p_uuid,
-                            "sender_github": payload.get("sender_github")
-                        }
-                    if not res_app.get("success"):
-                        return {"success": False, "error": f"Fallo al clonar repositorio de código: {res_app.get('error')}"}
-
-                # 4. Asegurar rama huérfana desacoplada en gobernanza
-                if gov_dir.exists() and (gov_dir / ".git").exists():
-                    try:
-                        self.ensure_orphan_worktree(gov_dir, p_uuid)
-                    except Exception as oe:
-                        logger.warning(f"No se pudo inicializar orphan worktree tras clonar: {oe}")
-
-                    # 5. Reconciliar OKF en base de datos local
-                    try:
-                        self.okf.reconcile_kanban_from_okf(gov_dir, p_uuid, self.db)
-                    except Exception as re_e:
-                        logger.warning(f"Error al reconciliar OKF tras clonar: {re_e}")
-
-                # 6. Registrar proyecto en base de datos local
-                now_str = datetime.now(timezone.utc).isoformat()
+            now_str = datetime.now(timezone.utc).isoformat()
+            if existing is None:
+                # Insertar un stub de proyecto SIN clonar ningún repositorio (ni código
+                # ni gobernanza): el clonado real solo ocurre tras la aprobación HITL
+                # explícita del dueño. INSERT OR IGNORE + el chequeo "existing is None"
+                # hacen esta inserción idempotente frente a reintentos con la misma
+                # invitación (p. ej. el usuario pulsa "unirse" dos veces, o reintenta
+                # tras un fallo de transporte transitorio) sin arrojar un error de fila
+                # duplicada.
                 p_sla = int(payload.get("reviewer_sla_hours") or 24)
+                clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
+                short_id = p_uuid.replace("proj_", "")[:8]
+                base_dir = self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
                 with self.db._write_lock, self.db.get_connection() as conn:
                     with conn:
                         conn.execute(
                             """
-                            INSERT INTO projects (
+                            INSERT OR IGNORE INTO projects (
                                 project_uuid, name, base_path, code_repo_path, gov_repo_path,
-                                code_repo_url, gov_repo_url, default_sla_hours, created_at, updated_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                                code_repo_url, gov_repo_url, default_sla_hours, join_status,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, '', '', '', '', ?, 'pending_approval', ?, ?);
                             """,
-                            (
-                                p_uuid,
-                                p_name,
-                                str(base_dir),
-                                str(app_dir),
-                                str(gov_dir),
-                                code_url,
-                                gov_url,
-                                p_sla,
-                                now_str,
-                                now_str
-                            )
+                            (p_uuid, p_name, str(base_dir), p_sla, now_str, now_str)
                         )
-                proj = self.db.get_project_by_uuid(p_uuid)
-            else:
-                # Modo local / sin repositorios remotos
-                proj = self.db.create_project(
-                    name=p_name,
-                    code_repo_url=code_url,
-                    gov_repo_url=gov_url,
-                    project_uuid=p_uuid
-                )
+                existing = self.db.get_project_by_uuid(p_uuid)
 
             self.active_project_uuid = p_uuid
 
-            # Si viene un nodo emisor, registrarlo
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            gh_status = self.github.get_auth_status()
+
+            # Si viene un nodo emisor en la invitación, registrarlo. El emisor/dueño se
+            # considera trivialmente confiable desde el punto de vista del propio
+            # solicitante (fue quien generó y firmó la invitación), así que se aprueba
+            # de inmediato -- esto no cambia respecto al comportamiento anterior.
             sender_node = payload.get("sender_node_uuid")
             if sender_node:
+                sender_pubkey = payload.get("sender_pubkey", "")
+                effective_sender_node = sender_node
+                if sender_node == local_node and sender_pubkey != self.crypto.public_key_base64:
+                    # El node_uuid del emisor (derivado por defecto del hostname) colisiona
+                    # con el del nodo local -- p. ej. dos nodos distintos que, al no fijar
+                    # MCP2P_NODE_UUID, terminan con el mismo hostname por defecto. Para no
+                    # mezclar dos claves públicas distintas bajo una misma fila de
+                    # colaborador (lo que add_or_request_collaborator rechaza por diseño,
+                    # ver Review Focus de la Tarea 1), desambiguamos el registro del emisor
+                    # con un sufijo derivado de su propia clave pública.
+                    suffix = (
+                        hashlib.sha256(sender_pubkey.encode("utf-8")).hexdigest()[:8]
+                        if sender_pubkey else secrets.token_hex(4)
+                    )
+                    effective_sender_node = f"{sender_node}_{suffix}"
                 self.db.register_or_update_node(
-                    node_uuid=sender_node,
+                    node_uuid=effective_sender_node,
                     developer_name=payload.get("sender_github") or f"Peer {sender_node[:8]}",
                     agent_id=f"agent_{sender_node[:8]}",
                     reviewer_sla_hours=24,
@@ -371,35 +348,61 @@ class ApiBridge:
                 )
                 self.db.add_or_request_collaborator(
                     project_uuid=p_uuid,
-                    node_uuid=sender_node,
+                    node_uuid=effective_sender_node,
                     github_username=payload.get("sender_github", ""),
-                    public_key=payload.get("sender_pubkey", ""),
+                    public_key=sender_pubkey,
                     role="owner",
                     status="approved"
                 )
 
-            # Registrar también al nodo local como colaborador
-            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
-            gh_status = self.github.get_auth_status()
+            # Registrar al nodo local como SOLICITUD pendiente: a diferencia del
+            # comportamiento anterior, ya no se auto-aprueba aquí. Queda a la espera de
+            # la aprobación explícita Human-in-the-Loop del dueño del proyecto.
             self.db.add_or_request_collaborator(
                 project_uuid=p_uuid,
                 node_uuid=local_node,
                 github_username=gh_status.get("username", ""),
                 public_key=self.crypto.public_key_base64,
                 role="collaborator",
-                status="approved"
+                status="pending_approval"
             )
 
-            # Disparar sincronización inicial de tres niveles
             try:
-                self.sync_three_tiers(p_uuid)
-            except Exception as se:
-                logger.debug(f"Sync three tiers inicial pospuesta: {se}")
+                self.db.record_join_attempt(p_uuid, self.crypto.public_key_base64)
+            except Exception as rae:
+                logger.debug(f"No se pudo registrar el intento de unión en la ventana horaria: {rae}")
 
+            # Construir el 'request_code': un segundo token firmado que transporta la
+            # identidad propia del solicitante (para que el dueño pueda aprobarlo fuera
+            # de línea) junto con el project_uuid y el rendezvous_nonce de la invitación
+            # original.
+            request_payload = {
+                "project_uuid": p_uuid,
+                "rendezvous_nonce": payload.get("rendezvous_nonce", ""),
+                "github_username": gh_status.get("username", ""),
+                "public_key": self.crypto.public_key_base64,
+                "node_uuid": local_node,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            request_code = self.crypto.create_signed_invite_token(request_payload)
+
+            # Intento best-effort de conexión en vivo vía el transporte P2P configurado
+            # (WebRTC real o NullTransportAdapter): nunca debe afectar el resultado
+            # devuelto al usuario, incluso si no hay servidor de señalización disponible
+            # o la conexión simplemente falla.
+            try:
+                rendezvous_id = f"{p_uuid}_{payload.get('rendezvous_nonce', '')}"
+                if self.transport.try_connect(rendezvous_id):
+                    self.transport.send({"type": "join_request", "request_code": request_code})
+            except Exception as te:
+                logger.debug(f"Intento de transporte P2P en vivo (best-effort) falló: {te}")
+
+            proj = self.db.get_project_by_uuid(p_uuid)
             return {
                 "success": True,
+                "status": "pending_approval",
                 "project": proj,
-                "message": "Conectado al proyecto P2P exitosamente y repositorios clonados"
+                "request_code": request_code
             }
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
