@@ -18,6 +18,13 @@ def bridge():
         yield bridge_instance
 
 
+def make_test_db() -> DatabaseManager:
+    """Crea una base de datos SQLite temporal y aislada para pruebas puntuales."""
+    tmpdir = tempfile.mkdtemp()
+    db_path = Path(tmpdir) / "test_bridge_helper.db"
+    return DatabaseManager(str(db_path))
+
+
 def test_api_bridge_system_info(bridge):
     """Verifica que el puente retorne la información del sistema y del proyecto activo."""
     info = bridge.get_system_info()
@@ -256,6 +263,30 @@ def test_project_sync_pulse_and_hooks(bridge):
     fp3 = pulse3["fingerprint"]
     assert fp3 != fp2
     assert pulse3["git_fingerprint"] != pulse2["git_fingerprint"]
+
+
+def test_generate_p2p_invite_includes_rendezvous_nonce():
+    bridge = ApiBridge(db_manager=make_test_db())
+    proj = bridge.db.create_project(name="p", project_uuid="proj_x")
+    bridge.active_project_uuid = "proj_x"
+    res = bridge.generate_p2p_invite("proj_x")
+    is_valid, payload, _ = bridge.crypto.decode_and_verify_invite_token(res["token"])
+    assert is_valid
+    assert len(payload["rendezvous_nonce"]) == 16
+
+
+def test_signaling_url_defaults_to_empty():
+    bridge = ApiBridge(db_manager=make_test_db())
+    assert bridge.get_signaling_server_url() == ""
+
+
+def test_set_signaling_server_url_persists_and_validates():
+    bridge = ApiBridge(db_manager=make_test_db())
+    ok = bridge.set_signaling_server_url("wss://relay.example.com/signal")
+    assert ok["success"] is True
+    assert bridge.get_signaling_server_url() == "wss://relay.example.com/signal"
+    bad = bridge.set_signaling_server_url("https://not-a-ws-url.example.com")
+    assert bad["success"] is False
 
 
 

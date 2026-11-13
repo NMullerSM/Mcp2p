@@ -14,6 +14,7 @@ import os
 import platform
 import random
 import re
+import secrets
 import subprocess
 import sys
 import urllib.parse
@@ -31,6 +32,9 @@ from src.app.auto_updater import AutoUpdateManager
 from src.app.paths import get_bundle_dir, get_user_data_dir, is_system_installed
 
 logger = logging.getLogger("mcp2p.api_bridge")
+
+# TODO(maintainer): set to the deployed signaling/TURN relay URL once it exists; empty = live P2P disabled, async fallback only.
+DEFAULT_SIGNALING_URL = ""
 
 
 class ApiBridge:
@@ -193,7 +197,8 @@ class ApiBridge:
                 "sender_node_uuid": local_node,
                 "sender_github": gh_status.get("username", ""),
                 "sender_pubkey": self.crypto.public_key_base64,
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "rendezvous_nonce": secrets.token_hex(8)
             }
 
             token = self.crypto.create_signed_invite_token(payload)
@@ -209,6 +214,17 @@ class ApiBridge:
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def get_signaling_server_url(self) -> str:
+        """Devuelve la URL del servidor de señalización WebRTC configurada (o el valor por defecto)."""
+        return self.db.get_setting("p2p_signaling_url", default=DEFAULT_SIGNALING_URL)
+
+    def set_signaling_server_url(self, url: str) -> Dict[str, Any]:
+        """Configura la URL del servidor de señalización WebRTC, validando su esquema."""
+        if url != "" and not (url.startswith("wss://") or url.startswith("ws://")):
+            return {"success": False, "error": "La URL debe estar vacía o comenzar con ws:// o wss://"}
+        self.db.set_setting("p2p_signaling_url", url)
+        return {"success": True}
 
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
         """
