@@ -422,7 +422,11 @@ class ApiBridge:
         que el dueño apruebe al colaborador (botón manual "Reintentar", o -- en una tarea
         futura -- un manejador de notificación en vivo), pero también puede llamarse
         especulativamente ANTES de la aprobación: en ese caso debe reportar 'still_pending'
-        en lugar de fallar, ya que es un estado esperado y transitorio, no un error.
+        (si GitHub ya tiene las URLs pero el acceso todavía no propagó -- un estado
+        realmente transitorio, esperado) en lugar de fallar. Si en cambio el stub nunca
+        recibió URLs de repositorio del dueño, reporta el status terminal distinto
+        'no_remote_repos' -- ese caso NO se resuelve reintentando, así que no debe
+        confundirse con 'still_pending'.
 
         Reconstruye -- a partir de la fila de proyecto por project_uuid, sin re-decodificar
         ningún token de invitación (ya no existe en este punto) -- la secuencia de clonado
@@ -454,15 +458,29 @@ class ApiBridge:
                 "error": "Todavía no disponible, inténtalo de nuevo en un momento."
             }
 
-            # Sin ninguna URL de repositorio persistida en el stub, no hay absolutamente
-            # nada que este método pueda clonar todavía -- el dueño aún no comunicó sus
-            # repositorios reales (o el proyecto es puramente local). Reportar
-            # 'still_pending' en lugar de, por ejemplo, saltar el clonado y marcar el
-            # proyecto como activo igual: lo segundo degradaría silenciosamente la
-            # aprobación HITL para cualquier stub sin URLs, dejándolo "activo" sin que el
-            # dueño haya aprobado ni compartido nada real.
+            # Review Focus (hallazgo Crítico #1 de revisión): sin ninguna URL de
+            # repositorio persistida en el stub, no hay absolutamente nada que este
+            # método pueda clonar -- y a diferencia de un 'pending_access' real de GitHub,
+            # este NO es un estado transitorio que se resuelva reintentando: join_p2p_project
+            # solo persiste code_repo_url/gov_repo_url una vez, al crear el stub (rama
+            # "if existing is None"), y no existe ningún camino que luego las rellene en un
+            # stub ya existente. El dueño simplemente no ha publicado (o nunca publicará)
+            # repositorios remotos para este proyecto. Devolver 'still_pending' aquí sería
+            # activamente engañoso -- implica "esto se resolverá solo", cuando en realidad
+            # NUNCA se resuelve reintentando, ni siquiera vía el futuro manejador de
+            # join_decision en vivo de la Tarea 9 (que también llama a este mismo método y
+            # caería en la misma rama). Por eso se usa un status terminal distinto,
+            # 'no_remote_repos', con un mensaje que no sugiere reintentar. Importante:
+            # tampoco se puede, en su lugar, saltar el clonado y marcar el proyecto como
+            # activo igual -- eso degradaría silenciosamente la aprobación HITL para
+            # cualquier stub sin URLs, dejándolo "activo" sin que el dueño haya aprobado ni
+            # compartido nada real.
             if not gov_url and not code_url:
-                return still_pending_result
+                return {
+                    "success": False,
+                    "status": "no_remote_repos",
+                    "error": "El dueño del proyecto todavía no ha publicado sus repositorios remotos. No hay nada que clonar todavía."
+                }
 
             clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
             short_id = project_uuid.replace("proj_", "")[:8]
@@ -518,6 +536,21 @@ class ApiBridge:
                         """,
                         (str(app_dir), str(gov_dir), now_str, project_uuid)
                     )
+
+            # 6b. Aprobar la propia fila de colaborador LOCAL (la que join_p2p_project
+            # insertó con status='pending_approval' para el nodo solicitante en su propia
+            # base de datos -- ver api_bridge.py ~línea 369). Review Focus (hallazgo
+            # Importante #2): la referencia original en git history (c650a47) sí hacía
+            # esto como su último paso; omitirlo es una regresión real, no solo un detalle
+            # cosmético -- sin la propia fila en 'approved', _validate_assignable_node
+            # (src/storage/db.py) rechaza que el solicitante se autoasigne una tarjeta
+            # Kanban, y el cálculo de cuórum del jurado (src/a2a/bus.py) lo deja fuera de
+            # las votaciones sobre su propio proyecto.
+            try:
+                local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+                self.db.approve_collaborator(project_uuid, local_node)
+            except Exception as ace:
+                logger.warning(f"No se pudo aprobar la propia fila de colaborador local tras clonar: {ace}")
 
             self.active_project_uuid = project_uuid
 

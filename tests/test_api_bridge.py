@@ -678,13 +678,44 @@ def two_linked_bridges_with_local_git_remotes():
     return bridge_owner, bridge_joiner
 
 
-def test_retry_before_approval_reports_still_pending():
+def test_retry_without_remote_repos_reports_no_remote_repos():
+    """
+    Review finding (Crítico #1): un stub sin ninguna URL de repositorio (el caso por
+    defecto de two_linked_bridges(), que no publica a GitHub) NUNCA se resuelve
+    reintentando -- join_p2p_project solo persiste code_repo_url/gov_repo_url una vez, al
+    crear el stub, y no hay ningún camino que las rellene después. Por eso este caso debe
+    reportar el status terminal distinto 'no_remote_repos', NO 'still_pending' (que
+    implicaría, engañosamente, que reintentar más tarde ayudará).
+    """
     bridge_owner, bridge_joiner = two_linked_bridges()
     invite = bridge_owner.generate_p2p_invite()["token"]
     join_res = bridge_joiner.join_p2p_project(invite)
     res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
     assert res["success"] is False
+    assert res["status"] == "no_remote_repos"
+
+
+def test_retry_with_real_pending_github_access_reports_still_pending():
+    """
+    Review finding (Importante #3): a diferencia del caso anterior, un project_uuid que SÍ
+    tiene URLs de repositorio reales, pero cuyo clonado en GitHub todavía devuelve
+    'pending_access' (p. ej. la invitación de colaborador de GitHub aún no propagó),
+    representa el caso genuinamente transitorio -- 'still_pending' es la respuesta
+    correcta aquí, y debe seguir siendo distinguible de 'no_remote_repos'.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges_with_local_git_remotes()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+
+    def fake_pending_access_clone(*args, **kwargs):
+        return {"success": False, "status": "pending_access", "error": "Acceso denegado o repositorio no encontrado en GitHub."}
+
+    bridge_joiner.github.git_clone = fake_pending_access_clone
+
+    res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert res["success"] is False
     assert res["status"] == "still_pending"
+    assert res["status"] != "no_remote_repos"
 
 
 def test_retry_after_approval_clones_and_activates_project():
@@ -694,11 +725,41 @@ def test_retry_after_approval_clones_and_activates_project():
     bridge_owner.active_project_uuid = join_res["project"]["project_uuid"]
     bridge_owner.ingest_join_request(join_res["request_code"])
     node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
-    bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    approve_res = bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    assert approve_res["success"] is True
     res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
     assert res["success"] is True
     proj = bridge_joiner.db.get_project_by_uuid(join_res["project"]["project_uuid"])
     assert proj["join_status"] == "active"
+
+
+def test_retry_after_approval_approves_own_local_collaborator_row():
+    """
+    Review finding (Importante #2): la referencia original en git history (c650a47)
+    aprobaba, como último paso, la propia fila de colaborador LOCAL del solicitante (la
+    que join_p2p_project insertó con status='pending_approval'). Omitir esto es una
+    regresión real: sin esa fila en 'approved', _validate_assignable_node rechazaría que
+    el propio solicitante se autoasigne una tarjeta Kanban, y el cálculo de cuórum del
+    jurado lo dejaría fuera de las votaciones sobre su propio proyecto.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges_with_local_git_remotes()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = join_res["project"]["project_uuid"]
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    approve_res = bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    assert approve_res["success"] is True
+
+    joiner_local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    before = bridge_joiner.db.get_collaborator(join_res["project"]["project_uuid"], joiner_local_node)
+    assert before["status"] == "pending_approval"
+
+    res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert res["success"] is True
+
+    after = bridge_joiner.db.get_collaborator(join_res["project"]["project_uuid"], joiner_local_node)
+    assert after["status"] == "approved"
 
 
 def test_check_join_request_status_wraps_retry_without_raising():
@@ -707,7 +768,7 @@ def test_check_join_request_status_wraps_retry_without_raising():
     join_res = bridge_joiner.join_p2p_project(invite)
     res = bridge_joiner.check_join_request_status(join_res["project"]["project_uuid"])
     assert res["success"] is False
-    assert res["status"] == "still_pending"
+    assert res["status"] == "no_remote_repos"
 
 
 def test_retry_is_idempotent_against_already_active_project():
@@ -717,7 +778,8 @@ def test_retry_is_idempotent_against_already_active_project():
     bridge_owner.active_project_uuid = join_res["project"]["project_uuid"]
     bridge_owner.ingest_join_request(join_res["request_code"])
     node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
-    bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    approve_res = bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    assert approve_res["success"] is True
     first = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
     assert first["success"] is True
 
