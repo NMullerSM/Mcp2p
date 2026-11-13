@@ -177,16 +177,29 @@ def test_join_clones_both_repos_and_mounts_orphan_worktree(temp_env):
     assert join_res["success"] is True
     assert join_res["status"] == "pending_approval"
 
-    pytest.skip(reason="pending Task 7 retry_p2p_join")
+    # 5. Node A (dueño) ingiere la solicitud manualmente, la aprueba, y Node B (solicitante)
+    # reintenta la unión -- el nuevo flujo de tres pasos que sustituye al clonado
+    # automático que join_p2p_project hacía antes de la Tarea 5.
+    api_a.active_project_uuid = p_uuid
+    ingest_res = api_a.ingest_join_request(join_res["request_code"])
+    assert ingest_res["success"] is True
+    node_b_row = api_a.db.get_collaborator_by_pubkey(p_uuid, api_b.crypto.public_key_base64)
+    assert node_b_row is not None
+    node_b_uuid_on_owner = node_b_row["node_uuid"]
+    approve_res = api_a.approve_collaborator(p_uuid, node_b_uuid_on_owner)
+    assert approve_res["success"] is True
 
-    # 5. Comprobar que Node B tiene el proyecto clonado
+    retry_res = api_b.retry_p2p_join(p_uuid)
+    assert retry_res["success"] is True
+
+    # 6. Comprobar que Node B tiene el proyecto clonado
     proj_b = api_b.db.get_project_by_uuid(p_uuid)
     assert proj_b is not None
     assert Path(proj_b["code_repo_path"]).exists()
     assert Path(proj_b["gov_repo_path"]).exists()
     assert (Path(proj_b["gov_repo_path"]) / ".git" / "orphan_worktree").exists()
 
-    # 6. Comprobar que Node B tiene la tarjeta TASK-101 en su SQLite gracias a la reconciliación OKF
+    # 7. Comprobar que Node B tiene la tarjeta TASK-101 en su SQLite gracias a la reconciliación OKF
     cards_b = api_b.db.get_cards(p_uuid)
     assert len(cards_b) >= 1
     card_ids = [c["card_id"] for c in cards_b]
@@ -228,7 +241,19 @@ def test_sync_three_tiers_replicates_dialogue_between_two_nodes(temp_env):
     assert join_res["success"] is True
     assert join_res["status"] == "pending_approval"
 
-    pytest.skip(reason="pending Task 7 retry_p2p_join")
+    # 2b. Node A (dueño) ingiere la solicitud, la aprueba, y Node B (solicitante) reintenta
+    # la unión -- el nuevo flujo de tres pasos que sustituye al clonado automático que
+    # join_p2p_project hacía antes de la Tarea 5.
+    api_a.active_project_uuid = p_uuid
+    ingest_res = api_a.ingest_join_request(join_res["request_code"])
+    assert ingest_res["success"] is True
+    node_b_row = api_a.db.get_collaborator_by_pubkey(p_uuid, api_b.crypto.public_key_base64)
+    assert node_b_row is not None
+    approve_res = api_a.approve_collaborator(p_uuid, node_b_row["node_uuid"])
+    assert approve_res["success"] is True
+
+    retry_res = api_b.retry_p2p_join(p_uuid)
+    assert retry_res["success"] is True
 
     # 3. Node B emite un diálogo / propuesta dialéctica en A2A
     node_b_uuid = "node_b_tester_uuid"

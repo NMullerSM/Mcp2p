@@ -4,6 +4,7 @@ Pruebas unitarias para el puente JavaScript API (src/app/api_bridge.py).
 
 import os
 import platform
+import subprocess
 import tempfile
 from pathlib import Path
 import pytest
@@ -623,3 +624,103 @@ def test_ingest_join_request_disambiguates_collision_with_legacy_empty_pubkey_ro
 
     collabs = bridge_owner.db.get_project_collaborators(p_uuid)
     assert len(collabs) == 2
+
+
+# ==========================
+# retry_p2p_join / check_join_request_status (Tarea 7: clonado tras aprobación HITL)
+# ==========================
+
+def two_linked_bridges_with_local_git_remotes():
+    """
+    Extiende two_linked_bridges() con repositorios Git bare locales reales como
+    code_repo_url/gov_repo_url del proyecto del dueño, replicando el patrón ya usado en
+    tests/test_stage2_p2p_auth_prs_and_sync.py (test_p2p_wan_remote_watcher: `git init
+    --bare` + un clon semilla que hace commit y push) para ejercitar clones reales de
+    retry_p2p_join sin tocar GitHub real.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+
+    root = Path(tempfile.mkdtemp())
+    register_tmp_dir(root)
+
+    bare_code = root / "remote_code.git"
+    bare_gov = root / "remote_gov.git"
+    bare_code.mkdir()
+    bare_gov.mkdir()
+    subprocess.run(["git", "init", "--bare", "-b", "main"], cwd=str(bare_code), capture_output=True, check=True)
+    subprocess.run(["git", "init", "--bare", "-b", "main"], cwd=str(bare_gov), capture_output=True, check=True)
+
+    # Semillas: clonar cada bare repo, hacer un commit inicial y empujarlo, para que
+    # retry_p2p_join tenga algo real que clonar (un bare repo vacío también es clonable,
+    # pero con contenido se ejerce mejor el camino real de ensure_orphan_worktree/OKF).
+    seed_code = root / "seed_code"
+    seed_gov = root / "seed_gov"
+    subprocess.run(["git", "clone", str(bare_code), str(seed_code)], capture_output=True, check=True)
+    (seed_code / "README.md").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(seed_code), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=str(seed_code), capture_output=True, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=str(seed_code), capture_output=True, check=True)
+
+    subprocess.run(["git", "clone", str(bare_gov), str(seed_gov)], capture_output=True, check=True)
+    (seed_gov / ".okf_project.json").write_text(f'{{"project_uuid": "{p_uuid}"}}\n', encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(seed_gov), capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "seed"], cwd=str(seed_gov), capture_output=True, check=True)
+    subprocess.run(["git", "push", "origin", "main"], cwd=str(seed_gov), capture_output=True, check=True)
+
+    with bridge_owner.db._write_lock, bridge_owner.db.get_connection() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE projects SET code_repo_url = ?, gov_repo_url = ? WHERE project_uuid = ?;",
+                (str(bare_code), str(bare_gov), p_uuid)
+            )
+
+    return bridge_owner, bridge_joiner
+
+
+def test_retry_before_approval_reports_still_pending():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert res["success"] is False
+    assert res["status"] == "still_pending"
+
+
+def test_retry_after_approval_clones_and_activates_project():
+    bridge_owner, bridge_joiner = two_linked_bridges_with_local_git_remotes()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = join_res["project"]["project_uuid"]
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    res = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert res["success"] is True
+    proj = bridge_joiner.db.get_project_by_uuid(join_res["project"]["project_uuid"])
+    assert proj["join_status"] == "active"
+
+
+def test_check_join_request_status_wraps_retry_without_raising():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    res = bridge_joiner.check_join_request_status(join_res["project"]["project_uuid"])
+    assert res["success"] is False
+    assert res["status"] == "still_pending"
+
+
+def test_retry_is_idempotent_against_already_active_project():
+    bridge_owner, bridge_joiner = two_linked_bridges_with_local_git_remotes()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = join_res["project"]["project_uuid"]
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    bridge_owner.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    first = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert first["success"] is True
+
+    second = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
+    assert second["success"] is True
+    assert second["status"] == "already_active"

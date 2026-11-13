@@ -415,6 +415,136 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
 
+    def retry_p2p_join(self, project_uuid: str) -> Dict[str, Any]:
+        """
+        Reintenta -- del lado del SOLICITANTE -- completar una unión P2P cuyo stub de
+        proyecto quedó en 'pending_approval' tras join_p2p_project. Se invoca después de
+        que el dueño apruebe al colaborador (botón manual "Reintentar", o -- en una tarea
+        futura -- un manejador de notificación en vivo), pero también puede llamarse
+        especulativamente ANTES de la aprobación: en ese caso debe reportar 'still_pending'
+        en lugar de fallar, ya que es un estado esperado y transitorio, no un error.
+
+        Reconstruye -- a partir de la fila de proyecto por project_uuid, sin re-decodificar
+        ningún token de invitación (ya no existe en este punto) -- la secuencia de clonado
+        + rama huérfana desacoplada + reconciliación OKF + sincronización de tres niveles
+        que originalmente vivía dentro de join_p2p_project (ver git history: commit
+        c650a47, líneas ~259-402 de api_bridge.py, antes de que la Tarea 5 la quitara al
+        introducir el flujo de aprobación HITL).
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+
+            # Idempotencia: si ya está activo (p. ej. una llamada anterior a este mismo
+            # método ya completó el clonado, o el futuro manejador de join_decision en
+            # vivo de la Tarea 9 llegó primero), no reintentar el clonado -- esto hace
+            # seguro llamar a este método dos veces en cualquier orden, sea desde un botón
+            # manual "Reintentar" o desde esa notificación en vivo.
+            if proj.get("join_status") == "active":
+                return {"success": True, "status": "already_active", "project": proj}
+
+            p_name = proj.get("name", "proyecto")
+            code_url = (proj.get("code_repo_url") or "").strip()
+            gov_url = (proj.get("gov_repo_url") or "").strip()
+
+            still_pending_result = {
+                "success": False,
+                "status": "still_pending",
+                "error": "Todavía no disponible, inténtalo de nuevo en un momento."
+            }
+
+            # Sin ninguna URL de repositorio persistida en el stub, no hay absolutamente
+            # nada que este método pueda clonar todavía -- el dueño aún no comunicó sus
+            # repositorios reales (o el proyecto es puramente local). Reportar
+            # 'still_pending' en lugar de, por ejemplo, saltar el clonado y marcar el
+            # proyecto como activo igual: lo segundo degradaría silenciosamente la
+            # aprobación HITL para cualquier stub sin URLs, dejándolo "activo" sin que el
+            # dueño haya aprobado ni compartido nada real.
+            if not gov_url and not code_url:
+                return still_pending_result
+
+            clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
+            short_id = project_uuid.replace("proj_", "")[:8]
+            base_dir = Path(proj.get("base_path") or (self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"))
+            app_dir = base_dir / f"app_{clean_name}"
+            gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
+
+            # 1. Intentar aceptar invitaciones pendientes automáticamente en GitHub
+            # (best-effort: un fallo aquí nunca debe impedir el intento de clonado).
+            try:
+                self.github.accept_pending_invitations()
+            except Exception as acc_e:
+                logger.debug(f"Auto-accept invitations omitido: {acc_e}")
+
+            # 2. Clonar repositorio de gobernanza OKF
+            if gov_url and not (gov_dir / ".git").exists():
+                res_gov = self.github.git_clone(gov_url, gov_dir)
+                if res_gov.get("status") == "pending_access":
+                    return still_pending_result
+                if not res_gov.get("success"):
+                    return {"success": False, "error": f"Fallo al clonar repositorio de gobernanza: {res_gov.get('error')}"}
+
+            # 3. Clonar repositorio de código
+            if code_url and not (app_dir / ".git").exists():
+                res_app = self.github.git_clone(code_url, app_dir)
+                if res_app.get("status") == "pending_access":
+                    return still_pending_result
+                if not res_app.get("success"):
+                    return {"success": False, "error": f"Fallo al clonar repositorio de código: {res_app.get('error')}"}
+
+            # 4. Asegurar rama huérfana desacoplada en gobernanza
+            if gov_dir.exists() and (gov_dir / ".git").exists():
+                try:
+                    self.ensure_orphan_worktree(gov_dir, project_uuid)
+                except Exception as oe:
+                    logger.warning(f"No se pudo inicializar orphan worktree tras clonar: {oe}")
+
+                # 5. Reconciliar OKF en base de datos local
+                try:
+                    self.okf.reconcile_kanban_from_okf(gov_dir, project_uuid, self.db)
+                except Exception as re_e:
+                    logger.warning(f"Error al reconciliar OKF tras clonar: {re_e}")
+
+            # 6. Persistir las rutas locales reales y marcar el proyecto como activo.
+            now_str = datetime.now(timezone.utc).isoformat()
+            with self.db._write_lock, self.db.get_connection() as conn:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE projects
+                        SET code_repo_path = ?, gov_repo_path = ?, join_status = 'active', updated_at = ?
+                        WHERE project_uuid = ?;
+                        """,
+                        (str(app_dir), str(gov_dir), now_str, project_uuid)
+                    )
+
+            self.active_project_uuid = project_uuid
+
+            # 7. Disparar sincronización inicial de tres niveles (best-effort).
+            try:
+                self.sync_three_tiers(project_uuid)
+            except Exception as se:
+                logger.debug(f"Sync three tiers inicial pospuesta: {se}")
+
+            proj = self.db.get_project_by_uuid(project_uuid)
+            return {"success": True, "status": "active", "project": proj}
+        except Exception as e:
+            return {"success": False, "error": f"Error al reintentar la unión P2P: {str(e)}"}
+
+    def check_join_request_status(self, project_uuid: str) -> Dict[str, Any]:
+        """
+        Envoltorio delgado de solo lectura/sondeo usado por la UI para consultar -- sin
+        provocar nunca una excepción -- si una solicitud de unión pendiente ya fue
+        aprobada. Reutiliza exactamente la misma lógica de retry_p2p_join (incluida su
+        idempotencia frente a un proyecto ya activo), así que sondear repetidamente desde
+        la UI mientras el usuario espera la aprobación del dueño es seguro.
+        """
+        try:
+            return self.retry_p2p_join(project_uuid)
+        except Exception as e:
+            return {"success": False, "error": f"Error al consultar el estado de la solicitud de unión: {str(e)}"}
+
     def ingest_join_request(self, request_code: str) -> Dict[str, Any]:
         """
         Ingiere manualmente un 'request_code' firmado (el mismo formato de token que
