@@ -223,7 +223,7 @@ export function SettingsDrawer({
     try {
       const res = await api.set_signaling_server_url(signalingUrlInput.trim());
       if (res.success) {
-        setSignalingUrlMessage({ type: 'success', text: 'Servidor de señalización P2P guardado.' });
+        setSignalingUrlMessage({ type: 'success', text: 'Servidor de señalización P2P guardado. Reinicia la aplicación para aplicarlo.' });
       } else {
         setSignalingUrlMessage({ type: 'error', text: res.error || 'Error al guardar la URL del servidor de señalización' });
       }
@@ -604,10 +604,32 @@ export function SettingsDrawer({
                 flexDirection: 'column',
                 gap: '10px'
               }}>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Servidor de Señalización P2P</h5>
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>
+                  Servidor de Señalización P2P{' '}
+                  <span style={{
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    fontFamily: 'var(--font-mono)',
+                    color: 'var(--accent-warning)',
+                    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                    padding: '1px 6px',
+                    borderRadius: '3px',
+                    marginLeft: '4px'
+                  }}>
+                    EXPERIMENTAL
+                  </span>
+                </h5>
                 <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
                   URL del servidor de señalización WebRTC (<code>ws://</code> o <code>wss://</code>) usado para establecer
                   conexiones P2P directas entre nodos. Déjalo vacío para usar el adaptador local sin señalización remota.
+                </p>
+                <p
+                  data-testid="signaling-experimental-note"
+                  style={{ fontSize: '11px', color: 'var(--accent-warning)', margin: 0, lineHeight: 1.4 }}
+                >
+                  Experimental: la conexión en vivo todavía no está completa, así que configurar un servidor no garantiza
+                  que funcione. Las solicitudes de unión siguen dependiendo del código de solicitud que se comparte
+                  manualmente. Este valor solo se lee al iniciar la aplicación: reiníciala para que un cambio tenga efecto.
                 </p>
 
                 {signalingUrlMessage && (

@@ -60,7 +60,22 @@ describe('SettingsDrawer - Servidor de Señalización P2P', () => {
     fireEvent.click(screen.getByText('Guardar'));
 
     await waitFor(() => expect(api.set_signaling_server_url).toHaveBeenCalledWith('wss://relay.example.com/signal'));
-    await screen.findByText('Servidor de señalización P2P guardado.');
+    // Hallazgo I1: la URL solo se lee al arrancar (main.py), así que el feedback de
+    // éxito debe decir que hace falta reiniciar.
+    await screen.findByText('Servidor de señalización P2P guardado. Reinicia la aplicación para aplicarlo.');
+  });
+
+  it('marca el campo como experimental e indica que requiere reiniciar (hallazgo I1)', async () => {
+    const api = makeApi({ signalingUrl: '' });
+    render(
+      <SettingsDrawer isOpen={true} onClose={vi.fn()} api={api} activeProject={PROJECT} projectsList={[PROJECT]} initialTab="p2p" />
+    );
+
+    await screen.findByPlaceholderText('wss://signal.example.com');
+    expect(screen.getByText('EXPERIMENTAL')).toBeTruthy();
+    const note = screen.getByTestId('signaling-experimental-note');
+    expect(note.textContent).toContain('todavía no está completa');
+    expect(note.textContent).toContain('reiníciala');
   });
 
   it('muestra un mensaje de error cuando set_signaling_server_url rechaza un esquema inválido', async () => {

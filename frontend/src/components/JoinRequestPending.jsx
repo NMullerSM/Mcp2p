@@ -118,6 +118,17 @@ export function JoinRequestPending({ project, requestCode, onRetry, onBack }) {
           En cuanto apruebe tu acceso, pulsa "Reintentar" para completar la unión y clonar los repositorios.
         </p>
 
+        {/* Hallazgo I2 de la revisión final: los rechazos no llegan al solicitante por
+            ningún canal (el canal en vivo solo envía aprobaciones, y la vía manual no
+            tiene canal de vuelta), así que "pendiente" puede significar "rechazado". */}
+        <p
+          data-testid="join-request-rejection-note"
+          style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}
+        >
+          Ten en cuenta que, si el dueño rechaza tu solicitud, la aplicación no te lo notificará: seguirás viendo
+          esta solicitud como pendiente. Si pasa un tiempo sin respuesta, confirma el estado directamente con el dueño.
+        </p>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <code style={{
             flex: 1,

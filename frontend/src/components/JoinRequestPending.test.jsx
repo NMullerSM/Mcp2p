@@ -98,6 +98,13 @@ describe('JoinRequestPending', () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it('avisa honestamente de que un rechazo no se notifica (hallazgo I2)', () => {
+    render(<JoinRequestPending project={PROJECT} requestCode={REQUEST_CODE} onRetry={vi.fn()} />);
+    const note = screen.getByTestId('join-request-rejection-note');
+    expect(note.textContent).toContain('no te lo notificará');
+    expect(note.textContent).toContain('directamente con el dueño');
+  });
+
   it('no renderiza el botón "Volver a Proyectos" cuando no se provee onBack', () => {
     render(<JoinRequestPending project={PROJECT} requestCode={REQUEST_CODE} onRetry={vi.fn()} />);
     expect(screen.queryByText('Volver a Proyectos')).toBeNull();
