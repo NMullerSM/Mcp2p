@@ -339,8 +339,9 @@ def test_join_request_code_carries_requester_identity():
 def test_join_blocked_by_rate_limit_returns_locked_status():
     bridge_owner, bridge_joiner = two_linked_bridges()
     invite = bridge_owner.generate_p2p_invite()["token"]
-    bridge_joiner.join_p2p_project(invite)
-    p_uuid = bridge_joiner.active_project_uuid
+    join_res = bridge_joiner.join_p2p_project(invite)
+    # Hallazgo C2: el stub pendiente ya no pasa a ser el proyecto activo del solicitante.
+    p_uuid = join_res["project"]["project_uuid"]
     node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
     for _ in range(3):
         bridge_joiner.db.record_rejection(p_uuid, node_uuid)
@@ -352,9 +353,13 @@ def test_join_blocked_by_rate_limit_returns_locked_status():
 def test_join_stub_persists_invite_repo_urls_without_cloning():
     """
     Review finding (Important #1): la fila stub de proyecto debe conservar las URLs de
-    repos remotos de la invitación -- solo las RUTAS locales (code_repo_path/gov_repo_path)
-    deben quedar vacías, ya que nadie más persiste esas URLs (ni el token original, ni
-    request_code) y Task 7's retry_p2p_join las necesitará para clonar tras la aprobación.
+    repos remotos de la invitación, ya que nadie más persiste esas URLs (ni el token
+    original, ni request_code) y Task 7's retry_p2p_join las necesitará para clonar tras
+    la aprobación.
+
+    Hallazgo C2 de la revisión final: las RUTAS locales ya NO quedan vacías (una ruta
+    vacía resolvía al directorio de trabajo del proceso); son las rutas absolutas FUTURAS
+    donde retry_p2p_join clonará, y todavía no existen en disco.
     """
     bridge_owner, bridge_joiner = two_linked_bridges()
     p_uuid = bridge_owner.active_project_uuid
@@ -372,8 +377,11 @@ def test_join_stub_persists_invite_repo_urls_without_cloning():
     stub = bridge_joiner.db.get_project_by_uuid(res["project"]["project_uuid"])
     assert stub["code_repo_url"] == "https://github.com/owner/app.git"
     assert stub["gov_repo_url"] == "https://github.com/owner/gov.git"
-    assert stub["code_repo_path"] == ""
-    assert stub["gov_repo_path"] == ""
+    for key in ("code_repo_path", "gov_repo_path"):
+        assert stub[key] != ""
+        assert Path(stub[key]).is_absolute()
+        assert not Path(stub[key]).exists()
+        assert Path(stub[key]).resolve() != Path.cwd().resolve()
 
 
 def test_owner_collaborator_row_keeps_real_pubkey_and_guards_against_collision():
@@ -453,6 +461,64 @@ def test_ingest_join_request_creates_pending_row():
     assert res["success"] is True
     collabs = bridge_owner.db.get_project_collaborators(bridge_owner.active_project_uuid)
     assert any(c["status"] == "pending_approval" for c in collabs)
+
+
+def test_ingest_join_request_rejects_code_for_a_different_project_than_the_active_one():
+    """
+    Hallazgo diferido de la Tarea 6 (cerrado junto con C1 en la revisión final): un
+    request_code generado para el proyecto X, pegado mientras el proyecto Y es el activo
+    del dueño, debe rechazarse con un error limpio -- nunca registrar en silencio al
+    solicitante en el proyecto equivocado (ni en X, que no es el destino de la llamada).
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    project_x = bridge_owner.active_project_uuid
+    invite_x = bridge_owner.generate_p2p_invite(project_x)["token"]
+    join_res = bridge_joiner.join_p2p_project(invite_x)
+    assert invite_project_uuid(join_res["request_code"]) == project_x
+
+    project_y = bridge_owner.create_project(name="OtherProject")["project"]["project_uuid"]
+    assert project_y != project_x
+    bridge_owner.active_project_uuid = project_y
+    joiner_pk = bridge_joiner.crypto.public_key_base64
+    y_rows_before = bridge_owner.db.get_project_collaborators(project_y)
+
+    res = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res["success"] is False
+    assert res.get("error")
+    assert res.get("status") != "pending_approval"
+
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_y, joiner_pk) is None
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_x, joiner_pk) is None
+    assert bridge_owner.db.get_project_collaborators(project_y) == y_rows_before
+
+
+def test_ingest_join_request_explicit_project_uuid_targets_that_project_and_still_enforces_match():
+    """
+    C1: CollaboratorsView pasa explícitamente el project_uuid del proyecto que el dueño
+    tiene abierto. Ese destino explícito sustituye a active_project_uuid, pero la
+    comprobación contra el project_uuid FIRMADO en el código sigue aplicando.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    project_x = bridge_owner.active_project_uuid
+    invite_x = bridge_owner.generate_p2p_invite(project_x)["token"]
+    join_res = bridge_joiner.join_p2p_project(invite_x)
+    project_y = bridge_owner.create_project(name="OtherProject")["project"]["project_uuid"]
+    joiner_pk = bridge_joiner.crypto.public_key_base64
+
+    # Activo = X, destino explícito = Y -> rechazado, nada registrado en ninguno.
+    bridge_owner.active_project_uuid = project_x
+    wrong = bridge_owner.ingest_join_request(join_res["request_code"], project_y)
+    assert wrong["success"] is False
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_y, joiner_pk) is None
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_x, joiner_pk) is None
+
+    # Activo = Y, destino explícito = X (el proyecto correcto) -> registrado en X.
+    bridge_owner.active_project_uuid = project_y
+    ok = bridge_owner.ingest_join_request(join_res["request_code"], project_x)
+    assert ok["success"] is True
+    assert ok["status"] == "pending_approval"
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_x, joiner_pk)["status"] == "pending_approval"
+    assert bridge_owner.db.get_collaborator_by_pubkey(project_y, joiner_pk) is None
 
 
 def test_ingest_join_request_rejects_when_locked():

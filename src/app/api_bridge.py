@@ -99,10 +99,57 @@ class ApiBridge:
             node_kind="human"
         )
 
+    @staticmethod
+    def _is_pending_join_stub(proj: Optional[Dict[str, Any]]) -> bool:
+        """True si `proj` es un stub de unión P2P todavía no completado (creado por
+        join_p2p_project y aún sin aprobación + clonado vía retry_p2p_join).
+
+        Hallazgo C2 de la revisión final: un stub no tiene repositorios locales reales
+        todavía, así que NINGUNA operación que trate al proyecto como "normal" (git,
+        GitHub, invitaciones) debe ejecutarse sobre él. Solo 'active' cuenta como
+        completamente unido; NULL se trata como 'active' porque la columna tiene DEFAULT
+        'active' y solo podría ser NULL en una fila legada anterior a esa columna, que por
+        definición nunca fue un stub de este flujo."""
+        if not proj:
+            return False
+        return (proj.get("join_status") or "active") != "active"
+
+    @staticmethod
+    def _pending_join_refusal(proj: Dict[str, Any], action: str) -> Dict[str, Any]:
+        """Respuesta de error uniforme (nunca una excepción) para operaciones rechazadas
+        sobre un stub de unión pendiente."""
+        return {
+            "success": False,
+            "status": "join_pending",
+            "join_status": proj.get("join_status"),
+            "error": (
+                f"No se puede {action}: la unión a '{proj.get('name', proj.get('project_uuid'))}' "
+                "todavía está pendiente de aprobación por el dueño del proyecto."
+            ),
+        }
+
+    def _join_stub_repo_dirs(self, p_name: str, p_uuid: str, base_path: Optional[str] = None) -> Tuple[Path, Path, Path]:
+        """Calcula (base_dir, app_dir, gov_dir) de un proyecto unido vía P2P con la MISMA
+        fórmula que db.create_project usa para un proyecto real (app_{name} y
+        okf_{name}_{short_id} bajo workspace/{name}_{short_id}). La usan tanto
+        join_p2p_project (para persistir en el stub las rutas FUTURAS donde irá el clon)
+        como retry_p2p_join (para clonar exactamente ahí), de modo que nunca diverjan."""
+        clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in (p_name or "proyecto").lower())
+        short_id = p_uuid.replace("proj_", "")[:8]
+        base_dir = Path(base_path) if base_path else (self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}")
+        app_dir = base_dir / f"app_{clean_name}"
+        gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
+        return base_dir, app_dir, gov_dir
+
     def _ensure_active_project(self) -> None:
-        projects = self.db.list_projects()
-        if projects:
-            self.active_project_uuid = projects[0]["project_uuid"]
+        # Hallazgo C2: un stub de unión pendiente nunca debe convertirse en el proyecto
+        # activo solo por ser el más reciente (updated_at DESC) -- el webhook LAN de
+        # main.py y las herramientas que operan "sobre el proyecto activo" lo tratarían
+        # como un proyecto normal.
+        for proj in self.db.list_projects():
+            if not self._is_pending_join_stub(proj):
+                self.active_project_uuid = proj["project_uuid"]
+                return
 
     def set_window(self, window: Any) -> None:
         """Asigna la referencia a la ventana principal de PyWebView."""
@@ -183,6 +230,8 @@ class ApiBridge:
             proj = self.db.get_project_by_uuid(project_uuid)
             if not proj:
                 return {"success": False, "error": "Proyecto no encontrado"}
+            if self._is_pending_join_stub(proj):
+                return self._pending_join_refusal(proj, "abrir el proyecto como espacio de trabajo")
             self.active_project_uuid = project_uuid
             self.ensure_local_node_registered()
             return {"success": True, "project": proj}
@@ -210,9 +259,11 @@ class ApiBridge:
                 self._ensure_active_project()
                 target_uuid = self.active_project_uuid
 
-            proj = self.db.get_project_by_uuid(target_uuid)
+            proj = self.db.get_project_by_uuid(target_uuid) if target_uuid else None
             if not proj:
                 return {"success": False, "error": "Proyecto no encontrado"}
+            if self._is_pending_join_stub(proj):
+                return self._pending_join_refusal(proj, "generar invitaciones para este proyecto")
 
             local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
             gh_status = self.github.get_auth_status()
@@ -355,9 +406,14 @@ class ApiBridge:
                 # tras un fallo de transporte transitorio) sin arrojar un error de fila
                 # duplicada.
                 p_sla = int(payload.get("reviewer_sla_hours") or 24)
-                clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
-                short_id = p_uuid.replace("proj_", "")[:8]
-                base_dir = self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"
+                # Hallazgo C2 de la revisión final: persistir las rutas FUTURAS (donde
+                # retry_p2p_join clonará tras la aprobación), aunque todavía no existan.
+                # Con code_repo_path/gov_repo_path = '' cualquier código que haga
+                # Path(proj["gov_repo_path"]) resolvía al DIRECTORIO DE TRABAJO DEL PROCESO
+                # (p. ej. el checkout desde el que se lanzó ./run.sh), y operaba git/GitHub
+                # sobre ese repositorio ajeno. Una ruta absoluta inexistente, en cambio, hace
+                # que los guards `.exists()` ya presentes en el resto del código cortocircuiten.
+                base_dir, future_app_dir, future_gov_dir = self._join_stub_repo_dirs(p_name, p_uuid)
                 # Persistir las URLs de los repositorios remotos (si vienen en la invitación)
                 # aunque todavía no se clone nada: Task 7's retry_p2p_join las necesitará para
                 # clonar tras la aprobación, y no hay ningún otro lugar donde queden guardadas
@@ -373,13 +429,19 @@ class ApiBridge:
                                 project_uuid, name, base_path, code_repo_path, gov_repo_path,
                                 code_repo_url, gov_repo_url, default_sla_hours, join_status,
                                 created_at, updated_at
-                            ) VALUES (?, ?, ?, '', '', ?, ?, ?, 'pending_approval', ?, ?);
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?);
                             """,
-                            (p_uuid, p_name, str(base_dir), code_url, gov_url, p_sla, now_str, now_str)
+                            (
+                                p_uuid, p_name, str(base_dir), str(future_app_dir), str(future_gov_dir),
+                                code_url, gov_url, p_sla, now_str, now_str
+                            )
                         )
                 existing = self.db.get_project_by_uuid(p_uuid)
 
-            self.active_project_uuid = p_uuid
+            # Hallazgo C2: el stub pendiente NO pasa a ser el proyecto activo (antes sí,
+            # lo que exponía al webhook LAN de main.py -- api.sync_three_tiers() sin
+            # project_uuid -- y a cualquier otra operación "sobre el proyecto activo" a un
+            # proyecto sin repositorios reales). retry_p2p_join lo activa solo tras clonar.
 
             local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
             gh_status = self.github.get_auth_status()
@@ -443,15 +505,9 @@ class ApiBridge:
             # identidad propia del solicitante (para que el dueño pueda aprobarlo fuera
             # de línea) junto con el project_uuid y el rendezvous_nonce de la invitación
             # original.
-            request_payload = {
-                "project_uuid": p_uuid,
-                "rendezvous_nonce": payload.get("rendezvous_nonce", ""),
-                "github_username": gh_status.get("username", ""),
-                "public_key": self.crypto.public_key_base64,
-                "node_uuid": local_node,
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            request_code = self.crypto.create_signed_invite_token(request_payload)
+            request_code = self._build_join_request_code(
+                p_uuid, payload.get("rendezvous_nonce", ""), gh_status.get("username", ""), local_node
+            )
 
             # Intento best-effort de conexión en vivo vía el transporte P2P configurado
             # (WebRTC real o NullTransportAdapter): nunca debe afectar el resultado
@@ -473,6 +529,42 @@ class ApiBridge:
             }
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
+
+    def _build_join_request_code(self, p_uuid: str, rendezvous_nonce: str, github_username: str, node_uuid: str) -> str:
+        """Firma el 'request_code' (nivel 2) con la identidad propia del solicitante."""
+        request_payload = {
+            "project_uuid": p_uuid,
+            "rendezvous_nonce": rendezvous_nonce or "",
+            "github_username": github_username or "",
+            "public_key": self.crypto.public_key_base64,
+            "node_uuid": node_uuid,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        return self.crypto.create_signed_invite_token(request_payload)
+
+    def get_pending_join_request_code(self, project_uuid: str) -> Dict[str, Any]:
+        """
+        Regenera -- sin escribir nada en la base de datos ni contar como intento de unión
+        -- el 'request_code' firmado de un stub de unión todavía pendiente, para que la
+        pantalla JoinRequestPending pueda mostrarlo de nuevo cuando el usuario reabre el
+        stub desde el hub de proyectos (el código original de join_p2p_project no se
+        persiste). Solo firma la identidad propia de este nodo para ese project_uuid --
+        exactamente lo mismo que join_p2p_project ya produce -- así que no concede nada
+        nuevo. El rendezvous_nonce de la invitación original no se conserva y queda
+        vacío: ingest_join_request no lo usa.
+        """
+        try:
+            proj = self.db.get_project_by_uuid(project_uuid)
+            if not proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+            if not self._is_pending_join_stub(proj):
+                return {"success": False, "error": "El proyecto no tiene una solicitud de unión pendiente"}
+            local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+            gh_status = self.github.get_auth_status()
+            request_code = self._build_join_request_code(project_uuid, "", gh_status.get("username", ""), local_node)
+            return {"success": True, "project": proj, "request_code": request_code}
+        except Exception as e:
+            return {"success": False, "error": f"No se pudo regenerar el código de solicitud: {str(e)}"}
 
     def retry_p2p_join(self, project_uuid: str) -> Dict[str, Any]:
         """
@@ -557,18 +649,25 @@ class ApiBridge:
                     "error": "El dueño del proyecto todavía no ha publicado sus repositorios remotos. No hay nada que clonar todavía."
                 }
 
-            clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in p_name.lower())
-            short_id = project_uuid.replace("proj_", "")[:8]
-            base_dir = Path(proj.get("base_path") or (self.db.db_path.parent / "workspace" / f"{clean_name}_{short_id}"))
-            app_dir = base_dir / f"app_{clean_name}"
-            gov_dir = base_dir / f"okf_{clean_name}_{short_id}"
+            _base_dir, app_dir, gov_dir = self._join_stub_repo_dirs(p_name, project_uuid, proj.get("base_path"))
 
-            # 1. Intentar aceptar invitaciones pendientes automáticamente en GitHub
-            # (best-effort: un fallo aquí nunca debe impedir el intento de clonado).
-            try:
-                self.github.accept_pending_invitations()
-            except Exception as acc_e:
-                logger.debug(f"Auto-accept invitations omitido: {acc_e}")
+            # 1. Intentar aceptar automáticamente en GitHub SOLO las invitaciones a los
+            # repositorios de ESTE proyecto (best-effort: un fallo aquí nunca debe impedir
+            # el intento de clonado). Hallazgo I3 de la revisión final: antes se llamaba
+            # accept_pending_invitations() sin filtro, aceptando en silencio CUALQUIER
+            # invitación pendiente de la cuenta (repositorios totalmente ajenos) en cada
+            # clic de "Reintentar". Si ninguna URL es un repo de GitHub resoluble a
+            # owner/repo, no se acepta nada.
+            repo_full_names = set()
+            for raw_url in (code_url, gov_url):
+                owner_repo = self._parse_github_owner_repo(raw_url)
+                if owner_repo:
+                    repo_full_names.add(f"{owner_repo[0]}/{owner_repo[1]}")
+            if repo_full_names:
+                try:
+                    self.github.accept_pending_invitations(repo_full_names=repo_full_names)
+                except Exception as acc_e:
+                    logger.debug(f"Auto-accept invitations omitido: {acc_e}")
 
             # 2. Clonar repositorio de gobernanza OKF
             if gov_url and not (gov_dir / ".git").exists():
@@ -653,7 +752,7 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": f"Error al consultar el estado de la solicitud de unión: {str(e)}"}
 
-    def ingest_join_request(self, request_code: str) -> Dict[str, Any]:
+    def ingest_join_request(self, request_code: str, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         """
         Ingiere manualmente un 'request_code' firmado (el mismo formato de token que
         join_p2p_project produce para el solicitante) en el proyecto activo del DUEÑO.
@@ -664,6 +763,14 @@ class ApiBridge:
         su propia base de datos, exactamente como si hubiera llegado en vivo, para que
         pueda aprobarse/rechazarse luego a través de la UI existente de
         CollaboratorsView.
+
+        `project_uuid` (opcional, hallazgo C1 de la revisión final): el proyecto que el
+        dueño tiene abierto en CollaboratorsView, donde pegó el código. Si se omite (p.
+        ej. la llegada en vivo vía _handle_transport_message) se usa el proyecto activo,
+        como antes. En ambos casos el project_uuid FIRMADO dentro del request_code debe
+        coincidir con el proyecto destino -- este parámetro solo elige el destino
+        explícitamente en vez de depender de active_project_uuid; nunca relaja esa
+        comprobación.
         """
         try:
             is_valid, payload, err = self.crypto.decode_and_verify_invite_token(request_code)
@@ -700,9 +807,14 @@ class ApiBridge:
                     "error": "La identidad declarada en la solicitud no coincide con la clave que firmó el token"
                 }
 
-            project_uuid = self.active_project_uuid
+            project_uuid = project_uuid or self.active_project_uuid
             if not project_uuid:
                 return {"success": False, "error": "No hay un proyecto activo para procesar la solicitud de unión"}
+            target_proj = self.db.get_project_by_uuid(project_uuid)
+            if not target_proj:
+                return {"success": False, "error": "Proyecto no encontrado"}
+            if self._is_pending_join_stub(target_proj):
+                return self._pending_join_refusal(target_proj, "registrar solicitudes de unión en este proyecto")
 
             # Important: el request_code lleva su propio project_uuid firmado -- si no
             # coincide con el proyecto actualmente activo del dueño, no se procesa (de lo
@@ -712,7 +824,7 @@ class ApiBridge:
             if payload.get("project_uuid") != project_uuid:
                 return {
                     "success": False,
-                    "error": "El request_code corresponde a un proyecto distinto al actualmente activo"
+                    "error": "El código de solicitud corresponde a un proyecto distinto a este"
                 }
 
             # Review Focus: la idempotencia debe evaluarse ANTES que cualquier chequeo de
@@ -1505,6 +1617,18 @@ class ApiBridge:
         if wt_path.exists() and (wt_path / ".git").exists():
             return wt_path
 
+        # Hallazgo C2 (defensa en profundidad): git busca un repositorio subiendo por los
+        # directorios padre, así que ejecutar git con cwd en una carpeta que NO es la raíz
+        # de un repo (p. ej. el proyecto semilla, creado con init_git=False, o la ruta
+        # futura de un stub de unión) operaría sobre el repositorio CONTENEDOR -- en modo
+        # desarrollo, workspace/ vive dentro del propio checkout de MCP2P. Nunca montar
+        # ramas/worktrees fuera de un repo propio.
+        if not (gov_path / ".git").exists():
+            raise RuntimeError(
+                f"{gov_path} no es la raíz de un repositorio Git; se omite el worktree huérfano "
+                "para no operar sobre un repositorio contenedor"
+            )
+
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
 
         # 1. Comprobar si la rama huérfana ya existe localmente
@@ -1588,30 +1712,42 @@ class ApiBridge:
             self._ensure_active_project()
             target_uuid = self.active_project_uuid
 
-        proj = self.db.get_project_by_uuid(target_uuid)
+        proj = self.db.get_project_by_uuid(target_uuid) if target_uuid else None
         if not proj:
             return {"success": False, "error": "Proyecto no encontrado"}
+        # Hallazgo C2: nunca crear/publicar repositorios de GitHub para un stub de unión
+        # pendiente (sus rutas no son repos reales; con rutas vacías se publicaba el
+        # repositorio del directorio de trabajo del proceso).
+        if self._is_pending_join_stub(proj):
+            return self._pending_join_refusal(proj, "publicar el proyecto en GitHub")
 
         clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in proj.get("name", "proyecto").lower())
 
         if repo_target == "both":
+            # Defensa en profundidad (C2): una ruta vacía resolvería al cwd del proceso.
             app_path = proj.get("code_repo_path")
             app_name = f"mcp2p-{clean_name}"
-            app_res = self.github.auto_create_and_publish_repo(
-                repo_path=app_path,
-                repo_name=app_name,
-                description=f"Repositorio de código local-first para {proj.get('name')}",
-                private=is_private
-            )
+            if app_path:
+                app_res = self.github.auto_create_and_publish_repo(
+                    repo_path=app_path,
+                    repo_name=app_name,
+                    description=f"Repositorio de código local-first para {proj.get('name')}",
+                    private=is_private
+                )
+            else:
+                app_res = {"success": False, "error": "Ruta del repositorio (app) no configurada"}
 
             gov_path = proj.get("gov_repo_path")
             gov_name = f"mcp2p-{clean_name}-okf"
-            gov_res = self.github.auto_create_and_publish_repo(
-                repo_path=gov_path,
-                repo_name=gov_name,
-                description=f"Repositorio de gobernanza OKF para {proj.get('name')}",
-                private=is_private
-            )
+            if gov_path:
+                gov_res = self.github.auto_create_and_publish_repo(
+                    repo_path=gov_path,
+                    repo_name=gov_name,
+                    description=f"Repositorio de gobernanza OKF para {proj.get('name')}",
+                    private=is_private
+                )
+            else:
+                gov_res = {"success": False, "error": "Ruta del repositorio (gov) no configurada"}
 
             orphan_res = {"success": False, "error": "No ejecutado"}
             if gov_path and Path(gov_path).exists():
@@ -1692,14 +1828,25 @@ class ApiBridge:
             self._ensure_active_project()
             target_uuid = self.active_project_uuid
 
-        proj = self.db.get_project_by_uuid(target_uuid)
+        proj = self.db.get_project_by_uuid(target_uuid) if target_uuid else None
         if not proj:
             return {"success": False, "error": "Proyecto no encontrado para sincronización"}
+        # Hallazgo C2: un stub de unión pendiente no tiene repositorios reales; sincronizarlo
+        # llegó a crear/empujar ramas y hacer `git pull --rebase` sobre el repo del cwd.
+        if self._is_pending_join_stub(proj):
+            return self._pending_join_refusal(proj, "sincronizar el proyecto")
+
+        # Defensa en profundidad (C2): Path("").resolve() es el directorio de trabajo del
+        # proceso -- nunca debe usarse como repositorio de gobernanza/código.
+        gov_raw = (proj.get("gov_repo_path") or "").strip()
+        code_raw = (proj.get("code_repo_path") or "").strip()
+        if not gov_raw:
+            return {"success": False, "error": "Ruta del repositorio de gobernanza no configurada; sincronización omitida"}
 
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
         local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
-        gov_path = Path(proj.get("gov_repo_path", "")).resolve()
-        app_path = Path(proj.get("code_repo_path", "")).resolve()
+        gov_path = Path(gov_raw).resolve()
+        app_path = Path(code_raw).resolve() if code_raw else None
 
         # ==========================================
         # Nivel 1: Memoria Huérfana y Eventos A2A
@@ -1825,7 +1972,9 @@ class ApiBridge:
         # ==========================================
         tier2_res = {"status": "ok"}
         try:
-            if gov_path.exists() and self.github.has_remote(gov_path, "origin"):
+            # (gov_path / ".git"): ver ensure_orphan_worktree -- sin esto, `git pull
+            # --rebase` en una carpeta que no es raíz de repo actuaría sobre el repo contenedor.
+            if (gov_path / ".git").exists() and self.github.has_remote(gov_path, "origin"):
                 pull_gov = self.github.git_pull(gov_path, remote="origin", branch="main", rebase=True)
                 tier2_res["pull"] = pull_gov.get("success", False)
 
@@ -1840,7 +1989,7 @@ class ApiBridge:
         # ==========================================
         tier3_res = {"status": "ok"}
         try:
-            if app_path.exists() and self.github.has_remote(app_path, "origin"):
+            if app_path is not None and (app_path / ".git").exists() and self.github.has_remote(app_path, "origin"):
                 fetch_app = self.github.git_fetch(app_path, remote="origin")
                 tier3_res["fetch"] = fetch_app.get("success", False)
         except Exception as t3_err:

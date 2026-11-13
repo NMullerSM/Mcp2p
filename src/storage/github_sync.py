@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.proc_utils import run_hidden
 
@@ -346,11 +346,26 @@ class GitHubSyncManager:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def accept_pending_invitations(self, token: Optional[str] = None) -> Dict[str, Any]:
+    def accept_pending_invitations(
+        self,
+        token: Optional[str] = None,
+        repo_full_names: Optional[Iterable[str]] = None
+    ) -> Dict[str, Any]:
         """
         Consulta y acepta invitaciones pendientes a repositorios de GitHub para el usuario autenticado.
         (GET /user/repository_invitations y PATCH /user/repository_invitations/{id})
+
+        `repo_full_names` (opcional): si se indica, SOLO se aceptan las invitaciones cuyo
+        `repository.full_name` ("owner/repo", comparado sin distinguir mayúsculas) esté en
+        ese conjunto; las demás se dejan intactas. Un conjunto vacío no acepta nada. Con
+        None (por defecto) se conserva el comportamiento histórico de aceptar todas.
         """
+        allowed: Optional[set] = None
+        if repo_full_names is not None:
+            allowed = {str(n).strip().lower() for n in repo_full_names if str(n).strip()}
+            if not allowed:
+                return {"success": True, "accepted_count": 0, "accepted": []}
+
         active_token = token or self._get_active_token()
         if not active_token:
             return {"success": False, "error": "No hay un GitHub PAT configurado"}
@@ -370,7 +385,10 @@ class GitHubSyncManager:
             accepted = []
             for inv in invitations:
                 inv_id = inv.get("id")
-                repo_name = inv.get("repository", {}).get("full_name", str(inv_id))
+                full_name = (inv.get("repository") or {}).get("full_name") or ""
+                repo_name = full_name or str(inv_id)
+                if allowed is not None and full_name.lower() not in allowed:
+                    continue
                 patch_req = urllib.request.Request(
                     f"https://api.github.com/user/repository_invitations/{inv_id}",
                     headers={
