@@ -45,6 +45,11 @@ export function SettingsDrawer({
   const [patLoading, setPatLoading] = useState(false);
   const [patMessage, setPatMessage] = useState(null);
 
+  // Estados del Servidor de Señalización WebRTC (Tarea 4 / Tarea 11)
+  const [signalingUrlInput, setSignalingUrlInput] = useState('');
+  const [signalingUrlLoading, setSignalingUrlLoading] = useState(false);
+  const [signalingUrlMessage, setSignalingUrlMessage] = useState(null);
+
   // Estados del Visor OKF en Crudo
   const [okfTree, setOkfTree] = useState([]);
   const [selectedFilePath, setSelectedFilePath] = useState('');
@@ -107,7 +112,8 @@ export function SettingsDrawer({
 
     const promises = [
       api.get_system_info(),
-      api.get_github_status()
+      api.get_github_status(),
+      api.get_signaling_server_url()
     ];
     if (targetProjectUuid) {
       promises.push(api.generate_p2p_invite(targetProjectUuid));
@@ -116,7 +122,7 @@ export function SettingsDrawer({
 
     Promise.allSettled(promises).then(results => {
       if (cancelled) return;
-      const [sysRes, ghRes, inviteRes, mcpRes] = results;
+      const [sysRes, ghRes, signalingRes, inviteRes, mcpRes] = results;
 
       if (sysRes?.status === 'fulfilled' && sysRes.value?.success) {
         setSystemInfo(sysRes.value);
@@ -129,6 +135,12 @@ export function SettingsDrawer({
           }
           return newGh;
         });
+      }
+      // get_signaling_server_url() devuelve la URL directamente como string (no un dict
+      // {success, ...}), a diferencia de la mayoría de los métodos del puente -- ver
+      // api_bridge.py:246.
+      if (signalingRes?.status === 'fulfilled' && typeof signalingRes.value === 'string') {
+        setSignalingUrlInput(signalingRes.value);
       }
       if (inviteRes?.status === 'fulfilled' && inviteRes.value?.success) {
         setInviteUrl(inviteRes.value.invite_url || '');
@@ -201,6 +213,24 @@ export function SettingsDrawer({
       setPatMessage({ type: 'error', text: 'Error: ' + e });
     } finally {
       setPatLoading(false);
+    }
+  };
+
+  const handleSaveSignalingUrl = async () => {
+    if (!api) return;
+    setSignalingUrlLoading(true);
+    setSignalingUrlMessage(null);
+    try {
+      const res = await api.set_signaling_server_url(signalingUrlInput.trim());
+      if (res.success) {
+        setSignalingUrlMessage({ type: 'success', text: 'Servidor de señalización P2P guardado.' });
+      } else {
+        setSignalingUrlMessage({ type: 'error', text: res.error || 'Error al guardar la URL del servidor de señalización' });
+      }
+    } catch (e) {
+      setSignalingUrlMessage({ type: 'error', text: 'Error de comunicación: ' + e });
+    } finally {
+      setSignalingUrlLoading(false);
     }
   };
 
@@ -562,6 +592,75 @@ export function SettingsDrawer({
                   Selecciona un proyecto para generar un enlace de invitación P2P.
                 </div>
               )}
+
+              {/* Servidor de señalización WebRTC (Tarea 4 / Tarea 11) */}
+              <div style={{
+                marginTop: '20px',
+                background: 'var(--bg-card)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px'
+              }}>
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Servidor de Señalización P2P</h5>
+                <p style={{ fontSize: '11px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                  URL del servidor de señalización WebRTC (<code>ws://</code> o <code>wss://</code>) usado para establecer
+                  conexiones P2P directas entre nodos. Déjalo vacío para usar el adaptador local sin señalización remota.
+                </p>
+
+                {signalingUrlMessage && (
+                  <div style={{
+                    padding: '8px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '11px',
+                    backgroundColor: signalingUrlMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    color: signalingUrlMessage.type === 'success' ? 'var(--accent-success)' : 'var(--accent-danger)',
+                    border: `1px solid ${signalingUrlMessage.type === 'success' ? 'rgba(var(--accent-primary-rgb), 0.3)' : 'rgba(239, 68, 68, 0.3)'}`
+                  }}>
+                    {signalingUrlMessage.text}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    placeholder="wss://signal.example.com"
+                    value={signalingUrlInput}
+                    onChange={e => setSignalingUrlInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveSignalingUrl}
+                    disabled={signalingUrlLoading}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: signalingUrlLoading ? 'not-allowed' : 'pointer',
+                      opacity: signalingUrlLoading ? 0.6 : 1,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {signalingUrlLoading ? 'Guardando...' : 'Guardar'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

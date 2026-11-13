@@ -798,13 +798,25 @@ class ApiBridge:
     # ==========================
 
     def get_project_collaborators(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Obtiene la lista de colaboradores y solicitudes de un proyecto."""
+        """Obtiene la lista de colaboradores y solicitudes de un proyecto.
+
+        Para cada fila pendiente de aprobación, agrega un campo `locked_until`
+        (ISO-8601 UTC o None) reutilizando `get_join_rate_limit_state` -- la misma
+        lógica de umbrales ya probada en tests/test_join_rate_limit.py -- en vez de
+        duplicar los umbrales de bloqueo (3-4 rechazos -> 30min, 5+ -> 24h) en el
+        frontend JS. Así la UI de propietario puede renderizar un estado de bloqueo
+        sin reimplementar esa aritmética en dos lenguajes."""
         try:
             target_uuid = project_uuid or self.active_project_uuid
             if not target_uuid:
                 self._ensure_active_project()
                 target_uuid = self.active_project_uuid
             collaborators = self.db.get_project_collaborators(target_uuid)
+            for c in collaborators:
+                c["locked_until"] = None
+                if c.get("status") == "pending_approval" and c.get("public_key"):
+                    rate_state = self.db.get_join_rate_limit_state(target_uuid, c["public_key"])
+                    c["locked_until"] = rate_state.get("locked_until")
             return {"success": True, "collaborators": collaborators}
         except Exception as e:
             return {"success": False, "error": str(e)}

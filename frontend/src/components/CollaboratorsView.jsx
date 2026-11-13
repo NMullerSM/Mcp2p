@@ -1,5 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2 } from 'lucide-react';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock } from 'lucide-react';
+
+/**
+ * Formatea el tiempo restante de un bloqueo de solicitud de unión (`locked_until`,
+ * ISO-8601 UTC calculado por el backend en get_project_collaborators -- ver
+ * api_bridge.py, que reutiliza get_join_rate_limit_state en vez de duplicar los
+ * umbrales de bloqueo aquí) como una cadena legible en español, p. ej. "29min" o
+ * "23h 40min". Devuelve null si no hay bloqueo vigente (incluyendo cuando ya expiró
+ * entre la carga de datos y el render).
+ */
+export function formatLockRemaining(lockedUntilIso) {
+  if (!lockedUntilIso) return null;
+  const until = new Date(lockedUntilIso).getTime();
+  if (Number.isNaN(until)) return null;
+  const remainingMs = until - Date.now();
+  if (remainingMs <= 0) return null;
+  const totalMinutes = Math.ceil(remainingMs / 60000);
+  if (totalMinutes >= 60) {
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return minutes > 0 ? `${hours}h ${minutes}min` : `${hours}h`;
+  }
+  return `${totalMinutes}min`;
+}
 
 export function CollaboratorsView({ project, api }) {
   const [collaborators, setCollaborators] = useState([]);
@@ -172,6 +195,7 @@ export function CollaboratorsView({ project, api }) {
           {collaborators.map((c) => {
             const isPending = c.status === 'pending_approval';
             const isOwner = c.role === 'owner';
+            const lockRemaining = isPending ? formatLockRemaining(c.locked_until) : null;
 
             return (
               <div
@@ -245,6 +269,42 @@ export function CollaboratorsView({ project, api }) {
                 {/* Status / HITL Actions */}
                 <div>
                   {isPending ? (
+                    lockRemaining ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} data-testid="collab-lock-state">
+                        <span style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          fontSize: '11px',
+                          color: 'var(--accent-danger)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                          padding: '4px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          fontWeight: 600
+                        }}>
+                          <Lock size={12} /> Bloqueado por exceso de rechazos ({lockRemaining} restantes)
+                        </span>
+                        <button
+                          disabled
+                          title="Solicitud bloqueada temporalmente por rechazos repetidos; espera a que expire el bloqueo"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '5px 10px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            borderRadius: 'var(--radius-sm)',
+                            border: 'none',
+                            backgroundColor: 'var(--bg-subtle)',
+                            color: 'var(--text-muted)',
+                            cursor: 'not-allowed'
+                          }}
+                        >
+                          <Check size={13} /> Aceptar
+                        </button>
+                      </div>
+                    ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{
                         display: 'flex',
@@ -298,6 +358,7 @@ export function CollaboratorsView({ project, api }) {
                         <X size={13} />
                       </button>
                     </div>
+                    )
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{

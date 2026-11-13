@@ -1029,6 +1029,47 @@ def test_reject_collaborator_returns_rejection_count_and_lock():
     assert res["locked_until"] is not None
 
 
+def test_get_project_collaborators_includes_locked_until_for_locked_pending_row():
+    """Task 11 (owner-side UI): get_project_collaborators must precompute `locked_until`
+    per pending row by reusing the already-tested get_join_rate_limit_state, instead of
+    requiring the frontend to duplicate the 3-4-rejections/30min, 5+/24h threshold math
+    in JavaScript."""
+    bridge = ApiBridge(db_manager=make_test_db())
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+    for _ in range(3):
+        bridge.reject_collaborator("proj_x", "node_1")
+    # reject_collaborator() moves the row to status='rejected', not pending_approval --
+    # re-request to get back into pending_approval with the rejection history intact.
+    bridge.db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1")
+
+    res = bridge.get_project_collaborators("proj_x")
+    assert res["success"] is True
+    row = next(c for c in res["collaborators"] if c["node_uuid"] == "node_1")
+    assert row["status"] == "pending_approval"
+    assert row["rejection_count"] == 3
+    assert row["locked_until"] is not None
+
+
+def test_get_project_collaborators_locked_until_is_none_when_not_locked():
+    bridge = ApiBridge(db_manager=make_test_db())
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+
+    res = bridge.get_project_collaborators("proj_x")
+    assert res["success"] is True
+    row = next(c for c in res["collaborators"] if c["node_uuid"] == "node_1")
+    assert row["locked_until"] is None
+
+
+def test_get_project_collaborators_locked_until_is_none_for_non_pending_rows():
+    """A row that isn't pending_approval (e.g. the owner's own 'approved' row, which has
+    no public_key tied to a join attempt) must not blow up or get a spurious lock."""
+    bridge = ApiBridge(db_manager=make_test_db())
+    res = bridge.get_project_collaborators(bridge.active_project_uuid)
+    assert res["success"] is True
+    owner_row = next(c for c in res["collaborators"] if c["role"] == "owner")
+    assert owner_row["locked_until"] is None
+
+
 def test_approve_collaborator_sends_live_notification_when_transport_connected():
     fake_transport = FakeConnectedTransport()
     bridge = ApiBridge(db_manager=make_test_db(), transport=fake_transport)
