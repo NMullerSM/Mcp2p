@@ -1029,25 +1029,46 @@ def test_reject_collaborator_returns_rejection_count_and_lock():
     assert res["locked_until"] is not None
 
 
-def test_get_project_collaborators_includes_locked_until_for_locked_pending_row():
-    """Task 11 (owner-side UI): get_project_collaborators must precompute `locked_until`
-    per pending row by reusing the already-tested get_join_rate_limit_state, instead of
-    requiring the frontend to duplicate the 3-4-rejections/30min, 5+/24h threshold math
-    in JavaScript."""
-    bridge = ApiBridge(db_manager=make_test_db())
-    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
-    for _ in range(3):
-        bridge.reject_collaborator("proj_x", "node_1")
-    # reject_collaborator() moves the row to status='rejected', not pending_approval --
-    # re-request to get back into pending_approval with the rejection history intact.
-    bridge.db.add_or_request_collaborator("proj_x", "node_1", public_key="PK1")
+def test_get_project_collaborators_includes_locked_until_for_locked_rejected_row():
+    """Task 11 review finding (Important #1/#2): the state that ACTUALLY happens after
+    3+ rejections through the real application flow is a 'rejected' row with an active
+    lock, never 'pending_approval' + locked -- record_rejection() flips the row to
+    'rejected' in the SAME operation that crosses the lock threshold, and
+    ingest_join_request checks the rate-limit BEFORE touching the row, so a locked
+    public key's resubmission is turned away before the row is ever written again.
+    This test reaches that real state through the real API (two_linked_bridges +
+    ingest_join_request with a genuine signed request_code, the same pattern as
+    test_ingest_join_request_rejects_when_locked below) instead of fabricating a
+    'pending_approval + locked' combination that a real user flow cannot produce.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    p_uuid = invite_project_uuid(invite)
+    bridge_owner.active_project_uuid = p_uuid
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
 
-    res = bridge.get_project_collaborators("proj_x")
+    for _ in range(3):
+        bridge_owner.reject_collaborator(p_uuid, node_uuid)
+
+    res = bridge_owner.get_project_collaborators(p_uuid)
     assert res["success"] is True
-    row = next(c for c in res["collaborators"] if c["node_uuid"] == "node_1")
-    assert row["status"] == "pending_approval"
+    row = next(c for c in res["collaborators"] if c["node_uuid"] == node_uuid)
+    assert row["status"] == "rejected"
     assert row["rejection_count"] == 3
     assert row["locked_until"] is not None
+
+    # A real resubmission while locked must be turned away without touching the row --
+    # confirms the 'pending_approval + locked' combination the old test fabricated is
+    # genuinely unreachable here, and that the lock the owner now sees actually governs
+    # the requester's ability to retry.
+    res2 = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res2["success"] is False
+    assert res2["status"] == "locked"
+    row_after = next(c for c in bridge_owner.get_project_collaborators(p_uuid)["collaborators"] if c["node_uuid"] == node_uuid)
+    assert row_after["status"] == "rejected"
+    assert row_after["rejection_count"] == 3
 
 
 def test_get_project_collaborators_locked_until_is_none_when_not_locked():
@@ -1060,14 +1081,30 @@ def test_get_project_collaborators_locked_until_is_none_when_not_locked():
     assert row["locked_until"] is None
 
 
-def test_get_project_collaborators_locked_until_is_none_for_non_pending_rows():
-    """A row that isn't pending_approval (e.g. the owner's own 'approved' row, which has
-    no public_key tied to a join attempt) must not blow up or get a spurious lock."""
+def test_get_project_collaborators_locked_until_is_none_for_approved_rows():
+    """An 'approved' row (e.g. the owner's own row, or any collaborator the owner has
+    accepted) must never show a lock, even though it still carries rejection history
+    from before it was approved -- approve_collaborator() resets rejection_count to 0,
+    but the real guard here is the 'approved' status check itself, not the counters."""
     bridge = ApiBridge(db_manager=make_test_db())
     res = bridge.get_project_collaborators(bridge.active_project_uuid)
     assert res["success"] is True
     owner_row = next(c for c in res["collaborators"] if c["role"] == "owner")
     assert owner_row["locked_until"] is None
+
+
+def test_get_project_collaborators_locked_until_is_none_for_rejected_row_without_active_lock():
+    """A rejected row with only 1-2 rejections (below the lock threshold) must show
+    locked_until: None -- the lock badge is informational and must not appear when
+    there is genuinely no active lock."""
+    bridge = ApiBridge(db_manager=make_test_db())
+    seed_pending_collaborator(bridge, "proj_x", "node_1", public_key="PK1")
+    bridge.reject_collaborator("proj_x", "node_1")
+
+    res = bridge.get_project_collaborators("proj_x")
+    row = next(c for c in res["collaborators"] if c["node_uuid"] == "node_1")
+    assert row["status"] == "rejected"
+    assert row["locked_until"] is None
 
 
 def test_approve_collaborator_sends_live_notification_when_transport_connected():

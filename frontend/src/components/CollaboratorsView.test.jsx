@@ -72,7 +72,45 @@ describe('CollaboratorsView - estado de bloqueo por rate-limit', () => {
     expect(screen.queryByTestId('collab-lock-state')).toBeNull();
   });
 
-  it('muestra el badge de bloqueo con cuenta atrás y deshabilita Aceptar cuando locked_until está en el futuro', async () => {
+  it('muestra el badge de bloqueo informativo en una fila RECHAZADA con bloqueo activo (el estado real tras 3+ rechazos)', async () => {
+    // Reviewer finding: the state that actually happens after 3+ rejections is a
+    // 'rejected' row with an active lock -- record_rejection() flips the row to
+    // 'rejected' in the SAME operation that crosses the lock threshold, so
+    // 'pending_approval' + locked is not a real reachable state through normal use.
+    const future = new Date(Date.now() + 25 * 60000).toISOString();
+    const api = makeApi({
+      collaborators: [
+        { node_uuid: 'node_1', status: 'rejected', role: 'collaborator', node_kind: 'human', rejection_count: 3, locked_until: future }
+      ]
+    });
+    render(<CollaboratorsView project={PROJECT} api={api} />);
+
+    await screen.findByText('Rechazado');
+    const lockState = await screen.findByTestId('collab-lock-state');
+    expect(lockState.textContent).toContain('Bloqueado');
+    expect(lockState.textContent).toContain('25min');
+
+    // Informational only: Remover must stay available, the lock never hides it.
+    expect(screen.getByTitle('Remover colaborador del proyecto')).toBeTruthy();
+  });
+
+  it('una fila RECHAZADA sin bloqueo activo (1-2 rechazos) no muestra el badge de bloqueo', async () => {
+    const api = makeApi({
+      collaborators: [
+        { node_uuid: 'node_1', status: 'rejected', role: 'collaborator', node_kind: 'human', rejection_count: 1, locked_until: null }
+      ]
+    });
+    render(<CollaboratorsView project={PROJECT} api={api} />);
+
+    await screen.findByText('Rechazado');
+    expect(screen.queryByTestId('collab-lock-state')).toBeNull();
+  });
+
+  it('un bloqueo en una fila PENDIENTE (caso de carrera) es puramente informativo: Aceptar/Rechazar siguen activos', async () => {
+    // The rate limit governs whether the REQUESTER can resubmit, not whether the OWNER
+    // can act on a row already in front of them (approve_collaborator has no lock
+    // check at all) -- a lock badge here, even in the rare race-condition case where
+    // it occurs, must never disable or hide Aprobar/Rechazar.
     const future = new Date(Date.now() + 25 * 60000).toISOString();
     const api = makeApi({
       collaborators: [
@@ -82,15 +120,16 @@ describe('CollaboratorsView - estado de bloqueo por rate-limit', () => {
     render(<CollaboratorsView project={PROJECT} api={api} />);
 
     const lockState = await screen.findByTestId('collab-lock-state');
-    expect(lockState.textContent).toContain('Bloqueado por exceso de rechazos');
+    expect(lockState.textContent).toContain('Bloqueado');
     expect(lockState.textContent).toContain('25min');
 
-    // No debe mostrar los botones activos de Aprobar/Rechazar en este estado bloqueado.
-    expect(screen.queryByTitle('Aprobar acceso a este colaborador')).toBeNull();
-    expect(screen.queryByTitle('Rechazar solicitud')).toBeNull();
+    const acceptButton = screen.getByTitle('Aprobar acceso a este colaborador').closest('button');
+    const rejectButton = screen.getByTitle('Rechazar solicitud').closest('button');
+    expect(acceptButton.disabled).toBeFalsy();
+    expect(rejectButton.disabled).toBeFalsy();
 
-    const acceptButton = screen.getByText('Aceptar').closest('button');
-    expect(acceptButton.disabled).toBe(true);
+    fireEvent.click(acceptButton);
+    await waitFor(() => expect(api.approve_collaborator).toHaveBeenCalledWith('proj_abc123', 'node_1'));
   });
 
   it('no bloquea una solicitud pendiente cuyo locked_until ya expiró', async () => {

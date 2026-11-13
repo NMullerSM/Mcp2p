@@ -195,7 +195,16 @@ export function CollaboratorsView({ project, api }) {
           {collaborators.map((c) => {
             const isPending = c.status === 'pending_approval';
             const isOwner = c.role === 'owner';
-            const lockRemaining = isPending ? formatLockRemaining(c.locked_until) : null;
+            // locked_until viene precalculado por el backend (get_project_collaborators,
+            // reutilizando get_join_rate_limit_state) para cualquier fila no aprobada --
+            // normalmente aparece en una fila 'rejected' (el estado real tras 3+
+            // rechazos: record_rejection marca la fila como rejected en la MISMA
+            // operación que cruza el umbral de bloqueo, así que "pending_approval +
+            // bloqueado" solo ocurre en una ventana de carrera, no en el flujo normal).
+            // Es puramente informativo: el bloqueo rige si el SOLICITANTE puede volver a
+            // pedir unirse, no si el DUEÑO puede aprobar/rechazar la fila que ya tiene
+            // delante -- por eso nunca deshabilita ni oculta Aceptar/Rechazar/Remover.
+            const lockRemaining = formatLockRemaining(c.locked_until);
 
             return (
               <div
@@ -269,42 +278,6 @@ export function CollaboratorsView({ project, api }) {
                 {/* Status / HITL Actions */}
                 <div>
                   {isPending ? (
-                    lockRemaining ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} data-testid="collab-lock-state">
-                        <span style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          fontSize: '11px',
-                          color: 'var(--accent-danger)',
-                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                          padding: '4px 8px',
-                          borderRadius: 'var(--radius-sm)',
-                          fontWeight: 600
-                        }}>
-                          <Lock size={12} /> Bloqueado por exceso de rechazos ({lockRemaining} restantes)
-                        </span>
-                        <button
-                          disabled
-                          title="Solicitud bloqueada temporalmente por rechazos repetidos; espera a que expire el bloqueo"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '5px 10px',
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            borderRadius: 'var(--radius-sm)',
-                            border: 'none',
-                            backgroundColor: 'var(--bg-subtle)',
-                            color: 'var(--text-muted)',
-                            cursor: 'not-allowed'
-                          }}
-                        >
-                          <Check size={13} /> Aceptar
-                        </button>
-                      </div>
-                    ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{
                         display: 'flex',
@@ -318,6 +291,26 @@ export function CollaboratorsView({ project, api }) {
                       }}>
                         <Clock size={12} /> Pendiente de Aprobación
                       </span>
+
+                      {lockRemaining && (
+                        <span
+                          data-testid="collab-lock-state"
+                          title="El solicitante no puede volver a pedir unirse mientras dure el bloqueo; esto no impide que apruebes o rechaces esta solicitud ya recibida"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            fontSize: '11px',
+                            color: 'var(--accent-danger)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                            padding: '4px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontWeight: 600
+                          }}
+                        >
+                          <Lock size={12} /> Bloqueado ({lockRemaining} restantes)
+                        </span>
+                      )}
 
                       <button
                         onClick={() => handleApprove(c.node_uuid)}
@@ -358,7 +351,6 @@ export function CollaboratorsView({ project, api }) {
                         <X size={13} />
                       </button>
                     </div>
-                    )
                   ) : (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{
@@ -375,6 +367,25 @@ export function CollaboratorsView({ project, api }) {
                         {c.status === 'rejected' ? <X size={12} /> : <Check size={12} />}
                         {c.status === 'rejected' ? 'Rechazado' : 'Aprobado'}
                       </span>
+                      {c.status === 'rejected' && lockRemaining && (
+                        <span
+                          data-testid="collab-lock-state"
+                          title="El solicitante no podrá volver a pedir unirse hasta que expire este bloqueo"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            fontSize: '11px',
+                            color: 'var(--accent-danger)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                            padding: '4px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            fontWeight: 600
+                          }}
+                        >
+                          <Lock size={12} /> Bloqueado ({lockRemaining} restantes)
+                        </span>
+                      )}
                       {!isOwner && (
                         <button
                           onClick={() => handleRemove(c.node_uuid)}

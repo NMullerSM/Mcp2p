@@ -800,12 +800,23 @@ class ApiBridge:
     def get_project_collaborators(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene la lista de colaboradores y solicitudes de un proyecto.
 
-        Para cada fila pendiente de aprobación, agrega un campo `locked_until`
-        (ISO-8601 UTC o None) reutilizando `get_join_rate_limit_state` -- la misma
-        lógica de umbrales ya probada en tests/test_join_rate_limit.py -- en vez de
-        duplicar los umbrales de bloqueo (3-4 rechazos -> 30min, 5+ -> 24h) en el
-        frontend JS. Así la UI de propietario puede renderizar un estado de bloqueo
-        sin reimplementar esa aritmética en dos lenguajes."""
+        Para cada fila que no esté en estado terminal 'approved', agrega un campo
+        `locked_until` (ISO-8601 UTC o None) reutilizando `get_join_rate_limit_state`
+        -- la misma lógica de umbrales ya probada en tests/test_join_rate_limit.py --
+        en vez de duplicar los umbrales de bloqueo (3-4 rechazos -> 30min, 5+ -> 24h)
+        en el frontend JS.
+
+        Importante (hallazgo de revisión Task 11): el estado real que ocurre tras 3+
+        rechazos es una fila 'rejected' con un bloqueo activo, NO 'pending_approval'
+        con un bloqueo activo -- record_rejection() marca la fila como 'rejected' en la
+        MISMA operación que hace cruzar el umbral de bloqueo, y tanto
+        ingest_join_request como join_p2p_project comprueban el rate-limit ANTES de
+        volver a tocar la fila, así que un reintento del solicitante nunca la regresa
+        a 'pending_approval' mientras siga bloqueada (la única forma de ver
+        'pending_approval' + bloqueado es una ventana de carrera, no un flujo real). Por
+        eso este método computa `locked_until` para cualquier fila no aprobada --
+        'pending_approval' Y 'rejected' -- en vez de limitarse a 'pending_approval'; de
+        lo contrario el dueño nunca vería ninguna señal de bloqueo en la UI real."""
         try:
             target_uuid = project_uuid or self.active_project_uuid
             if not target_uuid:
@@ -814,7 +825,7 @@ class ApiBridge:
             collaborators = self.db.get_project_collaborators(target_uuid)
             for c in collaborators:
                 c["locked_until"] = None
-                if c.get("status") == "pending_approval" and c.get("public_key"):
+                if c.get("status") != "approved" and c.get("public_key"):
                     rate_state = self.db.get_join_rate_limit_state(target_uuid, c["public_key"])
                     c["locked_until"] = rate_state.get("locked_until")
             return {"success": True, "collaborators": collaborators}

@@ -1238,10 +1238,32 @@ class DatabaseManager:
         Esta es la identidad canónica para el rate-limit de solicitudes de unión: a diferencia
         de node_uuid (derivado del hostname, puede colisionar) o github_username (cambiable
         trivialmente), la clave pública identifica de forma estable al solicitante.
+
+        Hallazgo de revisión Task 11: más de una fila puede compartir la misma
+        public_key en un proyecto -- p. ej. el mismo solicitante reintenta unirse desde
+        un node_uuid distinto (otro hostname/dispositivo, o MCP2P_NODE_UUID cambiado)
+        mientras aún no está bloqueado; add_or_request_collaborator solo rechaza una
+        colisión cuando el node_uuid YA existe con una public_key DISTINTA, así que un
+        node_uuid nuevo con la MISMA public_key inserta una fila adicional en vez de
+        actualizar la existente. Sin un ORDER BY determinista, `fetchone()` podía
+        devolver CUALQUIERA de esas filas -- potencialmente la "limpia" (rejection_count
+        0), ocultando en silencio el historial de rechazos de la otra fila y burlando el
+        rate-limit. Se ordena para preferir siempre la fila más relevante para el
+        rate-limit: primero las que no están en estado terminal 'approved', luego por
+        mayor rejection_count, luego por el rechazo más reciente -- así una fila con
+        historial de rechazos nunca queda escondida detrás de una fila nueva y limpia.
         """
         with self.get_connection() as conn:
             cur = conn.execute(
-                "SELECT * FROM project_collaborators WHERE project_uuid = ? AND public_key = ?;",
+                """
+                SELECT * FROM project_collaborators
+                WHERE project_uuid = ? AND public_key = ?
+                ORDER BY
+                    CASE WHEN status = 'approved' THEN 1 ELSE 0 END ASC,
+                    rejection_count DESC,
+                    last_rejected_at DESC
+                LIMIT 1;
+                """,
                 (project_uuid, public_key)
             )
             row = cur.fetchone()
@@ -1304,14 +1326,29 @@ class DatabaseManager:
 
     def record_rejection(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
         """
-        Rechaza explícitamente la solicitud de un colaborador (reutilizando reject_collaborator)
-        e incrementa su contador de rechazos, recalculando el bloqueo resultante.
+        Rechaza explícitamente la solicitud de un colaborador e incrementa su contador
+        de rechazos, recalculando el bloqueo resultante -- todo en UNA SOLA transacción
+        atómica bajo `_write_lock`.
+
+        Hallazgo de revisión Task 11 (TOCTOU): esto antes hacía el UPDATE de status
+        (vía una llamada separada a `reject_collaborator`, que adquiere y libera su
+        propio `_write_lock`) y el incremento del contador como DOS adquisiciones
+        independientes de `_write_lock`. Entre ambas había una ventana en la que otro
+        hilo -- p. ej. un `join_request` en vivo llegando por el transporte P2P --
+        podía ejecutar `add_or_request_collaborator` y reinsertar la fila como
+        'pending_approval' con el `rejection_count` todavía SIN incrementar, deshaciendo
+        en silencio el rechazo recién emitido por el dueño. Fusionar ambas escrituras en
+        una única transacción bajo el mismo `_write_lock` elimina esa ventana: nada
+        puede interleavarse entre el UPDATE de status y el incremento del contador.
         """
         now = datetime.now(timezone.utc)
         now_str = now.isoformat()
-        self.reject_collaborator(project_uuid, node_uuid)
         with self._write_lock, self.get_connection() as conn:
             with conn:
+                conn.execute(
+                    "UPDATE project_collaborators SET status = 'rejected' WHERE project_uuid = ? AND node_uuid = ?;",
+                    (project_uuid, node_uuid)
+                )
                 conn.execute(
                     """
                     UPDATE project_collaborators
