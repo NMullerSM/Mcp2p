@@ -407,3 +407,74 @@ def test_owner_collaborator_row_keeps_real_pubkey_and_guards_against_collision()
     owner_row_after = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
     assert owner_row_after["public_key"] == bridge_owner.crypto.public_key_base64
     assert owner_row_after["status"] == "approved"
+
+
+# ==========================
+# ingest_join_request (Tarea 6: intake manual del lado del dueño)
+# ==========================
+
+def invite_project_uuid(invite_token: str) -> str:
+    """Decodifica un token de invitación/solicitud P2P firmado y devuelve su project_uuid,
+    sin necesitar una instancia de ApiBridge concreta (decode_and_verify_invite_token es
+    un classmethod autocontenido: la clave pública del firmante viaja en el propio token)."""
+    _, payload, _ = NodeCryptoManager.decode_and_verify_invite_token(invite_token)
+    return payload["project_uuid"]
+
+
+def guess_joiner_node_uuid(bridge_owner, bridge_joiner):
+    """
+    "Adivina" bajo qué node_uuid terminó almacenada, en la base de datos del dueño, la
+    fila de colaborador/solicitud del solicitante (bridge_joiner).
+
+    No es simplemente el node_uuid local por defecto del solicitante: en los tests,
+    bridge_owner y bridge_joiner corren en el mismo host sin MCP2P_NODE_UUID, por lo que
+    comparten ese valor por defecto -- exactamente el escenario de colisión que
+    ingest_join_request debe desambiguar (ver Tarea 5, líneas 332-348 de api_bridge.py,
+    y el Review finding de Tarea 5 sobre la clave pública real del dueño). Por eso la
+    única forma fiable de ubicar la fila es buscarla por la clave pública persistente del
+    solicitante -- la misma identidad canónica que usa get_join_rate_limit_state -- y leer
+    su node_uuid efectivo.
+    """
+    row = bridge_owner.db.get_collaborator_by_pubkey(
+        bridge_owner.active_project_uuid, bridge_joiner.crypto.public_key_base64
+    )
+    assert row is not None, "No se encontró la fila de solicitud del joiner en la BD del dueño"
+    return row["node_uuid"]
+
+
+def test_ingest_join_request_creates_pending_row():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = invite_project_uuid(invite)
+    res = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res["success"] is True
+    collabs = bridge_owner.db.get_project_collaborators(bridge_owner.active_project_uuid)
+    assert any(c["status"] == "pending_approval" for c in collabs)
+
+
+def test_ingest_join_request_rejects_when_locked():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = invite_project_uuid(invite)
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    for _ in range(3):
+        bridge_owner.db.record_rejection(bridge_owner.active_project_uuid, node_uuid)
+    res2 = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res2["success"] is False
+    assert res2["status"] == "locked"
+
+
+def test_ingest_join_request_twice_does_not_duplicate_row_or_attempt_count():
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = invite_project_uuid(invite)
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    bridge_owner.ingest_join_request(join_res["request_code"])
+    collabs = bridge_owner.db.get_project_collaborators(bridge_owner.active_project_uuid)
+    pending = [c for c in collabs if c["status"] == "pending_approval"]
+    assert len(pending) == 1
+    assert pending[0]["request_window_count"] <= 1

@@ -415,6 +415,91 @@ class ApiBridge:
         except Exception as e:
             return {"success": False, "error": f"Error al unirse al proyecto P2P: {str(e)}"}
 
+    def ingest_join_request(self, request_code: str) -> Dict[str, Any]:
+        """
+        Ingiere manualmente un 'request_code' firmado (el mismo formato de token que
+        join_p2p_project produce para el solicitante) en el proyecto activo del DUEÑO.
+        Es la ruta de respaldo "nivel 2" -- asíncrona, siempre funciona, sin
+        infraestructura -- para cuando el intento de notificación en vivo vía WebRTC
+        (best-effort) no llega: el dueño copia/pega el código fuera de banda (chat,
+        email, etc.) y esta función registra al solicitante como 'pending_approval' en
+        su propia base de datos, exactamente como si hubiera llegado en vivo, para que
+        pueda aprobarse/rechazarse luego a través de la UI existente de
+        CollaboratorsView.
+        """
+        try:
+            is_valid, payload, err = self.crypto.decode_and_verify_invite_token(request_code)
+            if not is_valid:
+                return {"success": False, "error": err or "Firma criptográfica inválida"}
+
+            public_key = payload.get("public_key", "")
+            node_uuid = payload.get("node_uuid", "")
+            github_username = payload.get("github_username", "")
+            if not public_key or not node_uuid:
+                return {"success": False, "error": "El request_code no contiene los datos del solicitante requeridos"}
+
+            project_uuid = self.active_project_uuid
+            if not project_uuid:
+                return {"success": False, "error": "No hay un proyecto activo para procesar la solicitud de unión"}
+
+            # Review Focus: la idempotencia debe evaluarse ANTES que cualquier chequeo de
+            # rate-limit o escritura -- si el mismo request_code llega dos veces antes de
+            # que el dueño decida (p. ej. reenviado por error, o recibido tanto en vivo
+            # por WebRTC como pegado manualmente después), no debe volver a contar contra
+            # el límite horario de intentos ni crear una fila duplicada. Se identifica al
+            # solicitante por su clave pública persistente (no por node_uuid, que puede
+            # colisionar -- ver más abajo), igual que get_join_rate_limit_state.
+            existing = self.db.get_collaborator_by_pubkey(project_uuid, public_key)
+            if existing is not None and existing.get("status") == "pending_approval":
+                return {"success": True, "status": "pending_approval", "collaborator": existing}
+
+            rate_state = self.db.get_join_rate_limit_state(project_uuid, public_key)
+            if not rate_state.get("allowed", True):
+                return {
+                    "success": False,
+                    "status": "locked",
+                    "error": "Solicitud de unión bloqueada temporalmente por rechazos previos.",
+                    "locked_until": rate_state.get("locked_until")
+                }
+
+            try:
+                self.db.record_join_attempt(project_uuid, public_key)
+            except Exception as rae:
+                logger.debug(f"No se pudo registrar el intento de unión en la ventana horaria: {rae}")
+
+            # El node_uuid del solicitante (derivado por defecto del hostname) puede
+            # colisionar con el de un colaborador ya existente en la base de datos del
+            # dueño -- p. ej. su propia fila, si ambos nodos no fijan MCP2P_NODE_UUID y
+            # terminan con el mismo valor por defecto (ver Tarea 5, líneas ~332-348:
+            # mismo escenario al registrar al nodo emisor de una invitación). Para no
+            # mezclar dos claves públicas distintas bajo una misma fila -- lo que
+            # add_or_request_collaborator rechaza por diseño -- desambiguamos aquí con un
+            # sufijo derivado de la propia clave pública entrante.
+            effective_node_uuid = node_uuid
+            existing_by_node = self.db.get_collaborator(project_uuid, node_uuid)
+            if existing_by_node and existing_by_node.get("public_key") and existing_by_node["public_key"] != public_key:
+                suffix = hashlib.sha256(public_key.encode("utf-8")).hexdigest()[:8]
+                effective_node_uuid = f"{node_uuid}_{suffix}"
+
+            try:
+                collaborator = self.db.add_or_request_collaborator(
+                    project_uuid=project_uuid,
+                    node_uuid=effective_node_uuid,
+                    github_username=github_username,
+                    public_key=public_key,
+                    role="collaborator",
+                    status="pending_approval"
+                )
+            except ValueError as ve:
+                # Defensa en profundidad: la desambiguación anterior cubre el caso
+                # realista de colisión de node_uuid, pero un edge-case de la base de
+                # datos nunca debe propagarse como una excepción no controlada.
+                return {"success": False, "error": f"No se pudo registrar la solicitud de unión: {ve}"}
+
+            return {"success": True, "status": "pending_approval", "collaborator": collaborator}
+        except Exception as e:
+            return {"success": False, "error": f"Error al ingerir la solicitud de unión: {str(e)}"}
+
     # ==========================
     # Colaboradores & Aprobación HITL
     # ==========================
