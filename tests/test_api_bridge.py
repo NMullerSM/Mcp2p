@@ -11,6 +11,7 @@ import pytest
 from src.storage.db import DatabaseManager
 from src.app.api_bridge import ApiBridge
 from src.p2p.crypto import NodeCryptoManager
+from src.p2p.transport import NullTransportAdapter
 from conftest import make_test_db, register_tmp_dir
 
 
@@ -786,3 +787,54 @@ def test_retry_is_idempotent_against_already_active_project():
     second = bridge_joiner.retry_p2p_join(join_res["project"]["project_uuid"])
     assert second["success"] is True
     assert second["status"] == "already_active"
+
+
+# --- Tarea 9: cableado del transporte en __init__ y despacho de mensajes en vivo ---
+
+def test_api_bridge_defaults_to_null_transport_when_none_given():
+    bridge = ApiBridge(db_manager=make_test_db())
+    assert isinstance(bridge.transport, NullTransportAdapter)
+
+
+def test_incoming_join_request_message_is_ingested():
+    """Un mensaje {"type": "join_request", ...} recibido por el canal en vivo (Tarea 5/6)
+    debe llegar hasta ingest_join_request exactamente igual que la vía manual, dejando
+    una fila pending_approval en la BD del dueño."""
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = invite_project_uuid(invite)
+
+    bridge_owner._handle_transport_message({"type": "join_request", "request_code": join_res["request_code"]})
+
+    collabs = bridge_owner.db.get_project_collaborators(bridge_owner.active_project_uuid)
+    assert any(c["status"] == "pending_approval" for c in collabs)
+
+
+def test_incoming_join_decision_triggers_retry(monkeypatch):
+    bridge = ApiBridge(db_manager=make_test_db())
+    calls = []
+    monkeypatch.setattr(bridge, "retry_p2p_join", lambda project_uuid: calls.append(project_uuid))
+    bridge._handle_transport_message({"type": "join_decision", "decision": "approved", "project_uuid": "proj_x"})
+    assert calls == ["proj_x"]
+
+
+def test_incoming_join_decision_pending_does_not_trigger_retry(monkeypatch):
+    """Una decision distinta de 'approved' (p.ej. 'rejected' o ausente) nunca debe
+    disparar retry_p2p_join -- solo la aprobación explícita."""
+    bridge = ApiBridge(db_manager=make_test_db())
+    calls = []
+    monkeypatch.setattr(bridge, "retry_p2p_join", lambda project_uuid: calls.append(project_uuid))
+    bridge._handle_transport_message({"type": "join_decision", "decision": "rejected", "project_uuid": "proj_x"})
+    assert calls == []
+
+
+def test_handle_transport_message_ignores_malformed_input():
+    bridge = ApiBridge(db_manager=make_test_db())
+    # Ninguna de estas llamadas debe lanzar una excepción.
+    bridge._handle_transport_message({"type": "unknown"})
+    bridge._handle_transport_message({})
+    bridge._handle_transport_message({"type": "join_request"})  # falta request_code
+    bridge._handle_transport_message({"type": "join_decision", "decision": "approved"})  # falta project_uuid
+    bridge._handle_transport_message(None)  # tipo totalmente inesperado
+    bridge._handle_transport_message("not-a-dict")  # tipo totalmente inesperado

@@ -6,10 +6,12 @@ Punto de entrada principal para la aplicación de escritorio construida con PyWe
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import platform
 import sys
 from pathlib import Path
+from typing import Any
 
 # Asegurar que la raíz del proyecto esté en sys.path
 _root = Path(__file__).resolve().parent.parent.parent
@@ -19,6 +21,23 @@ if str(_root) not in sys.path:
 from src.app.api_bridge import ApiBridge
 from src.app.paths import get_bundle_dir
 from src.p2p.network import P2PNotificationService
+from src.p2p.transport import NullTransportAdapter, P2PTransport
+from src.p2p.webrtc_adapter import WebRTCTransportAdapter
+
+logger = logging.getLogger("mcp2p.app.main")
+
+
+def _build_p2p_transport(signaling_url: str, node_crypto: Any) -> P2PTransport:
+    """Construye el transporte P2P real (WebRTC/aiortc) o degrada a NullTransportAdapter
+    ante CUALQUIER fallo de construcción -- incluido un ImportError si el wheel de aiortc
+    no está instalado o está roto en esta plataforma. Un fallo aquí nunca debe tumbar el
+    arranque de la aplicación: sin transporte en vivo, el flujo async (manual/polling) de
+    las Tareas 6/7 sigue funcionando igual."""
+    try:
+        return WebRTCTransportAdapter(signaling_url, node_crypto)
+    except Exception as exc:
+        logger.warning(f"No se pudo construir WebRTCTransportAdapter, degradando a NullTransportAdapter: {exc}")
+        return NullTransportAdapter()
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -76,7 +95,20 @@ def main() -> int:
     if args.db_path:
         os.environ["MCP2P_DB_PATH"] = args.db_path
 
+    # Orden de construcción: ApiBridge primero, sin transporte (toma el NullTransportAdapter
+    # por defecto), porque construir el transporte WebRTC real necesita la URL de
+    # señalización configurada -- y leerla requiere la propia ApiBridge
+    # (api.get_signaling_server_url(), que a su vez necesita self.db ya inicializada).
+    # Pedirle el transporte real a ApiBridge.__init__ antes de que exista la propia
+    # ApiBridge sería una dependencia circular, así que el transporte real se construye
+    # después y se sustituye vía el setter set_transport (que re-registra on_message
+    # contra el transporte nuevo).
     api = ApiBridge()
+    real_transport = _build_p2p_transport(
+        signaling_url=api.get_signaling_server_url(),
+        node_crypto=api.crypto,
+    )
+    api.set_transport(real_transport)
 
     # Iniciar servicio de red P2P en segundo plano (daemon)
     local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")

@@ -47,6 +47,7 @@ class ApiBridge:
         self.okf = OKFAdapter()
         self.crypto = NodeCryptoManager()
         self.transport = transport or NullTransportAdapter()
+        self.transport.on_message(self._handle_transport_message)
         self.github = GitHubSyncManager(db_manager=self.db)
         self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
         self._window: Optional[Any] = None
@@ -228,6 +229,40 @@ class ApiBridge:
             return {"success": False, "error": "La URL debe estar vacía o comenzar con ws:// o wss://"}
         self.db.set_setting("p2p_signaling_url", url)
         return {"success": True}
+
+    def set_transport(self, transport: P2PTransport) -> None:
+        """Sustituye el transporte P2P activo (p. ej. para pasar de NullTransportAdapter al
+        adaptador WebRTC real una vez conocida la URL de señalización -- ver main.py, que
+        debe construir ApiBridge antes de poder leer esa configuración). Re-registra
+        _handle_transport_message contra el NUEVO transporte: si no se repitiera este
+        registro, los mensajes en vivo del transporte real nunca llegarían a ningún lado."""
+        self.transport = transport
+        self.transport.on_message(self._handle_transport_message)
+
+    def _handle_transport_message(self, message: dict) -> None:
+        """Lado receptor del canal P2P en vivo (Tareas 5/6/8 solo *envían*; esto es lo que
+        hace que esos send() lleguen a algún sitio). Despacha por message["type"]:
+          - "join_request": reenvía request_code a ingest_join_request, el mismo camino que
+            usa hoy la vía manual de nivel 2 (ingest_join_request ya valida firma, identidad
+            y rate limit -- aquí no se repite esa validación).
+          - "join_decision" con decision == "approved": dispara retry_p2p_join del lado
+            solicitante, para que el clonado se complete automáticamente en vez de depender
+            siempre del botón manual "Reintentar".
+          - Cualquier otro tipo, mensaje malformado, o con claves faltantes: se registra y
+            se ignora. Un mensaje llega por un canal P2P potencialmente controlado por un par
+            no confiable, así que esta función JAMÁS debe propagar una excepción -- de ahí el
+            try/except Exception envolviendo todo el cuerpo."""
+        try:
+            msg_type = message["type"]
+            if msg_type == "join_request":
+                self.ingest_join_request(message["request_code"])
+            elif msg_type == "join_decision":
+                if message.get("decision") == "approved":
+                    self.retry_p2p_join(message["project_uuid"])
+            else:
+                logger.debug(f"Mensaje de transporte P2P con tipo desconocido ignorado: {msg_type!r}")
+        except Exception as exc:
+            logger.warning(f"Mensaje de transporte P2P malformado o inválido, ignorado: {exc}")
 
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
         """

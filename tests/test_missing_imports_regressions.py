@@ -7,6 +7,7 @@ import yaml
 
 from src.app.api_bridge import ApiBridge
 from src.mcp.tools import MCPToolsHandler
+from src.p2p.transport import NullTransportAdapter
 from src.storage.db import DatabaseManager
 
 
@@ -85,3 +86,18 @@ def test_card_yaml_sync_failure_is_logged_not_nameerror(tmp_path, monkeypatch, c
     card = db.create_card(p_uuid, "CARD-YAMLFAIL-01", "titulo")
     assert card.get("card_id") == "CARD-YAMLFAIL-01"
     assert any("disco lleno simulado" in r.getMessage() for r in caplog.records)
+
+
+def test_main_falls_back_to_null_transport_if_webrtc_adapter_construction_raises(monkeypatch):
+    """Tarea 9: _build_p2p_transport debe degradar a NullTransportAdapter ante CUALQUIER
+    excepción al construir el adaptador real -- incluido un ImportError por un wheel de
+    aiortc ausente o roto -- en vez de dejar que un NameError/ImportError silencioso tumbe
+    el arranque de la app (el mismo patrón de regresión que motiva este archivo)."""
+    import src.app.main as main_mod
+
+    def _raise_import_error(*_args, **_kwargs):
+        raise ImportError("no aiortc wheel available")
+
+    monkeypatch.setattr(main_mod, "WebRTCTransportAdapter", _raise_import_error)
+    adapter = main_mod._build_p2p_transport(signaling_url="wss://x", node_crypto=object())
+    assert isinstance(adapter, NullTransportAdapter)
