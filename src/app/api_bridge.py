@@ -438,9 +438,44 @@ class ApiBridge:
             if not public_key or not node_uuid:
                 return {"success": False, "error": "El request_code no contiene los datos del solicitante requeridos"}
 
+            # Critical: decode_and_verify_invite_token solo prueba que ALGUNA clave firmó
+            # el sobre -- nunca ata payload["public_key"] (la identidad en la que
+            # confiamos a partir de aquí) a esa clave firmante verificada. Tanto la clave
+            # pública como el node_uuid del dueño son información pública (viajan en
+            # texto plano en cada invitación como sender_pubkey/sender_node_uuid), así
+            # que sin esta comprobación cualquiera podría firmar su propio sobre con su
+            # propia clave privada pero declarar en el payload la identidad del dueño (u
+            # otro colaborador), degradando silenciosamente esa fila ajena. Extraemos la
+            # clave firmante real del sobre (ya verificada por decode_and_verify_invite_token
+            # si is_valid=True) de forma independiente -- sin tocar la firma pública de ese
+            # método, compartida por otros llamadores -- y exigimos que coincida con la
+            # identidad declarada.
+            try:
+                padded = request_code.strip() + "=" * (-len(request_code.strip()) % 4)
+                envelope = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+                envelope_signer_pubkey = envelope.get("sender_pubkey", "")
+            except Exception:
+                envelope_signer_pubkey = ""
+            if not envelope_signer_pubkey or public_key != envelope_signer_pubkey:
+                return {
+                    "success": False,
+                    "error": "La identidad declarada en la solicitud no coincide con la clave que firmó el token"
+                }
+
             project_uuid = self.active_project_uuid
             if not project_uuid:
                 return {"success": False, "error": "No hay un proyecto activo para procesar la solicitud de unión"}
+
+            # Important: el request_code lleva su propio project_uuid firmado -- si no
+            # coincide con el proyecto actualmente activo del dueño, no se procesa (de lo
+            # contrario un código generado para el proyecto X, pegado mientras el
+            # proyecto Y está activo, registraría/aprobaría silenciosamente al
+            # solicitante en el proyecto equivocado).
+            if payload.get("project_uuid") != project_uuid:
+                return {
+                    "success": False,
+                    "error": "El request_code corresponde a un proyecto distinto al actualmente activo"
+                }
 
             # Review Focus: la idempotencia debe evaluarse ANTES que cualquier chequeo de
             # rate-limit o escritura -- si el mismo request_code llega dos veces antes de
@@ -448,10 +483,15 @@ class ApiBridge:
             # por WebRTC como pegado manualmente después), no debe volver a contar contra
             # el límite horario de intentos ni crear una fila duplicada. Se identifica al
             # solicitante por su clave pública persistente (no por node_uuid, que puede
-            # colisionar -- ver más abajo), igual que get_join_rate_limit_state.
+            # colisionar -- ver más abajo), igual que get_join_rate_limit_state. Cubre
+            # tanto 'pending_approval' (solicitud ya registrada, aún sin decisión) como
+            # 'approved' (p. ej. la solicitud ya llegó en vivo por WebRTC y el dueño ya
+            # decidió, y el mismo request_code llega después por la vía manual): en
+            # ningún caso debe tocarse la fila. Una fila 'rejected' SÍ debe continuar por
+            # el camino normal, para que el rate-limit por rechazos siga aplicando.
             existing = self.db.get_collaborator_by_pubkey(project_uuid, public_key)
-            if existing is not None and existing.get("status") == "pending_approval":
-                return {"success": True, "status": "pending_approval", "collaborator": existing}
+            if existing is not None and existing.get("status") in ("pending_approval", "approved"):
+                return {"success": True, "status": existing.get("status"), "collaborator": existing}
 
             rate_state = self.db.get_join_rate_limit_state(project_uuid, public_key)
             if not rate_state.get("allowed", True):
@@ -462,11 +502,6 @@ class ApiBridge:
                     "locked_until": rate_state.get("locked_until")
                 }
 
-            try:
-                self.db.record_join_attempt(project_uuid, public_key)
-            except Exception as rae:
-                logger.debug(f"No se pudo registrar el intento de unión en la ventana horaria: {rae}")
-
             # El node_uuid del solicitante (derivado por defecto del hostname) puede
             # colisionar con el de un colaborador ya existente en la base de datos del
             # dueño -- p. ej. su propia fila, si ambos nodos no fijan MCP2P_NODE_UUID y
@@ -474,10 +509,17 @@ class ApiBridge:
             # mismo escenario al registrar al nodo emisor de una invitación). Para no
             # mezclar dos claves públicas distintas bajo una misma fila -- lo que
             # add_or_request_collaborator rechaza por diseño -- desambiguamos aquí con un
-            # sufijo derivado de la propia clave pública entrante.
+            # sufijo derivado de la propia clave pública entrante. Importante: esto debe
+            # disparar también cuando la fila existente tiene la clave pública VACÍA (p.
+            # ej. un proyecto/colaborador legado de antes de que Tarea 5 empezara a
+            # persistir la clave real del dueño) -- no solo cuando ambas claves son no
+            # vacías y distintas -- porque add_or_request_collaborator's propio guard de
+            # colisión tampoco dispara sobre una clave existente vacía, y sin esta
+            # desambiguación una fila legítima (aunque legada) se absorbería y degradaría
+            # en silencio igual que la del dueño.
             effective_node_uuid = node_uuid
             existing_by_node = self.db.get_collaborator(project_uuid, node_uuid)
-            if existing_by_node and existing_by_node.get("public_key") and existing_by_node["public_key"] != public_key:
+            if existing_by_node is not None and existing_by_node.get("public_key", "") != public_key:
                 suffix = hashlib.sha256(public_key.encode("utf-8")).hexdigest()[:8]
                 effective_node_uuid = f"{node_uuid}_{suffix}"
 
@@ -496,6 +538,19 @@ class ApiBridge:
                 # datos nunca debe propagarse como una excepción no controlada.
                 return {"success": False, "error": f"No se pudo registrar la solicitud de unión: {ve}"}
 
+            # Important: record_join_attempt debe llamarse DESPUÉS de insertar la fila
+            # (no antes, como en una versión previa de este método): su UPDATE busca la
+            # fila por (project_uuid, public_key) y es un no-op silencioso si esa fila
+            # aún no existe, por lo que llamarlo antes del INSERT dejaba el primer
+            # intento de cada solicitante nuevo sin contar jamás contra el límite
+            # horario. Este orden coincide con el que join_p2p_project ya usa del lado
+            # del solicitante (api_bridge.py ~líneas 369-381).
+            try:
+                self.db.record_join_attempt(project_uuid, public_key)
+            except Exception as rae:
+                logger.debug(f"No se pudo registrar el intento de unión en la ventana horaria: {rae}")
+
+            collaborator = self.db.get_collaborator(project_uuid, effective_node_uuid) or collaborator
             return {"success": True, "status": "pending_approval", "collaborator": collaborator}
         except Exception as e:
             return {"success": False, "error": f"Error al ingerir la solicitud de unión: {str(e)}"}

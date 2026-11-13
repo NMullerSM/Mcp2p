@@ -477,4 +477,149 @@ def test_ingest_join_request_twice_does_not_duplicate_row_or_attempt_count():
     collabs = bridge_owner.db.get_project_collaborators(bridge_owner.active_project_uuid)
     pending = [c for c in collabs if c["status"] == "pending_approval"]
     assert len(pending) == 1
-    assert pending[0]["request_window_count"] <= 1
+    # Tightened from `<= 1` (review finding, Important #4): record_join_attempt must run
+    # AFTER the row is inserted, or the very first attempt silently fails to increment
+    # the window counter (it's a no-op when no row yet exists for that public_key) --
+    # `<= 1` would pass even when the true count is 0, which is how that bug slipped
+    # through originally.
+    assert pending[0]["request_window_count"] == 1
+
+
+def test_ingest_join_request_leaves_owner_row_untouched_and_adds_exactly_one_pending_row():
+    """
+    Review finding (Important #6): una regresión que absorbiera/degradara la fila del
+    dueño en lugar de insertar una fila NUEVA para el solicitante seguiría pasando las
+    3 pruebas anteriores (que solo comprueban que *alguna* fila quedó pending_approval).
+    Aquí se comprueba explícitamente que la fila del dueño permanece intacta y que el
+    proyecto termina con exactamente 2 filas (dueño + solicitante), no 1.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+    owner_node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    owner_pubkey_before = bridge_owner.crypto.public_key_base64
+
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    res = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res["success"] is True
+
+    owner_row = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
+    assert owner_row is not None
+    assert owner_row["role"] == "owner"
+    assert owner_row["status"] == "approved"
+    assert owner_row["public_key"] == owner_pubkey_before
+
+    collabs = bridge_owner.db.get_project_collaborators(p_uuid)
+    assert len(collabs) == 2
+    pending = [c for c in collabs if c["status"] == "pending_approval"]
+    assert len(pending) == 1
+    assert pending[0]["public_key"] == bridge_joiner.crypto.public_key_base64
+
+
+def test_ingest_join_request_rejects_payload_claiming_a_different_signers_identity():
+    """
+    Review finding (Critical #1): decode_and_verify_invite_token solo prueba que ALGUNA
+    clave firmó el sobre -- nunca ata payload["public_key"] a esa clave firmante. Como la
+    clave pública y el node_uuid del dueño son información pública (viajan en cada
+    invitación como sender_pubkey/sender_node_uuid), un atacante podía firmar su PROPIO
+    sobre con su PROPIA clave pero declarar en el payload la identidad del dueño,
+    degradando su fila (role=owner/approved -> collaborator/pending_approval) exactamente
+    como el bug que la Tarea 5 ya había corregido en otro punto de entrada.
+    """
+    bridge_owner, _ = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+    owner_node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    owner_pubkey_before = bridge_owner.crypto.public_key_base64
+
+    attacker_key_dir = tempfile.mkdtemp()
+    register_tmp_dir(attacker_key_dir)
+    attacker_crypto = NodeCryptoManager(key_path=Path(attacker_key_dir) / "attacker_identity.key")
+
+    forged_request_code = attacker_crypto.create_signed_invite_token({
+        "project_uuid": p_uuid,
+        "rendezvous_nonce": "",
+        "github_username": "mallory",
+        "public_key": owner_pubkey_before,  # clave del DUEÑO, pero firmado por el atacante
+        "node_uuid": owner_node_uuid,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    })
+
+    res = bridge_owner.ingest_join_request(forged_request_code)
+    assert res["success"] is False
+
+    owner_row_after = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
+    assert owner_row_after["role"] == "owner"
+    assert owner_row_after["status"] == "approved"
+    assert owner_row_after["public_key"] == owner_pubkey_before
+    assert owner_row_after["github_username"] != "mallory"
+
+
+def test_ingest_join_request_does_not_demote_an_already_approved_collaborator():
+    """
+    Review finding (Important #3): si la solicitud ya llegó en vivo por WebRTC y el
+    dueño ya la aprobó, y el MISMO request_code llega después por la vía manual (p. ej.
+    el solicitante lo pegó por si acaso, sin saber que ya fue aprobado en vivo), no debe
+    revertir silenciosamente la aprobación a pending_approval.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    bridge_owner.active_project_uuid = invite_project_uuid(invite)
+
+    first = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert first["success"] is True
+
+    node_uuid = guess_joiner_node_uuid(bridge_owner, bridge_joiner)
+    approved = bridge_owner.db.approve_collaborator(bridge_owner.active_project_uuid, node_uuid)
+    assert approved is True
+
+    row_before = bridge_owner.db.get_collaborator_by_pubkey(
+        bridge_owner.active_project_uuid, bridge_joiner.crypto.public_key_base64
+    )
+    assert row_before["status"] == "approved"
+
+    second = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert second["success"] is True
+    assert second["status"] == "approved"
+
+    row_after = bridge_owner.db.get_collaborator_by_pubkey(
+        bridge_owner.active_project_uuid, bridge_joiner.crypto.public_key_base64
+    )
+    assert row_after["status"] == "approved"
+    assert row_after["node_uuid"] == row_before["node_uuid"]
+
+
+def test_ingest_join_request_disambiguates_collision_with_legacy_empty_pubkey_row():
+    """
+    Review finding (Critical #2): la desambiguación de node_uuid solo disparaba cuando la
+    fila existente tenía una clave pública no vacía Y distinta. Una fila legada (de antes
+    del fix de Tarea 5, o de cualquier otra vía que registre un colaborador sin clave
+    pública) con la clave pública vacía quedaba fuera de esa condición -- y
+    add_or_request_collaborator's propio guard de colisión TAMPOCO dispara sobre una
+    clave existente vacía -- así que un solicitante legítimo con el mismo node_uuid por
+    defecto absorbía y degradaba esa fila en silencio, sin ningún error.
+    """
+    bridge_owner, bridge_joiner = two_linked_bridges()
+    p_uuid = bridge_owner.active_project_uuid
+    owner_node_uuid = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+
+    # Simular una fila legada con clave pública vacía (p. ej. un proyecto creado antes
+    # del fix de Tarea 5).
+    with bridge_owner.db._write_lock, bridge_owner.db.get_connection() as conn:
+        with conn:
+            conn.execute(
+                "UPDATE project_collaborators SET public_key = '' WHERE project_uuid = ? AND node_uuid = ?;",
+                (p_uuid, owner_node_uuid)
+            )
+
+    invite = bridge_owner.generate_p2p_invite()["token"]
+    join_res = bridge_joiner.join_p2p_project(invite)
+    res = bridge_owner.ingest_join_request(join_res["request_code"])
+    assert res["success"] is True
+
+    owner_row_after = bridge_owner.db.get_collaborator(p_uuid, owner_node_uuid)
+    assert owner_row_after["role"] == "owner"
+    assert owner_row_after["public_key"] != bridge_joiner.crypto.public_key_base64
+
+    collabs = bridge_owner.db.get_project_collaborators(p_uuid)
+    assert len(collabs) == 2
