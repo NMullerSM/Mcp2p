@@ -138,11 +138,11 @@ def _build_kernel_and_bridge(db_path: Optional[str], headless: bool = False) -> 
     try:
         from src.core.factory import ApplicationFactory
         if headless and hasattr(ApplicationFactory, "create_headless_kernel"):
-            core_kernel = ApplicationFactory.create_headless_kernel(db_path=resolved_db_path)
+            core_kernel = ApplicationFactory.create_headless_kernel(db_path=resolved_db_path, db_manager=db)
         elif hasattr(ApplicationFactory, "create_desktop_kernel"):
-            core_kernel = ApplicationFactory.create_desktop_kernel(db_path=resolved_db_path)
+            core_kernel = ApplicationFactory.create_desktop_kernel(db_path=resolved_db_path, db_manager=db)
         elif hasattr(ApplicationFactory, "create_kernel"):
-            core_kernel = ApplicationFactory.create_kernel(db_path=resolved_db_path)
+            core_kernel = ApplicationFactory.create_kernel(db_path=resolved_db_path, db_manager=db)
     except ImportError:
         core_kernel = None
 

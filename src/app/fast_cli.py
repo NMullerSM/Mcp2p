@@ -86,15 +86,20 @@ def _handle_kanban_claim(db: Any, kernel: Any, args: argparse.Namespace) -> Dict
         try:
             from src.core.domain.context import ActorContext
             actor = ActorContext(kind="fast_cli", node_uuid=node_uuid)
-            return kernel.kanban.claim_task(
-                actor=actor,
+            res = kernel.kanban.claim_lease(
                 project_uuid=p_uuid,
                 card_id=args.card_id,
+                actor=actor,
                 duration_minutes=args.minutes,
             )
+            card = res.get("card") or {}
+            if res.get("success") and "lease_expires_at" not in res:
+                res["lease_expires_at"] = card.get("lease_expires_at")
+            return res
+        except PermissionError as pe:
+            return {"success": False, "code": "LEASE_COLLISION", "error": str(pe)}
         except Exception as exc:
-            code = "LEASE_COLLISION" if isinstance(exc, PermissionError) else "CLAIM_ERROR"
-            return {"success": False, "code": code, "error": str(exc)}
+            return {"success": False, "code": "CLAIM_ERROR", "error": str(exc)}
     try:
         card = db.claim_card_lease(
             project_uuid=p_uuid,
@@ -135,13 +140,15 @@ def _handle_kanban_release(db: Any, kernel: Any, args: argparse.Namespace) -> Di
         try:
             from src.core.domain.context import ActorContext
             actor = ActorContext(kind="fast_cli", node_uuid=node_uuid)
-            return kernel.kanban.release_or_transition(
-                actor=actor,
+            return kernel.kanban.release_lease(
                 project_uuid=p_uuid,
                 card_id=args.card_id,
+                actor=actor,
                 target_status=target_status,
                 branch_ref=args.branch,
             )
+        except PermissionError as pe:
+            return {"success": False, "code": "PERMISSION_DENIED", "error": str(pe)}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
