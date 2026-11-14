@@ -10,6 +10,8 @@ import os
 import json
 import logging
 import platform
+import queue
+import re
 import sqlite3
 import subprocess
 import threading
@@ -17,9 +19,10 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 
+from src.app.identity import local_node_uuid
 from src.app.paths import get_default_db_path
 from src.storage.validators import validate_safe_id
 
@@ -37,6 +40,21 @@ def _run_git_logged(args: List[str], cwd: Path, creationflags: int = 0) -> subpr
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = os.environ.get("MCP2P_DB_PATH", get_default_db_path())
+
+
+def resolve_db_path(db_path: Optional[str | Path] = None) -> Path:
+    """
+    Resuelve la ruta de la base de datos SQLite en tiempo de ejecución (EGM-45).
+    Prioridad: argumento explícito -> variable de entorno MCP2P_DB_PATH -> get_default_db_path().
+    """
+    if db_path is not None:
+        raw = str(db_path).strip()
+        if raw:
+            return Path(raw).resolve()
+    env_path = os.environ.get("MCP2P_DB_PATH", "").strip()
+    if env_path:
+        return Path(env_path).resolve()
+    return Path(get_default_db_path()).resolve()
 
 # Umbrales de rate-limit para solicitudes de colaboración (join requests) P2P.
 # Clave de identidad: public_key Ed25519 persistente del solicitante (nunca node_uuid
@@ -110,48 +128,157 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
 
 
 class DatabaseManager:
-    """Gestor de base de datos local SQLite con soporte WAL y multi-proyecto."""
+    """Gestor de base de datos local SQLite con pool WAL LIFO de 4 conexiones + ancla read-only."""
 
     _instance: Optional[DatabaseManager] = None
     _lock = threading.Lock()
+    _POOL_MAX_SIZE: int = 4
 
-    def __init__(self, db_path: str = DEFAULT_DB_PATH) -> None:
-        self.db_path = Path(db_path).resolve()
+    def __init__(self, db_path: Optional[str | Path] = None) -> None:
+        self.db_path = resolve_db_path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
+        self._pool_lock = threading.Lock()
+        self._anchor_lock = threading.Lock()
+        self._pool: queue.LifoQueue[sqlite3.Connection] = queue.LifoQueue(maxsize=self._POOL_MAX_SIZE)
+        self._created_conns: int = 0
+        self._closed: bool = False
+        self._thread_local = threading.local()
+        self._anchor_conn: Optional[sqlite3.Connection] = None
+        self._fp_cache: Dict[str, Tuple[int, Tuple[Any, ...]]] = {}
+
         self._initialize_schema()
+        self._anchor_conn = self._create_anchor_connection()
         self._ensure_default_project()
 
     @classmethod
-    def get_instance(cls, db_path: str = DEFAULT_DB_PATH) -> DatabaseManager:
+    def get_instance(cls, db_path: Optional[str | Path] = None) -> DatabaseManager:
         """
         Retorna la instancia singleton de DatabaseManager.
         Si se especifica explícitamente una ruta distinta (p. ej. en suites de tests automatizados
         con bases de datos temporales), se re-instancia el singleton para garantizar aislamiento.
         """
         with cls._lock:
-            resolved = Path(db_path).resolve() if db_path else None
-            if cls._instance is None or (resolved and cls._instance.db_path != resolved):
-                cls._instance = cls(str(resolved or db_path))
+            resolved = resolve_db_path(db_path)
+            if cls._instance is None or cls._instance._closed or cls._instance.db_path != resolved:
+                if cls._instance is not None and not cls._instance._closed:
+                    try:
+                        cls._instance.close()
+                    except Exception:
+                        pass
+                cls._instance = cls(str(resolved))
             return cls._instance
 
-    @contextmanager
-    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Provee una conexión con configuración optimizada para alta velocidad."""
+    def _create_pooled_connection(self) -> sqlite3.Connection:
+        """Abre una conexión SQLite configurada para WAL y alta concurrencia."""
         conn = sqlite3.connect(
             str(self.db_path),
-            timeout=10.0,
+            timeout=5.0,
             check_same_thread=False
         )
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        return conn
+
+    def _create_anchor_connection(self) -> sqlite3.Connection:
+        """Abre una conexión ancla persistente de solo lectura para anclar -shm y consultar data_version."""
+        conn = sqlite3.connect(
+            str(self.db_path),
+            timeout=5.0,
+            check_same_thread=False
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA query_only = ON;")
+        return conn
+
+    @contextmanager
+    def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
+        """Provee una conexión del pool LIFO acotado (máx 4) con rollback defensivo al devolverla."""
+        if self._closed:
+            raise RuntimeError("DatabaseManager ya fue cerrado")
+
+        depth = getattr(self._thread_local, "conn_depth", 0)
+        ephemeral = False
+        conn: Optional[sqlite3.Connection] = None
+
+        if depth > 0:
+            # Llamada reentrante desde el mismo hilo: usar conexión efímera para evitar deadlock del pool
+            conn = self._create_pooled_connection()
+            ephemeral = True
+        else:
+            try:
+                conn = self._pool.get_nowait()
+            except queue.Empty:
+                with self._pool_lock:
+                    if self._created_conns < self._POOL_MAX_SIZE:
+                        conn = self._create_pooled_connection()
+                        self._created_conns += 1
+                if conn is None:
+                    try:
+                        conn = self._pool.get(timeout=5.0)
+                    except queue.Empty:
+                        conn = self._create_pooled_connection()
+                        ephemeral = True
+
+        self._thread_local.conn_depth = depth + 1
         try:
-            conn.execute("PRAGMA journal_mode = WAL;")
-            conn.execute("PRAGMA synchronous = NORMAL;")
-            conn.execute("PRAGMA foreign_keys = ON;")
-            conn.execute("PRAGMA busy_timeout = 5000;")
             yield conn
         finally:
-            conn.close()
+            self._thread_local.conn_depth = depth
+            if conn is not None:
+                if conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except sqlite3.Error:
+                        pass
+                if ephemeral or self._closed:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                else:
+                    try:
+                        self._pool.put_nowait(conn)
+                    except queue.Full:
+                        try:
+                            conn.close()
+                        except sqlite3.Error:
+                            pass
+
+    def close(self) -> None:
+        """Cierra limpiamente las conexiones del pool LIFO y la conexión ancla read-only."""
+        with self._pool_lock:
+            self._closed = True
+            while True:
+                try:
+                    c = self._pool.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    if c.in_transaction:
+                        c.rollback()
+                    c.close()
+                except sqlite3.Error:
+                    pass
+            self._created_conns = 0
+
+        with self._anchor_lock:
+            if self._anchor_conn is not None:
+                try:
+                    self._anchor_conn.close()
+                except sqlite3.Error:
+                    pass
+                self._anchor_conn = None
+
+        self._fp_cache.clear()
+        with DatabaseManager._lock:
+            if DatabaseManager._instance is self:
+                DatabaseManager._instance = None
 
     def _initialize_schema(self) -> None:
         """Inicializa todas las tablas del enjambre P2P y proyectos."""
@@ -202,7 +329,7 @@ class DatabaseManager:
                             ALTER TABLE kanban_cards_dg_tmp RENAME TO kanban_cards;
                             """)
 
-                    # Migración para a2a_messages (soporte para DIALOGUE y CHECKPOINT_COMPACT)
+                    # Migración para a2a_messages (soporte para DIALOGUE y CHECKPOINT_COMPACT, session_id y seq)
                     a2a_info = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='a2a_messages';").fetchone()
                     if a2a_info and "'DIALOGUE'" not in a2a_info[0]:
                         conn.executescript("""
@@ -212,6 +339,8 @@ class DatabaseManager:
                             sender_node_uuid TEXT NOT NULL,
                             intent TEXT CHECK(intent IN ('INFORMATIVE', 'COORDINATION', 'SEMANTIC_COLLISION', 'SUMMARY_SYNTHESIS', 'DIALOGUE', 'CHECKPOINT_COMPACT')) NOT NULL,
                             card_id TEXT,
+                            session_id TEXT DEFAULT '',
+                            seq INTEGER DEFAULT 0,
                             payload_rfc_yaml TEXT NOT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
@@ -221,6 +350,32 @@ class DatabaseManager:
                         DROP TABLE a2a_messages;
                         ALTER TABLE a2a_messages_dg_tmp RENAME TO a2a_messages;
                         """)
+
+                    a2a_cols = [c["name"] for c in conn.execute("PRAGMA table_info(a2a_messages);").fetchall()]
+                    if a2a_cols:
+                        added_session_cols = False
+                        if "session_id" not in a2a_cols:
+                            conn.execute("ALTER TABLE a2a_messages ADD COLUMN session_id TEXT DEFAULT '';")
+                            added_session_cols = True
+                        if "seq" not in a2a_cols:
+                            conn.execute("ALTER TABLE a2a_messages ADD COLUMN seq INTEGER DEFAULT 0;")
+                            added_session_cols = True
+                        if added_session_cols:
+                            rows = conn.execute(
+                                "SELECT message_uuid, payload_rfc_yaml FROM a2a_messages WHERE session_id = '' OR session_id IS NULL;"
+                            ).fetchall()
+                            for r in rows:
+                                try:
+                                    p_obj = json.loads(r["payload_rfc_yaml"])
+                                    if isinstance(p_obj, dict) and p_obj.get("session_id"):
+                                        s_id = str(p_obj.get("session_id"))
+                                        s_seq = int(p_obj.get("seq") or p_obj.get("turn") or 0)
+                                        conn.execute(
+                                            "UPDATE a2a_messages SET session_id = ?, seq = ? WHERE message_uuid = ?;",
+                                            (s_id, s_seq, r["message_uuid"])
+                                        )
+                                except Exception:
+                                    pass
 
                     # Migración para projects.default_sla_hours, okf_alignment_status, alignment_dossier_markdown
                     p_info = conn.execute("PRAGMA table_info(projects);").fetchall()
@@ -345,6 +500,8 @@ class DatabaseManager:
                     sender_node_uuid TEXT NOT NULL,
                     intent TEXT CHECK(intent IN ('INFORMATIVE', 'COORDINATION', 'SEMANTIC_COLLISION', 'SUMMARY_SYNTHESIS', 'DIALOGUE', 'CHECKPOINT_COMPACT')) NOT NULL,
                     card_id TEXT,
+                    session_id TEXT DEFAULT '',
+                    seq INTEGER DEFAULT 0,
                     payload_rfc_yaml TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (project_uuid) REFERENCES projects(project_uuid) ON DELETE CASCADE
@@ -465,23 +622,63 @@ class DatabaseManager:
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- Índices de ultra alta velocidad (<1ms)
+                -- 10. Configuraciones de Conectores/Extensiones y Seeds P2P
+                CREATE TABLE IF NOT EXISTS extension_settings (
+                    namespace TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (namespace, key)
+                );
+
+                CREATE TABLE IF NOT EXISTS p2p_seeds (
+                    project_uuid TEXT NOT NULL,
+                    seed_url TEXT NOT NULL,
+                    label TEXT DEFAULT '',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (project_uuid, seed_url)
+                );
+
+                -- Deduplicación defensiva antes de crear índices UNIQUE (EGM-38)
+                DELETE FROM jury_borda_scores
+                WHERE rowid NOT IN (
+                    SELECT MAX(rowid)
+                    FROM jury_borda_scores
+                    GROUP BY ticket_id, juror_id, evaluated_option
+                );
+
+                DELETE FROM human_jury_votes
+                WHERE rowid NOT IN (
+                    SELECT MIN(rowid)
+                    FROM human_jury_votes
+                    GROUP BY ticket_id, node_uuid
+                );
+
+                -- Índices de ultra alta velocidad (<1ms) y unicidad (EGM-33 / EGM-34 / EGM-38)
                 CREATE INDEX IF NOT EXISTS idx_cards_project_status ON kanban_cards(project_uuid, status);
+                CREATE INDEX IF NOT EXISTS idx_cards_project_status_updated ON kanban_cards(project_uuid, status, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_a2a_project ON a2a_messages(project_uuid);
+                CREATE INDEX IF NOT EXISTS idx_a2a_project_created ON a2a_messages(project_uuid, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_a2a_project_card ON a2a_messages(project_uuid, card_id);
+                CREATE INDEX IF NOT EXISTS idx_a2a_project_session_seq ON a2a_messages(project_uuid, session_id, seq);
+                CREATE INDEX IF NOT EXISTS idx_tickets_project_created ON dispute_tickets(project_uuid, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tickets_project_card ON dispute_tickets(project_uuid, card_id);
                 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events(project_uuid, sync_status, created_at);
                 CREATE INDEX IF NOT EXISTS idx_collab_project ON project_collaborators(project_uuid, status);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_borda_unique ON jury_borda_scores(ticket_id, juror_id, evaluated_option);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_human_votes_unique ON human_jury_votes(ticket_id, node_uuid);
                 """)
 
     def _ensure_default_project(self) -> None:
         """Asegura la existencia de un proyecto por defecto si la base está vacía."""
         with self.get_connection() as conn:
-            cur = conn.execute("SELECT COUNT(*) as cnt FROM projects;")
-            if cur.fetchone()["cnt"] == 0:
-                self.create_project(
-                    name="Proyecto Semilla",
-                    base_path=str(self.db_path.parent / "workspace" / "semilla"),
-                    init_git=False
-                )
+            cnt = conn.execute("SELECT COUNT(*) as cnt FROM projects;").fetchone()["cnt"]
+        if cnt == 0:
+            self.create_project(
+                name="Proyecto Semilla",
+                base_path=str(self.db_path.parent / "workspace" / "semilla"),
+                init_git=False
+            )
 
     # ==========================
     # Métodos de Proyectos
@@ -609,7 +806,7 @@ class DatabaseManager:
                     )
                 )
 
-        local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+        local_node = local_node_uuid()
         self.add_or_request_collaborator(
             project_uuid=p_uuid,
             node_uuid=local_node,
@@ -677,25 +874,46 @@ class DatabaseManager:
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def get_project_sync_fingerprint(self, project_uuid: str) -> Dict[str, Any]:
-        """Calcula una huella de sincronización atómica para detección reactiva de cambios en tiempo real."""
-        with self.get_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT 
-                    COUNT(card_id),
-                    COALESCE(MAX(updated_at), ''),
-                    (SELECT COUNT(message_uuid) FROM a2a_messages WHERE project_uuid = ?),
-                    (SELECT COALESCE(MAX(created_at), '') FROM a2a_messages WHERE project_uuid = ?),
-                    (SELECT COUNT(ticket_id) FROM dispute_tickets WHERE project_uuid = ?),
-                    (SELECT COALESCE(MAX(created_at), '') FROM dispute_tickets WHERE project_uuid = ?)
-                FROM kanban_cards
-                WHERE project_uuid = ?;
-                """,
-                (project_uuid, project_uuid, project_uuid, project_uuid, project_uuid)
-            ).fetchone()
+    def _get_anchor_data_version(self) -> Optional[int]:
+        """Consulta PRAGMA data_version en la conexión ancla read-only para invalidar caché sin escanear tablas."""
+        if self._anchor_conn is None or self._closed:
+            return None
+        with self._anchor_lock:
+            if self._anchor_conn is None:
+                return None
+            row = self._anchor_conn.execute("PRAGMA data_version;").fetchone()
+            return int(row[0]) if row else None
 
-        cards_count, cards_max, a2a_count, a2a_max, tickets_count, tickets_max = row if row else (0, "", 0, "", 0, "")
+    def get_project_sync_fingerprint(self, project_uuid: str) -> Dict[str, Any]:
+        """Calcula una huella de sincronización atómica con caché por PRAGMA data_version (EGM-20)."""
+        data_ver = self._get_anchor_data_version()
+        cached = self._fp_cache.get(project_uuid) if data_ver is not None else None
+
+        if cached is not None and cached[0] == data_ver:
+            cards_count, cards_max, a2a_count, a2a_max, tickets_count, tickets_max = cached[1]
+        else:
+            with self.get_connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT 
+                        COUNT(card_id),
+                        COALESCE(MAX(updated_at), ''),
+                        (SELECT COUNT(message_uuid) FROM a2a_messages WHERE project_uuid = ?),
+                        (SELECT COALESCE(MAX(created_at), '') FROM a2a_messages WHERE project_uuid = ?),
+                        (SELECT COUNT(ticket_id) FROM dispute_tickets WHERE project_uuid = ?),
+                        (SELECT COALESCE(MAX(created_at), '') FROM dispute_tickets WHERE project_uuid = ?)
+                    FROM kanban_cards
+                    WHERE project_uuid = ?;
+                    """,
+                    (project_uuid, project_uuid, project_uuid, project_uuid, project_uuid)
+                ).fetchone()
+            counts_tuple = tuple(row) if row else (0, "", 0, "", 0, "")
+            cards_count, cards_max, a2a_count, a2a_max, tickets_count, tickets_max = counts_tuple
+            if data_ver is not None:
+                # Releer data_version por si hubo cambio justo antes de nuestra consulta
+                post_ver = self._get_anchor_data_version()
+                if post_ver == data_ver:
+                    self._fp_cache[project_uuid] = (data_ver, counts_tuple)
 
         # Detección de pulso Git
         proj = self.get_project_by_uuid(project_uuid)
@@ -893,31 +1111,40 @@ class DatabaseManager:
         branch_ref: Optional[str] = None,
         assignee_node_uuid: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Actualiza los detalles completos de una tarjeta y sincroniza a YAML.
-        assignee_node_uuid: None = no se toca la asignación actual; '' (string vacío) =
-        desasignar explícitamente; cualquier otro valor debe ser un colaborador aprobado
-        real del proyecto (se verifica antes de escribir, nunca un subagente de jurado)."""
-        card = self.get_card_by_id(project_uuid, card_id)
-        if not card:
-            raise ValueError(f"Tarjeta no encontrada: {card_id}")
-
-        new_title = title if title is not None else card["title"]
-        new_desc = description if description is not None else card.get("description", "")
-        new_crit = acceptance_criteria if acceptance_criteria is not None else card.get("acceptance_criteria", "")
-        new_status = status if status is not None else card["status"]
-        new_branch = branch_ref if branch_ref is not None else card.get("branch_ref")
-
-        if assignee_node_uuid is None:
-            new_assignee = card.get("assignee_node_uuid")
-        elif assignee_node_uuid == "":
-            new_assignee = None
-        else:
-            self._validate_assignable_node(project_uuid, assignee_node_uuid)
-            new_assignee = assignee_node_uuid
-
+        """Actualiza los detalles completos de una tarjeta atómicamente en BEGIN IMMEDIATE y sincroniza a YAML (EGM-38)."""
         now_str = datetime.now(timezone.utc).isoformat()
         with self._write_lock, self.get_connection() as conn:
             with conn:
+                conn.execute("BEGIN IMMEDIATE;")
+                row = conn.execute(
+                    "SELECT * FROM kanban_cards WHERE project_uuid = ? AND card_id = ?;",
+                    (project_uuid, card_id)
+                ).fetchone()
+                if not row:
+                    raise ValueError(f"Tarjeta no encontrada: {card_id}")
+                card = dict(row)
+
+                new_title = title if title is not None else card["title"]
+                new_desc = description if description is not None else card.get("description", "")
+                new_crit = acceptance_criteria if acceptance_criteria is not None else card.get("acceptance_criteria", "")
+                new_status = status if status is not None else card["status"]
+                new_branch = branch_ref if branch_ref is not None else card.get("branch_ref")
+
+                if assignee_node_uuid is None:
+                    new_assignee = card.get("assignee_node_uuid")
+                elif assignee_node_uuid == "":
+                    new_assignee = None
+                else:
+                    collab_row = conn.execute(
+                        "SELECT status FROM project_collaborators WHERE project_uuid = ? AND node_uuid = ?;",
+                        (project_uuid, assignee_node_uuid)
+                    ).fetchone()
+                    if not collab_row or collab_row["status"] != "approved":
+                        raise ValueError(
+                            f"'{assignee_node_uuid}' no es un colaborador aprobado de este proyecto; no se puede asignar la tarea."
+                        )
+                    new_assignee = assignee_node_uuid
+
                 conn.execute(
                     """
                     UPDATE kanban_cards
@@ -926,7 +1153,12 @@ class DatabaseManager:
                     """,
                     (new_title, new_desc, new_crit, new_status, new_branch, new_assignee, now_str, project_uuid, card_id)
                 )
-        updated = self.get_card_by_id(project_uuid, card_id) or {}
+                updated_row = conn.execute(
+                    "SELECT * FROM kanban_cards WHERE project_uuid = ? AND card_id = ?;",
+                    (project_uuid, card_id)
+                ).fetchone()
+                updated = dict(updated_row) if updated_row else {}
+
         self._sync_card_to_okf_yaml(project_uuid, updated)
         return updated
 
@@ -984,6 +1216,82 @@ class DatabaseManager:
                 )
 
         updated = self.get_card_by_id(project_uuid, card_id) or {}
+        self._sync_card_to_okf_yaml(project_uuid, updated)
+        return updated
+
+    def release_card_lease(
+        self,
+        project_uuid: str,
+        card_id: str,
+        node_uuid: str,
+        target_status: str = "in_review",
+        branch_ref: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Libera o transiciona atómicamente una tarjeta con lease en BEGIN IMMEDIATE (EGM-38)."""
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE;")
+                card = conn.execute(
+                    """
+                    SELECT assignee_node_uuid, lease_expires_at, status
+                    FROM kanban_cards WHERE project_uuid = ? AND card_id = ?;
+                    """,
+                    (project_uuid, card_id)
+                ).fetchone()
+                if not card:
+                    raise ValueError(f"Tarjeta no encontrada: {card_id} en proyecto {project_uuid}")
+
+                current_assignee = card["assignee_node_uuid"]
+                current_expiry = card["lease_expires_at"]
+                lease_active = False
+                if current_assignee and current_assignee != node_uuid and current_expiry:
+                    expiry_dt = _parse_iso_datetime(current_expiry)
+                    if expiry_dt is not None and expiry_dt > now:
+                        lease_active = True
+                elif current_assignee and current_assignee != node_uuid and not current_expiry:
+                    lease_active = True
+
+                if lease_active and target_status != "disputed":
+                    raise PermissionError(
+                        f"La tarea está asignada al nodo {current_assignee}, no a {node_uuid}."
+                    )
+
+                if target_status == "backlog":
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET status = ?, assignee_node_uuid = NULL, lease_expires_at = NULL, branch_ref = NULL, updated_at = ?
+                        WHERE project_uuid = ? AND card_id = ?;
+                        """,
+                        (target_status, now_str, project_uuid, card_id)
+                    )
+                elif branch_ref is not None:
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET status = ?, branch_ref = ?, lease_expires_at = NULL, updated_at = ?
+                        WHERE project_uuid = ? AND card_id = ?;
+                        """,
+                        (target_status, branch_ref, now_str, project_uuid, card_id)
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE kanban_cards
+                        SET status = ?, lease_expires_at = NULL, updated_at = ?
+                        WHERE project_uuid = ? AND card_id = ?;
+                        """,
+                        (target_status, now_str, project_uuid, card_id)
+                    )
+
+                updated_row = conn.execute(
+                    "SELECT * FROM kanban_cards WHERE project_uuid = ? AND card_id = ?;",
+                    (project_uuid, card_id)
+                ).fetchone()
+                updated = dict(updated_row) if updated_row else {}
+
         self._sync_card_to_okf_yaml(project_uuid, updated)
         return updated
 
@@ -1090,18 +1398,126 @@ class DatabaseManager:
         sender_node_uuid: str,
         intent: str,
         payload_rfc_yaml: str,
-        card_id: Optional[str] = None
+        card_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        seq: Optional[int] = None,
     ) -> None:
         """Registra un mensaje o evento del canal Agente a Agente dentro de un proyecto."""
+        resolved_session = session_id if session_id is not None else ""
+        resolved_seq = seq if seq is not None else 0
+        if session_id is None or seq is None:
+            try:
+                parsed = json.loads(payload_rfc_yaml)
+                if isinstance(parsed, dict):
+                    if session_id is None and parsed.get("session_id"):
+                        resolved_session = str(parsed.get("session_id"))
+                    if seq is None and (parsed.get("seq") is not None or parsed.get("turn") is not None):
+                        resolved_seq = int(parsed.get("seq") or parsed.get("turn") or 0)
+            except Exception:
+                pass
+
         with self._write_lock, self.get_connection() as conn:
             with conn:
                 conn.execute(
                     """
-                    INSERT INTO a2a_messages (message_uuid, project_uuid, sender_node_uuid, intent, card_id, payload_rfc_yaml)
-                    VALUES (?, ?, ?, ?, ?, ?);
+                    INSERT INTO a2a_messages (message_uuid, project_uuid, sender_node_uuid, intent, card_id, session_id, seq, payload_rfc_yaml)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
                     """,
-                    (message_uuid, project_uuid, sender_node_uuid, intent, card_id, payload_rfc_yaml)
+                    (message_uuid, project_uuid, sender_node_uuid, intent, card_id, resolved_session, resolved_seq, payload_rfc_yaml)
                 )
+
+    def append_session_message(
+        self,
+        project_uuid: str,
+        sender_node_uuid: str,
+        session_id: str,
+        intent: str,
+        payload_dict: Dict[str, Any],
+        card_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        message_uuid: Optional[str] = None,
+        seq_field: str = "seq",
+    ) -> Dict[str, Any]:
+        """Inserta atómicamente un mensaje de sesión con seq correlativo en BEGIN IMMEDIATE (EGM-34)."""
+        msg_uuid = message_uuid or str(uuid.uuid4())
+        payload = dict(payload_dict)
+        payload["session_id"] = session_id
+
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE;")
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM a2a_messages WHERE project_uuid = ? AND session_id = ?;",
+                    (project_uuid, session_id)
+                ).fetchone()
+                next_seq = int(row["max_seq"]) + 1 if row else 1
+                if seq_field == "seq":
+                    payload["seq"] = next_seq
+                payload_str = json.dumps(payload, ensure_ascii=False)
+                effective_seq = int(payload.get("seq") or payload.get("turn") or next_seq)
+
+                conn.execute(
+                    """
+                    INSERT INTO a2a_messages (message_uuid, project_uuid, sender_node_uuid, intent, card_id, session_id, seq, payload_rfc_yaml)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (msg_uuid, project_uuid, sender_node_uuid, intent, card_id, session_id, effective_seq, payload_str)
+                )
+                if event_type:
+                    conn.execute(
+                        """
+                        INSERT INTO outbox_events (event_uuid, project_uuid, node_uuid, event_type, payload_raw, sync_status)
+                        VALUES (?, ?, ?, ?, ?, 'pending');
+                        """,
+                        (msg_uuid, project_uuid, sender_node_uuid, event_type, payload_str)
+                    )
+
+        return {
+            "message_uuid": msg_uuid,
+            "seq": effective_seq,
+            "payload": payload,
+            "payload_str": payload_str,
+        }
+
+    def get_session_messages(
+        self,
+        project_uuid: str,
+        session_id: str,
+        intent: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Recupera todos los mensajes de una sesión ordenados por seq ASC sin límite de ventana (EGM-34)."""
+        query = (
+            "SELECT m.*, n.developer_name, n.agent_id "
+            "FROM a2a_messages m "
+            "LEFT JOIN swarm_nodes n ON m.sender_node_uuid = n.node_uuid "
+            "WHERE m.project_uuid = ? AND m.session_id = ? "
+        )
+        params: List[Any] = [project_uuid, session_id]
+        if intent:
+            query += "AND m.intent = ? "
+            params.append(intent)
+        query += "ORDER BY m.seq ASC, m.created_at ASC, m.rowid ASC;"
+        with self.get_connection() as conn:
+            cur = conn.execute(query, tuple(params))
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_a2a_message_by_uuid(self, message_uuid: str) -> Optional[Dict[str, Any]]:
+        """Obtiene un mensaje A2A específico por su message_uuid."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM a2a_messages WHERE message_uuid = ?;",
+                (message_uuid,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def has_a2a_message(self, message_uuid: str) -> bool:
+        """True si existe un mensaje A2A con ese message_uuid."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM a2a_messages WHERE message_uuid = ? LIMIT 1;",
+                (message_uuid,)
+            ).fetchone()
+            return row is not None
 
     def get_recent_a2a_messages(self, project_uuid: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Obtiene los mensajes recientes para el monitor de telemetría de un proyecto."""
@@ -1796,5 +2212,310 @@ class DatabaseManager:
             cur = conn.execute(
                 "SELECT * FROM dispute_vote_delivery WHERE ticket_id = ?;",
                 (ticket_id,)
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    # ==========================
+    # Métodos Tipados para Eliminar SQL Crudo de ApiBridge / UI Adapters
+    # ==========================
+
+    def upsert_pending_join_stub(
+        self,
+        project_uuid: str,
+        name: str,
+        base_path: str,
+        code_repo_path: str,
+        gov_repo_path: str,
+        code_repo_url: str = "",
+        gov_repo_url: str = "",
+        default_sla_hours: int = 24
+    ) -> Dict[str, Any]:
+        """Inserta idempotentemente un stub de proyecto en estado 'pending_approval' para join P2P."""
+        validate_safe_id(project_uuid, "project_uuid")
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO projects (
+                        project_uuid, name, base_path, code_repo_path, gov_repo_path,
+                        code_repo_url, gov_repo_url, default_sla_hours, join_status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?);
+                    """,
+                    (
+                        project_uuid, name, base_path, code_repo_path, gov_repo_path,
+                        code_repo_url, gov_repo_url, default_sla_hours, now_str, now_str
+                    )
+                )
+        return self.get_project_by_uuid(project_uuid) or {}
+
+    def activate_joined_project(
+        self,
+        project_uuid: str,
+        code_repo_path: str,
+        gov_repo_path: str,
+        local_node: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Activa un proyecto unido tras clonar sus repositorios y aprueba la fila de colaborador local."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        target_node = local_node or local_node_uuid()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET code_repo_path = ?, gov_repo_path = ?, join_status = 'active', updated_at = ?
+                    WHERE project_uuid = ?;
+                    """,
+                    (code_repo_path, gov_repo_path, now_str, project_uuid)
+                )
+                if target_node:
+                    conn.execute(
+                        """
+                        UPDATE project_collaborators
+                        SET status = 'approved', approved_at = ?,
+                            rejection_count = 0, last_rejected_at = NULL,
+                            request_window_start = NULL, request_window_count = 0
+                        WHERE project_uuid = ? AND node_uuid = ?;
+                        """,
+                        (now_str, project_uuid, target_node)
+                    )
+        return self.get_project_by_uuid(project_uuid) or {}
+
+    def update_project_repo_urls(
+        self,
+        project_uuid: str,
+        code_repo_url: Optional[str] = None,
+        gov_repo_url: Optional[str] = None
+    ) -> bool:
+        """Actualiza las URLs remotas (code_repo_url / gov_repo_url) de un proyecto."""
+        if code_repo_url is None and gov_repo_url is None:
+            return False
+        now_str = datetime.now(timezone.utc).isoformat()
+        sets: List[str] = ["updated_at = ?"]
+        params: List[Any] = [now_str]
+        if code_repo_url is not None:
+            sets.append("code_repo_url = ?")
+            params.append(code_repo_url)
+        if gov_repo_url is not None:
+            sets.append("gov_repo_url = ?")
+            params.append(gov_repo_url)
+        params.append(project_uuid)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    f"UPDATE projects SET {', '.join(sets)} WHERE project_uuid = ?;",
+                    tuple(params)
+                )
+                return cur.rowcount > 0
+
+    def get_project_cards_and_disputes_summary(self, project_uuid: str) -> Dict[str, Any]:
+        """Recupera tarjetas, mensajes A2A y tickets de disputa de un proyecto en una lectura coherente."""
+        with self.get_connection() as conn:
+            cards = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM kanban_cards WHERE project_uuid = ? ORDER BY updated_at DESC;",
+                    (project_uuid,)
+                ).fetchall()
+            ]
+            a2a_messages = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM a2a_messages WHERE project_uuid = ? ORDER BY created_at ASC, rowid ASC;",
+                    (project_uuid,)
+                ).fetchall()
+            ]
+            dispute_tickets = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? ORDER BY created_at DESC;",
+                    (project_uuid,)
+                ).fetchall()
+            ]
+        return {
+            "cards": cards,
+            "a2a_messages": a2a_messages,
+            "dispute_tickets": dispute_tickets,
+        }
+
+    def get_pending_hitl_bundle(self, project_uuid: str, local_node: Optional[str] = None) -> Dict[str, Any]:
+        """Recupera todos los registros SQLite necesarios para construir la bandeja HITL."""
+        target_node = local_node or local_node_uuid()
+        with self.get_connection() as conn:
+            open_disputes = [
+                dict(r) for r in conn.execute(
+                    """
+                    SELECT * FROM dispute_tickets
+                    WHERE project_uuid = ?
+                      AND (status = 'open'
+                           OR (status = 'challenged' AND resolution_mode = 'awaiting_external_arbiter' AND arbiter_node_uuid = ?))
+                    ORDER BY created_at DESC;
+                    """,
+                    (project_uuid, target_node)
+                ).fetchall()
+            ]
+            resolved_disputes = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND status != 'open' ORDER BY created_at DESC LIMIT 30;",
+                    (project_uuid,)
+                ).fetchall()
+            ]
+            cards_in_review = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM kanban_cards WHERE project_uuid = ? AND status = 'in_review' ORDER BY updated_at DESC;",
+                    (project_uuid,)
+                ).fetchall()
+            ]
+            collaborators = [
+                dict(r) for r in conn.execute(
+                    """
+                    SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours, n.node_kind
+                    FROM project_collaborators c
+                    LEFT JOIN swarm_nodes n ON c.node_uuid = n.node_uuid
+                    WHERE c.project_uuid = ?
+                    ORDER BY c.created_at ASC;
+                    """,
+                    (project_uuid,)
+                ).fetchall()
+            ]
+            swarm_nodes = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM swarm_nodes ORDER BY last_heartbeat DESC;"
+                ).fetchall()
+            ]
+        return {
+            "open_disputes": open_disputes,
+            "resolved_disputes": resolved_disputes,
+            "cards_in_review": cards_in_review,
+            "collaborators": collaborators,
+            "swarm_nodes": swarm_nodes,
+        }
+
+    def get_hitl_ticket_detail(self, project_uuid: str, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """Recupera un ticket de disputa junto con sus votos y turnos de diálogo A2A de la tarjeta asociada."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM dispute_tickets WHERE project_uuid = ? AND ticket_id = ?;",
+                (project_uuid, ticket_id)
+            ).fetchone()
+            if not row:
+                return None
+            ticket = dict(row)
+            agent_scores = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM jury_borda_scores WHERE ticket_id = ?;",
+                    (ticket_id,)
+                ).fetchall()
+            ]
+            human_votes = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM human_jury_votes WHERE ticket_id = ?;",
+                    (ticket_id,)
+                ).fetchall()
+            ]
+            dialogue_rows: List[Dict[str, Any]] = []
+            if ticket.get("card_id"):
+                dialogue_rows = [
+                    dict(r) for r in conn.execute(
+                        "SELECT * FROM a2a_messages WHERE project_uuid = ? AND card_id = ? ORDER BY created_at ASC, rowid ASC;",
+                        (project_uuid, ticket["card_id"])
+                    ).fetchall()
+                ]
+        ticket["votes_summary"] = {"agent_scores": agent_scores, "human_votes": human_votes}
+        ticket["a2a_messages"] = dialogue_rows
+        return ticket
+
+    def get_project_collaborators_map(self, project_uuid: str) -> Dict[str, Dict[str, Any]]:
+        """Devuelve un diccionario indexado por node_uuid con los colaboradores del proyecto."""
+        return {c["node_uuid"]: c for c in self.get_project_collaborators(project_uuid)}
+
+    # ==========================
+    # Extensiones, Tablas Dinámicas y Seeds P2P
+    # ==========================
+
+    def register_extension_table(self, table_name: str, ddl_sql: str) -> None:
+        """Registra de forma segura una tabla de extensión para conectores en SQLite."""
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$", table_name or ""):
+            raise ValueError(f"Nombre de tabla de extensión inválido: {table_name}")
+        ddl_clean = (ddl_sql or "").strip()
+        if not re.match(r"^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+", ddl_clean, re.IGNORECASE):
+            raise ValueError("ddl_sql debe comenzar con 'CREATE TABLE IF NOT EXISTS'")
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.executescript(ddl_clean)
+
+    def get_extension_setting(self, namespace: str, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Lee un valor de configuración de extensión aislado por namespace."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM extension_settings WHERE namespace = ? AND key = ?;",
+                (namespace, key)
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_extension_setting(self, namespace: str, key: str, value: str) -> None:
+        """Guarda o actualiza una configuración de extensión."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO extension_settings (namespace, key, value, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(namespace, key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (namespace, key, value, now_str)
+                )
+
+    def delete_extension_setting(self, namespace: str, key: str) -> bool:
+        """Elimina una configuración de extensión."""
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "DELETE FROM extension_settings WHERE namespace = ? AND key = ?;",
+                    (namespace, key)
+                )
+                return cur.rowcount > 0
+
+    def add_seed_node(self, project_uuid: Optional[str], seed_url: str, label: str = "") -> List[Dict[str, Any]]:
+        """Registra un nodo semilla (seed) P2P para un proyecto o globalmente."""
+        scope = (project_uuid or "__global__").strip() or "__global__"
+        cleaned_url = (seed_url or "").strip()
+        if not cleaned_url:
+            raise ValueError("seed_url no puede estar vacío")
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO p2p_seeds (project_uuid, seed_url, label, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(project_uuid, seed_url) DO UPDATE SET
+                        label = COALESCE(NULLIF(excluded.label, ''), p2p_seeds.label);
+                    """,
+                    (scope, cleaned_url, label, now_str)
+                )
+        return self.list_seed_nodes(project_uuid)
+
+    def remove_seed_node(self, project_uuid: Optional[str], seed_url: str) -> bool:
+        """Elimina un nodo semilla P2P."""
+        scope = (project_uuid or "__global__").strip() or "__global__"
+        cleaned_url = (seed_url or "").strip()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "DELETE FROM p2p_seeds WHERE project_uuid = ? AND seed_url = ?;",
+                    (scope, cleaned_url)
+                )
+                return cur.rowcount > 0
+
+    def list_seed_nodes(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Lista los nodos semilla P2P registrados para un proyecto (o globales)."""
+        scope = (project_uuid or "__global__").strip() or "__global__"
+        with self.get_connection() as conn:
+            cur = conn.execute(
+                "SELECT project_uuid, seed_url, label, created_at FROM p2p_seeds WHERE project_uuid = ? ORDER BY created_at ASC;",
+                (scope,)
             )
             return [dict(r) for r in cur.fetchall()]
