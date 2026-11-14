@@ -1,6 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { Sun, Moon, Settings, Plus, ArrowLeft, GitBranch, Users, Github, ShieldCheck } from 'lucide-react';
+import {
+  Sun,
+  Moon,
+  Settings,
+  Plus,
+  GitBranch,
+  Users,
+  Github,
+  ShieldCheck,
+  BookOpen,
+  LayoutGrid
+} from 'lucide-react';
 import BrandMark from './BrandMark';
+
+const WORKSPACE_TABS = [
+  { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid },
+  { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+  { id: 'approvals', label: 'HITL', title: 'HITL — Human in the Loop', icon: ShieldCheck },
+  { id: 'okf', label: 'Gobernanza OKF', title: 'Gobernanza OKF (ADRs, Freshness y Firmas)', icon: BookOpen },
+  { id: 'collaborators', label: 'Colaboradores', title: 'Colaboradores & Agentes', icon: Users }
+];
 
 export function AppHeader({
   theme,
@@ -8,14 +27,16 @@ export function AppHeader({
   onOpenSettings,
   activeProject,
   onBackToProjects,
+  onSelectProjectByUuid,
+  projects = [],
   activeTab,
   onTabChange,
   onNewTask,
   githubStatus,
   projectsCount = 0
 }) {
-  // Por debajo de 900px, los botones de acción de la derecha pasan a modo compacto (solo icono)
-  const COMPACT_BREAKPOINT = 900;
+  // Por debajo de 960px, la navegación y acciones pasan a modo compacto
+  const COMPACT_BREAKPOINT = 960;
   const [isCompact, setIsCompact] = useState(() => window.innerWidth < COMPACT_BREAKPOINT);
 
   useEffect(() => {
@@ -24,151 +45,135 @@ export function AppHeader({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  const projectOptions = React.useMemo(() => {
+    const list = Array.isArray(projects) ? [...projects] : [];
+    if (activeProject && !list.some(p => p.project_uuid === activeProject.project_uuid)) {
+      list.unshift(activeProject);
+    }
+    return list;
+  }, [projects, activeProject]);
+
+  const totalProjects = projectOptions.length || projectsCount;
+
+  const handleProjectSelectChange = (e) => {
+    const value = e.target.value;
+    if (value === '__hub__') {
+      if (onBackToProjects) onBackToProjects();
+      return;
+    }
+    if (onSelectProjectByUuid) {
+      onSelectProjectByUuid(value);
+    }
+  };
+
   return (
-    <header style={{
-      height: '64px',
-      backgroundColor: 'var(--bg-surface)',
-      borderBottom: '1px solid var(--border-subtle)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 clamp(14px, 2vw, 24px)',
-      flexShrink: 0,
-      zIndex: 20,
-      gap: '16px',
-      overflowX: 'auto',
-      whiteSpace: 'nowrap'
-    }}>
-      {/* 1. SECCIÓN IZQUIERDA: Marca, Botón Hub y Nombre de Proyecto Limpio (Sin UUID) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0, height: '100%' }}>
-        <BrandMark size={28} />
+    <header className="mcp-header">
+      {/* 1. SECCIÓN IZQUIERDA: BrandMark + Combobox Selector de Proyecto */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, height: '100%' }}>
+        <BrandMark size={24} />
 
         <span style={{ color: 'var(--border-subtle)', fontWeight: 300, display: 'inline-flex', alignItems: 'center' }}>|</span>
 
-        {activeProject ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', height: '100%' }}>
-            <button
-              onClick={onBackToProjects}
-              title="Volver al Hub de Proyectos"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '5px',
-                height: '32px',
-                padding: '0 10px',
-                lineHeight: 1,
-                fontSize: '12px',
-                fontWeight: 600,
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--bg-subtle)',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                transition: 'var(--transition)'
-              }}
-            >
-              <ArrowLeft size={13} /> Hub
-            </button>
-            <span
-              title={activeProject.name}
-              style={{
-                fontSize: '14px',
-                fontWeight: 700,
-                color: 'var(--text-primary)',
-                maxWidth: 'clamp(140px, 20vw, 300px)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                display: 'inline-flex',
-                alignItems: 'center',
-                lineHeight: 1,
-                height: '32px'
-              }}
-            >
-              {activeProject.name}
-            </span>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', height: '100%' }}>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center', height: '32px' }}>
-              Proyectos
-            </span>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              fontFamily: 'var(--font-mono)',
-              padding: '2px 8px',
-              borderRadius: '10px',
-              backgroundColor: 'var(--bg-subtle)',
-              color: 'var(--text-secondary)'
-            }}>
-              {projectsCount}
-            </span>
-          </div>
-        )}
+        <select
+          data-testid="project-switcher-combobox"
+          className="mcp-combobox"
+          aria-label="Selector de proyecto"
+          title={activeProject ? `Proyecto activo: ${activeProject.name}` : 'Seleccionar proyecto o permanecer en el Hub'}
+          value={activeProject ? activeProject.project_uuid : '__hub__'}
+          onChange={handleProjectSelectChange}
+        >
+          {activeProject ? (
+            <option value="__hub__">&lt;- Volver al Hub de Proyectos</option>
+          ) : (
+            <option value="__hub__">Hub de Proyectos ({totalProjects})</option>
+          )}
+          {projectOptions.map(proj => (
+            <option key={proj.project_uuid} value={proj.project_uuid}>
+              {proj.name}{proj.join_status && proj.join_status !== 'active' ? ' (Pendiente)' : ''}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* 2. SECCIÓN CENTRAL: Segmented Switcher Centrado y Equilibrado */}
+      {/* 2. SECCIÓN CENTRAL: Navegación Integrada (con Gobernanza OKF) o Selector Compacto */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, minWidth: 0, height: '100%' }}>
         {activeProject ? (
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            backgroundColor: 'var(--bg-subtle)',
-            padding: '4px',
-            height: '38px',
-            borderRadius: 'var(--radius-md)',
-            gap: '4px',
-            border: '1px solid var(--border-subtle)',
-            overflowX: 'auto',
-            overflowY: 'hidden'
-          }}>
-            {[
-              { id: 'kanban', label: 'Tablero Kanban', icon: null },
-              { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-              { id: 'approvals', label: 'HITL', title: 'HITL — Human in the Loop', icon: ShieldCheck },
-              { id: 'collaborators', label: 'Colaboradores & Agentes', icon: Users }
-            ].map(tab => {
-              const Icon = tab.icon;
-              const isSelected = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  title={tab.title || tab.label}
-                  onClick={() => onTabChange(tab.id)}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '6px',
-                    height: '30px',
-                    padding: '0 clamp(10px, 1.3vw, 16px)',
-                    fontSize: '12.5px',
-                    fontWeight: isSelected ? 600 : 500,
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: isSelected ? 'var(--bg-surface)' : 'transparent',
-                    color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    boxShadow: isSelected ? 'var(--shadow-sm)' : 'none',
-                    transition: 'var(--transition)',
-                    whiteSpace: 'nowrap'
-                  }}
-                >
-                  {Icon && <Icon size={14} color={isSelected ? 'var(--accent-primary)' : 'currentColor'} />}
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </div>
+          isCompact ? (
+            <select
+              data-testid="nav-tab-selector"
+              className="mcp-combobox"
+              aria-label="Cambiar vista del proyecto"
+              value={activeTab}
+              onChange={(e) => onTabChange && onTabChange(e.target.value)}
+              style={{ maxWidth: '185px' }}
+            >
+              {WORKSPACE_TABS.map(tab => (
+                <option key={tab.id} value={tab.id}>
+                  {tab.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <nav
+              aria-label="Navegación del proyecto"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                backgroundColor: 'var(--bg-subtle)',
+                padding: '3px',
+                height: '34px',
+                borderRadius: 'var(--radius-md)',
+                gap: '2px',
+                border: '1px solid var(--border-subtle)',
+                overflowX: 'auto',
+                overflowY: 'hidden'
+              }}
+            >
+              {WORKSPACE_TABS.map(tab => {
+                const Icon = tab.icon;
+                const isSelected = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    data-testid={`tab-${tab.id}`}
+                    aria-pressed={isSelected}
+                    title={tab.title || tab.label}
+                    onClick={() => onTabChange && onTabChange(tab.id)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '5px',
+                      height: '26px',
+                      padding: '0 clamp(8px, 1vw, 13px)',
+                      fontSize: '12px',
+                      fontWeight: isSelected ? 600 : 500,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: isSelected ? 'var(--bg-surface)' : 'transparent',
+                      color: isSelected ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      boxShadow: isSelected ? 'var(--shadow-sm)' : 'none',
+                      transition: 'var(--transition)',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {Icon && <Icon size={13} color={isSelected ? 'var(--accent-primary)' : 'currentColor'} />}
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          )
         ) : null}
       </div>
 
-      {/* 3. SECCIÓN DERECHA: Botones de Altura Unificada (36px) y Alineación Vertical Exacta */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'flex-end', height: '100%', flexShrink: 0 }}>
+      {/* 3. SECCIÓN DERECHA: Acciones Compactas (32px) */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end', height: '100%', flexShrink: 0 }}>
         {activeProject && (
           <button
+            type="button"
             onClick={onNewTask}
             title="Nueva Tarea (Ctrl+N)"
             aria-label="Nueva Tarea"
@@ -176,10 +181,10 @@ export function AppHeader({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
-              height: '36px',
-              padding: isCompact ? '0 10px' : '0 14px',
-              fontSize: '12.5px',
+              gap: '5px',
+              height: '32px',
+              padding: isCompact ? '0 9px' : '0 12px',
+              fontSize: '12px',
               fontWeight: 600,
               borderRadius: 'var(--radius-md)',
               border: 'none',
@@ -190,13 +195,14 @@ export function AppHeader({
               transition: 'var(--transition)'
             }}
           >
-            <Plus size={15} />
+            <Plus size={14} />
             {!isCompact && 'Nueva Tarea'}
           </button>
         )}
 
         {/* Chip de Identidad GitHub (PAT / gh CLI) */}
         <button
+          type="button"
           onClick={() => onOpenSettings('github')}
           title={githubStatus?.authenticated
             ? `GitHub: @${githubStatus.username} (${githubStatus.provider === 'pat' ? 'PAT Token' : 'gh CLI'})\nClick para gestionar conexión`
@@ -207,8 +213,8 @@ export function AppHeader({
             alignItems: 'center',
             justifyContent: 'center',
             gap: '6px',
-            height: '36px',
-            padding: isCompact ? '0 10px' : '0 12px',
+            height: '32px',
+            padding: isCompact ? '0 9px' : '0 10px',
             fontSize: '12px',
             fontWeight: 500,
             borderRadius: 'var(--radius-md)',
@@ -231,7 +237,7 @@ export function AppHeader({
             <span style={{
               fontSize: '11.5px',
               fontFamily: 'var(--font-mono)',
-              maxWidth: '110px',
+              maxWidth: '100px',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap'
@@ -243,11 +249,13 @@ export function AppHeader({
 
         {/* Alternar Tema */}
         <button
+          type="button"
           onClick={onToggleTheme}
           title="Alternar Tema Claro / Oscuro (Ctrl+D)"
+          aria-label="Alternar tema"
           style={{
-            width: '36px',
-            height: '36px',
+            width: '32px',
+            height: '32px',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -259,16 +267,18 @@ export function AppHeader({
             transition: 'var(--transition)'
           }}
         >
-          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
         </button>
 
-        {/* Botón de Configuración: Solo la tuerca */}
+        {/* Botón de Configuración */}
         <button
+          type="button"
           onClick={() => onOpenSettings()}
           title="Configuración del Nodo, P2P y Agentes (F1)"
+          aria-label="Configuración"
           style={{
-            width: '36px',
-            height: '36px',
+            width: '32px',
+            height: '32px',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -280,7 +290,7 @@ export function AppHeader({
             transition: 'var(--transition)'
           }}
         >
-          <Settings size={17} />
+          <Settings size={16} />
         </button>
       </div>
     </header>

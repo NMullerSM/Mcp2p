@@ -203,7 +203,7 @@ export default function App() {
   }, [toggleTheme, activeProject, pendingJoinRequest, loadProjects]);
 
   // Acciones de Proyecto
-  const handleSelectProject = async (proj) => {
+  const handleSelectProject = useCallback(async (proj) => {
     // Hallazgo C2 de la revisión final: un stub de unión todavía pendiente no tiene
     // repositorios reales, así que nunca debe abrirse como un espacio de trabajo normal
     // (allí el botón Sync, las invitaciones, etc. lo tratarían como un proyecto real; el
@@ -227,9 +227,22 @@ export default function App() {
         return;
       }
     }
+    setPendingJoinRequest(null);
     setActiveProject(proj);
     setActiveTab('kanban');
-  };
+  }, [api]);
+
+  const handleSelectProjectByUuid = useCallback((projectUuid) => {
+    if (!projectUuid || projectUuid === '__hub__') {
+      setActiveProject(null);
+      loadProjects();
+      return;
+    }
+    const found = projects.find(p => p.project_uuid === projectUuid);
+    if (found) {
+      handleSelectProject(found);
+    }
+  }, [projects, handleSelectProject, loadProjects]);
 
   const handleCreateProject = async (name, codeUrl, govUrl, autoPublish = false) => {
     if (!api) return;
@@ -374,6 +387,8 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onOpenSettings={handleOpenSettings}
         activeProject={activeProject}
+        projects={projects}
+        onSelectProjectByUuid={handleSelectProjectByUuid}
         onBackToProjects={() => {
           setActiveProject(null);
           loadProjects();

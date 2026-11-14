@@ -95,3 +95,189 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* ==========================================================================
+   SISTEMA DE COMPONENTES Y BREAKPOINTS RESPONSIVOS (<960 / 960-1440 / >1440)
+   ========================================================================== */
+
+.mcp-header {
+  height: 50px;
+  min-height: 50px;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 clamp(10px, 1.6vw, 20px);
+  flex-shrink: 0;
+  z-index: 20;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.mcp-combobox {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  transition: var(--transition);
+  max-width: clamp(160px, 22vw, 280px);
+  text-overflow: ellipsis;
+}
+
+.mcp-combobox:hover,
+.mcp-combobox:focus {
+  border-color: var(--accent-primary);
+}
+
+.mcp-toolbar {
+  height: 38px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 20px;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.mcp-badge-fresh,
+.mcp-badge-aging,
+.mcp-badge-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.mcp-badge-fresh {
+  background-color: rgba(var(--accent-primary-rgb), 0.16);
+  color: var(--accent-success);
+  border: 1px solid rgba(var(--accent-primary-rgb), 0.35);
+}
+
+.mcp-badge-aging {
+  background-color: rgba(245, 158, 11, 0.16);
+  color: var(--accent-warning);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.mcp-badge-stale {
+  background-color: rgba(239, 68, 68, 0.16);
+  color: var(--accent-danger);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.mcp-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  background-color: rgba(var(--accent-indigo-rgb), 0.14);
+  color: var(--accent-indigo);
+  border: 1px solid rgba(var(--accent-indigo-rgb), 0.25);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-kanban-grid {
+  display: flex;
+  gap: 14px;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px 0;
+  scroll-behavior: smooth;
+}
+
+.mcp-split-layout {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 16px;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.mcp-split-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Breakpoint 1: Compacto (< 960px) */
+@media (max-width: 959px) {
+  .mcp-header {
+    padding: 0 10px;
+    gap: 8px;
+  }
+  .mcp-combobox {
+    max-width: 150px;
+    font-size: 12px;
+  }
+  .mcp-toolbar {
+    padding: 0 10px;
+    gap: 6px;
+  }
+  .mcp-hide-compact {
+    display: none !important;
+  }
+  .mcp-kanban-grid {
+    gap: 10px;
+  }
+  .mcp-split-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+    overflow-y: auto;
+  }
+}
+
+/* Breakpoint 2: Estándar (960px - 1440px) */
+@media (min-width: 960px) and (max-width: 1440px) {
+  .mcp-split-layout {
+    grid-template-columns: 1.15fr 0.85fr;
+  }
+}
+
+/* Breakpoint 3: Ultrawide Split (> 1440px) */
+@media (min-width: 1441px) {
+  .mcp-header {
+    padding: 0 24px;
+  }
+  .mcp-combobox {
+    max-width: 320px;
+  }
+  .mcp-kanban-grid {
+    gap: 16px;
+  }
+  .mcp-split-layout {
+    grid-template-columns: 1.25fr 0.95fr;
+    gap: 20px;
+  }
+}
