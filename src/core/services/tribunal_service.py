@@ -176,6 +176,9 @@ class DialecticTribunalService:
     def get_dispute_ticket(self, ticket_id: str) -> Optional[Dict[str, Any]]:
         return self.tribunal_repo.get_dispute_ticket(ticket_id)
 
+    def get_dispute_ticket_by_card(self, project_uuid: str, card_id: str) -> Optional[Dict[str, Any]]:
+        return self.tribunal_repo.get_dispute_ticket_by_card(project_uuid, card_id)
+
     def list_disputes(
         self, project_uuid: str, status: Optional[str] = None, card_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:

@@ -21,11 +21,18 @@ class OkfGovernancePort(Protocol):
     def move_decision_lifecycle(
         self,
         gov_base_path: str | Path,
-        decision_id: str,
+        dec_id: str,
         target_state: str,
+        reason_or_consequences: str,
         signature_block: Optional[Dict[str, Any]] = None,
-        reason: str = "",
-    ) -> Dict[str, Any]: ...
+    ) -> Path: ...
+
+    def reconcile_kanban_from_okf(
+        self,
+        gov_base_path: str | Path,
+        project_uuid: str,
+        db_manager: Optional[Any] = None,
+    ) -> Dict[str, int]: ...
 
     def list_okf_folders(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
 

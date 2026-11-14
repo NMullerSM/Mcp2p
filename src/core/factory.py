@@ -5,6 +5,7 @@ Construye instancias independientes de `CoreKernel` para cada perfil de ejecuci�
 - `create_kernel`: ensamblado configurable completo.
 - `create_desktop_kernel`: perfil desktop con conectores estándar enchufados.
 - `create_headless_kernel`: perfil daemon / MCP server con malla P2P multi-seed.
+- `create_mcp_kernel`: perfil servidor MCP (agentes) con OKF y sin crypto/P2P.
 - `create_fast_cli_kernel`: perfil CLI rápido (<50ms) sin carga de UI, crypto ni P2P.
 - `create_test_kernel`: perfil aislado para pruebas unitarias e integración con inyección de dobles.
 """
@@ -195,16 +196,17 @@ class ApplicationFactory:
             resolved_git_port = resolved_git_sync
 
         # Servicios de dominio / aplicación
+        tribunal_service = DialecticTribunalService(
+            tribunal_repo=tribunal_repo,
+            bus=resolved_bus,
+            event_bus=resolved_event_bus,
+        )
         kanban_service = KanbanGovernanceService(
             kanban_repo=kanban_repo,
             project_repo=project_repo,
             okf_port=resolved_okf,
             event_bus=resolved_event_bus,
-        )
-        tribunal_service = DialecticTribunalService(
-            tribunal_repo=tribunal_repo,
-            bus=resolved_bus,
-            event_bus=resolved_event_bus,
+            tribunal_service=tribunal_service,
         )
         view_synthesizer = WorkspaceViewSynthesizer(
             project_repo=project_repo,
@@ -275,6 +277,23 @@ class ApplicationFactory:
         """Crea el núcleo para ejecución headless / daemon / MCP server sin PyWebView."""
         kwargs.setdefault("profile", "headless")
         kwargs.setdefault("load_default_connectors", True)
+        return cls.create_kernel(db_path=db_path, **kwargs)
+
+    @classmethod
+    def create_mcp_kernel(
+        cls,
+        db_path: Optional[Union[str, Path]] = None,
+        **kwargs: Any,
+    ) -> CoreKernel:
+        """
+        Crea el núcleo del servidor MCP (`MCPToolsHandler`): SQLite + repositorios + servicios
+        + conector OKF. NO carga `NodeCryptoManager` (un proceso de agente nunca debe tener
+        a mano la clave Ed25519 del humano), ni malla P2P, ni GitHubSync, ni ExtensionGate.
+        """
+        kwargs.setdefault("profile", "mcp_server")
+        kwargs.setdefault("load_default_connectors", False)
+        if kwargs.get("okf_adapter") is None:
+            kwargs["okf_adapter"] = cls._build_default_okf_adapter()
         return cls.create_kernel(db_path=db_path, **kwargs)
 
     @classmethod

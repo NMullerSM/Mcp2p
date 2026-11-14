@@ -9,6 +9,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+# Canales de actor reconocidos. Solo ACTOR_HUMAN_UI (GUI PyWebView) puede ejecutar
+# transiciones reservadas al humano; MCP y fast CLI son siempre actores no humanos.
+ACTOR_HUMAN_UI = "human_ui"
+ACTOR_AGENT_MCP = "agent_mcp"
+ACTOR_FAST_CLI = "fast_cli"
+
+
 @dataclass(frozen=True)
 class ActorContext:
     """Identidad y canal del actor que invoca una operación del núcleo."""
@@ -21,7 +28,7 @@ class ActorContext:
 
     def is_human_ui(self) -> bool:
         """True únicamente cuando el actor proviene de la interfaz humana autenticada."""
-        return self.kind == "human_ui"
+        return self.kind == ACTOR_HUMAN_UI
 
 
 @dataclass(frozen=True)
