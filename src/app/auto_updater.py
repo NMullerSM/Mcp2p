@@ -6,6 +6,7 @@ seguro con cero pérdida de datos (mcp2p_local.db y workspace/ residen en user_d
 y nunca se sobreescriben al actualizar).
 """
 import os
+import re
 import sys
 import time
 import shlex
@@ -22,6 +23,17 @@ from src.proc_utils import run_hidden
 from src.app.paths import is_system_installed
 
 OFFICIAL_RELEASE_PREFIX = "https://github.com/NMullerSM/Mcp2p/releases/download/"
+
+
+def _safe_version_component(version: str) -> str:
+    """
+    `version` es el `tag_name` de la release (dato remoto de la API de GitHub) y se
+    interpola en el nombre del archivo temporal: se reduce a un único componente de ruta
+    sin separadores ni '..' para que nunca pueda escribir fuera del directorio temporal.
+    """
+    cleaned = re.sub(r"[^0-9A-Za-z._+-]", "_", str(version or ""))
+    cleaned = cleaned.replace("..", "_").strip(".")
+    return cleaned[:64] or "unknown"
 
 
 class AutoUpdateManager:
@@ -88,7 +100,7 @@ class AutoUpdateManager:
                 ext = ".zip"
 
             self._temp_dir = tempfile.mkdtemp(prefix="mcp2p_update_")
-            filename = f"Mcp2p-Setup-{version}{ext}"
+            filename = f"Mcp2p-Setup-{_safe_version_component(version)}{ext}"
             self._target_file = os.path.join(self._temp_dir, filename)
 
         self._worker_thread = threading.Thread(

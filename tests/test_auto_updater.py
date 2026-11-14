@@ -247,3 +247,23 @@ def test_get_install_mode_dev_mode():
         assert res["success"] is True
         assert res["mode"] == "dev"
         assert res["platform"] == sys.platform
+
+
+@pytest.mark.parametrize(
+    "tag_name",
+    ["v1.0.1", "../../../tmp/evil", "release/1.2", "..\\..\\x", "", "a" * 200],
+)
+def test_updater_target_file_never_escapes_temp_dir(tag_name, monkeypatch):
+    """`version` (tag_name remoto) forma parte del nombre del archivo temporal: nunca debe
+    producir una ruta fuera de `_temp_dir` (ver docs/okf/auditoria_2026-11/26_)."""
+    monkeypatch.setattr(AutoUpdateManager, "_download_worker", lambda self, url, dest: None)
+    manager = AutoUpdateManager(base_dir=".", user_data_dir=tempfile.gettempdir())
+    url = f"{OFFICIAL_RELEASE_PREFIX}v1.0.1/Mcp2p-Setup-1.0.1.tar.gz"
+    try:
+        res = manager.start_download(url, version=tag_name)
+        assert res["success"] is True
+        target = os.path.realpath(manager._target_file)
+        assert os.path.dirname(target) == os.path.realpath(manager._temp_dir)
+        assert os.path.basename(target).startswith("Mcp2p-Setup-")
+    finally:
+        shutil.rmtree(manager._temp_dir, ignore_errors=True)
