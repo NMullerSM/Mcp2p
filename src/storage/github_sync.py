@@ -578,6 +578,28 @@ class GitHubSyncManager:
         except Exception as e:
             return {"success": False, "error": f"Error inspeccionando Git: {str(e)}", "branches": [], "commits": []}
 
+    def commit_all_changes(self, repo_path: str | Path, commit_message: str) -> Dict[str, Any]:
+        """
+        `git add .` y, solo si hay cambios preparados, `git commit -m` (EGM-57: antes lo hacía la
+        UI por subprocess). Devuelve {success, committed, error?}; sin cambios => success sin commit.
+        """
+        path = Path(repo_path)
+        try:
+            run_hidden(["git", "add", "."], cwd=path, capture_output=True)
+            staged = run_hidden(["git", "diff", "--cached", "--quiet"], cwd=path, capture_output=True)
+            if staged.returncode == 0:
+                return {"success": True, "committed": False}
+            commit_res = run_hidden(
+                ["git", "commit", "-m", commit_message],
+                cwd=path, capture_output=True, encoding="utf-8", errors="replace",
+            )
+            if commit_res.returncode != 0:
+                return {"success": False, "committed": False,
+                        "error": (commit_res.stderr or commit_res.stdout or "").strip()}
+            return {"success": True, "committed": True}
+        except Exception as e:
+            return {"success": False, "committed": False, "error": str(e)}
+
     def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool:
         """Comprueba si existe un control remoto configurado en el repositorio."""
         path = Path(repo_path)

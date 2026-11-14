@@ -218,6 +218,9 @@ class GitWorkspacePort(Protocol):
 
     def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool: ...
 
+    # EGM-57: commit de gobernanza que antes hacía la UI por subprocess.
+    def commit_all_changes(self, repo_path: str | Path, commit_message: str) -> Dict[str, Any]: ...
+
     def git_fetch(
         self, repo_path: str | Path, remote: str = "origin", pat: Optional[str] = None
     ) -> Dict[str, Any]: ...

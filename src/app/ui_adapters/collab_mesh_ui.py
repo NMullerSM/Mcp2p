@@ -9,10 +9,8 @@ import base64
 import hashlib
 import json
 import logging
-import platform
 import re
 import secrets
-import subprocess
 import threading
 import urllib.parse
 from datetime import datetime, timezone
@@ -508,116 +506,36 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _collaboration_service(self) -> Any:
+        """`ProjectCollaborationService` del núcleo con los puertos de esta GUI (EGM-57)."""
+        from src.core.services.collaboration_service import ProjectCollaborationService
+
+        kernel = self.core_kernel
+        return ProjectCollaborationService(
+            collab_repo=getattr(kernel, "collab_repo", None) or self.db,
+            project_lookup=self.db.get_project_by_uuid,
+            okf_port=self.okf,
+            git_port=self.github,
+            repo_host=self.github,
+            peer_notifier=self._notify_peer,
+        )
+
     def approve_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
         try:
-            res = self.db.approve_collaborator(project_uuid, node_uuid)
-            if not res:
-                return {"success": False, "error": "No se pudo actualizar el colaborador en la base de datos"}
-
-            collabs = self.db.get_project_collaborators(project_uuid)
-            collab = next((c for c in collabs if c.get("node_uuid") == node_uuid), None)
-            proj = self.db.get_project_by_uuid(project_uuid)
-            invitations_sent = []
-            gov_commit_error = None
-
-            if collab and proj:
-                pub_key = collab.get("public_key")
-                gh_user = collab.get("github_username")
-                gov_path = Path(proj.get("gov_repo_path", ""))
-
-                if pub_key and gov_path.exists():
-                    try:
-                        self.okf.add_trusted_node_pubkey(gov_path, node_uuid, pub_key, gh_user or "peer")
-                    except Exception as okf_e:
-                        logger.warning(f"No se pudo escribir en trusted_nodes.yaml: {okf_e}")
-
-                if gh_user:
-                    for repo_field in ("code_repo_url", "gov_repo_url"):
-                        raw_url = proj.get(repo_field, "")
-                        m = re.search(r"github\.com[/:]([^/]+)/([^/.]+)", raw_url)
-                        if m:
-                            owner, repo_name = m.group(1), m.group(2)
-                            inv_res = self.github.add_repo_collaborator(owner, repo_name, gh_user)
-                            invitations_sent.append({"repo": f"{owner}/{repo_name}", "result": inv_res})
-
-                if gov_path.exists() and (gov_path / ".git").exists():
-                    try:
-                        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-                        self._subprocess_run(["git", "add", "."], cwd=gov_path, capture_output=True, creationflags=creationflags)
-                        staged = self._subprocess_run(
-                            ["git", "diff", "--cached", "--quiet"],
-                            cwd=gov_path,
-                            capture_output=True,
-                            creationflags=creationflags,
-                        )
-                        commit_ok = True
-                        if staged.returncode != 0:
-                            commit_res = self._subprocess_run(
-                                [
-                                    "git",
-                                    "commit",
-                                    "-m",
-                                    f"chore(gov): authorize peer {node_uuid[:8]} (@{gh_user or 'node'}) in trusted_nodes.yaml",
-                                ],
-                                cwd=gov_path,
-                                capture_output=True,
-                                encoding="utf-8",
-                                errors="replace",
-                                creationflags=creationflags,
-                            )
-                            commit_ok = commit_res.returncode == 0
-                            if not commit_ok:
-                                gov_commit_error = (commit_res.stderr or commit_res.stdout or "").strip()[:300]
-                                logger.warning(
-                                    f"approve_collaborator: commit de trusted_nodes.yaml falló: {gov_commit_error}"
-                                )
-                        if commit_ok and self.github.has_remote(gov_path, "origin"):
-                            self.github.git_push_branch(gov_path, branch="main", remote="origin")
-                    except Exception as push_err:
-                        logger.debug(f"Push de trusted_nodes omitido: {push_err}")
-
-            result: Dict[str, Any] = {
-                "success": True,
-                "invitations": invitations_sent,
-                **({"gov_commit_error": gov_commit_error} if gov_commit_error else {}),
-            }
-
-            try:
-                self._notify_peer(node_uuid, {
-                    "type": "join_decision",
-                    "decision": "approved",
-                    "project_uuid": project_uuid,
-                    "node_uuid": node_uuid,
-                })
-            except Exception as notify_err:
-                logger.debug(f"No se pudo enviar join_decision en vivo: {notify_err}")
-
-            return result
+            return self._collaboration_service().approve_collaborator(project_uuid, node_uuid)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def reject_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
         """Rechaza colaborador y emite join_decision(decision='rejected') best-effort (EGM-47)."""
         try:
-            res = self.db.record_rejection(project_uuid, node_uuid)
-            try:
-                if res.get("success", True):
-                    self._notify_peer(node_uuid, {
-                        "type": "join_decision",
-                        "decision": "rejected",
-                        "project_uuid": project_uuid,
-                        "node_uuid": node_uuid,
-                    })
-            except Exception as notify_err:
-                logger.debug(f"No se pudo enviar join_decision(rejected) en vivo: {notify_err}")
-            return res
+            return self._collaboration_service().reject_collaborator(project_uuid, node_uuid)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def remove_collaborator(self, project_uuid: str, node_uuid: str) -> Dict[str, Any]:
         try:
-            res = self.db.remove_collaborator(project_uuid, node_uuid)
-            return {"success": res}
+            return self._collaboration_service().remove_collaborator(project_uuid, node_uuid)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
