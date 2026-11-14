@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.proc_utils import run_hidden
 from src.storage.fs_utils import atomic_write_text
+from src.storage.okf_freshness import OkfFreshnessEngine
 from src.storage.okf_tags import OkfTagEngine
 from src.storage.validators import InvalidIdentifierError, ensure_within, validate_safe_id
 
@@ -74,6 +75,7 @@ class OKFAdapter:
     def __init__(self, schema: Optional[Dict[str, Any]] = None) -> None:
         self.schema = copy.deepcopy(schema) if schema is not None else copy.deepcopy(DEFAULT_OKF_SCHEMA)
         self.tag_engine = OkfTagEngine()
+        self.freshness_engine = OkfFreshnessEngine()
 
     # ==========================================
     # Inicialización de Estructura OKF v2
@@ -301,7 +303,10 @@ graph TD
             "adrs_found": 0,
             "user_stories_found": 0,
             "backend_features": 0,
-            "frontend_features": 0
+            "frontend_features": 0,
+            "verified_adrs": 0,
+            "unverified_adrs": 0,
+            "unverified_adr_paths": [],
         }
 
         if not docs_okf.exists():
@@ -341,10 +346,41 @@ graph TD
             stats["adrs_found"] = len(re.findall(r"###\s*ADR-\d+:", text_01))
             stats["user_stories_found"] = len(re.findall(r"\*\s*\*\*US-\d+", text_01))
 
-        # Sumar ADRs de architecture/adrs si existen
+        # Sumar ADRs de architecture/adrs si existen y verificar firmas Ed25519 (EGM-35)
+        trusted_nodes = self.get_trusted_nodes_map(gov_base_path)
         adrs_dir = docs_okf / "architecture" / "adrs"
         if adrs_dir.is_dir():
-            stats["adrs_found"] += len(list(adrs_dir.glob("*.md")))
+            adr_files = sorted(adrs_dir.glob("*.md"))
+            stats["adrs_found"] += len(adr_files)
+            for adr_file in adr_files:
+                rel_adr = f"architecture/adrs/{adr_file.name}"
+                sig_valid, reasons = self.freshness_engine.verify_artifact_signatures(
+                    adr_file, rel_adr, trusted_nodes
+                )
+                if sig_valid is True:
+                    stats["verified_adrs"] += 1
+                else:
+                    stats["unverified_adrs"] += 1
+                    stats["unverified_adr_paths"].append(rel_adr)
+                    warnings.append(
+                        f"ADR sin firma Ed25519 válida ({rel_adr}): {'; '.join(reasons)}"
+                    )
+
+        rulings_dir = docs_okf / "architecture" / "rulings"
+        if rulings_dir.is_dir():
+            for ruling_file in sorted(rulings_dir.glob("*.yaml")):
+                rel_ruling = f"architecture/rulings/{ruling_file.name}"
+                sig_valid, reasons = self.freshness_engine.verify_artifact_signatures(
+                    ruling_file, rel_ruling, trusted_nodes
+                )
+                if sig_valid is True:
+                    stats["verified_adrs"] += 1
+                elif sig_valid is False:
+                    stats["unverified_adrs"] += 1
+                    stats["unverified_adr_paths"].append(rel_ruling)
+                    warnings.append(
+                        f"Dictamen sin firma Ed25519 válida ({rel_ruling}): {'; '.join(reasons)}"
+                    )
 
         # Sumar US de requirements/functional si existen
         us_dir = docs_okf / "requirements" / "functional"
@@ -1951,3 +1987,16 @@ graph TD
         """Filtra artefactos OKF por uno o más tags YAML."""
         docs_okf = self._resolve_docs_okf(gov_base_path)
         return self.tag_engine.filter_artifacts_by_tags(docs_okf, tags, match_all=match_all)
+
+    def get_okf_freshness_report(
+        self,
+        code_repo_path: Optional[str | Path],
+        gov_base_path: str | Path,
+        sla_days: int = 14,
+    ) -> Dict[str, Any]:
+        """Calcula el reporte de Freshness determinista y verificación de firmas Ed25519."""
+        return self.freshness_engine.compute_project_freshness(
+            code_repo_path=code_repo_path,
+            gov_base_path=gov_base_path,
+            sla_days=sla_days,
+        )

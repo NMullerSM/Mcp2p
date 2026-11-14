@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -21,6 +23,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 logger = logging.getLogger("mcp2p.crypto")
+
+
+class IdentityKeyCorruptError(Exception):
+    """Error lanzado cuando el archivo node_identity.key existe pero está corrupto o es inválido."""
 
 
 class NodeCryptoManager:
@@ -33,31 +39,60 @@ class NodeCryptoManager:
         self._load_or_generate_keypair()
 
     def _load_or_generate_keypair(self) -> None:
-        """Carga la clave privada existente o genera un nuevo par Ed25519."""
+        """Carga la clave privada existente o genera un nuevo par Ed25519 de forma atómica (0700/0600)."""
         if self.key_path.exists():
             try:
                 pem_data = self.key_path.read_bytes()
-                self._private_key = serialization.load_pem_private_key(pem_data, password=None)
+                loaded_key = serialization.load_pem_private_key(pem_data, password=None)
+                if not isinstance(loaded_key, ed25519.Ed25519PrivateKey):
+                    raise ValueError("La clave cargada no es Ed25519PrivateKey")
+                self._private_key = loaded_key
                 self._public_key = self._private_key.public_key()
                 return
-            except Exception as e:
-                logger.warning(f"No se pudo cargar la clave existente desde {self.key_path}: {e}. Generando nueva clave.")
+            except Exception as exc:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                backup_path = self.key_path.with_name(f"{self.key_path.name}.corrupt-{ts}")
+                try:
+                    shutil.copy2(self.key_path, backup_path)
+                    os.chmod(backup_path, 0o600)
+                except Exception as backup_exc:
+                    logger.error(f"No se pudo respaldar la clave corrupta {self.key_path}: {backup_exc}")
+                raise IdentityKeyCorruptError(
+                    f"Clave de identidad corrupta en '{self.key_path}'. "
+                    f"Respaldada en '{backup_path}'; no se regenerará silenciosamente."
+                ) from exc
 
         self._private_key = ed25519.Ed25519PrivateKey.generate()
         self._public_key = self._private_key.public_key()
 
-        # Guardar de forma segura
+        # Asegurar directorio padre 0700 y creación atómica exclusiva 0600
+        self.key_path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.key_path.parent, 0o700)
+        pem_bytes = self._private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
         try:
-            self.key_path.parent.mkdir(parents=True, exist_ok=True)
-            pem_bytes = self._private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption()
-            )
-            self.key_path.write_bytes(pem_bytes)
-            self.key_path.chmod(0o600)
-        except Exception as e:
-            logger.warning(f"No se pudo guardar la clave privada en disco: {e}")
+            fd = os.open(str(self.key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # Carrera concurrente: intentar cargar el archivo ya creado
+            pem_data = self.key_path.read_bytes()
+            loaded_key = serialization.load_pem_private_key(pem_data, password=None)
+            if not isinstance(loaded_key, ed25519.Ed25519PrivateKey):
+                raise IdentityKeyCorruptError(f"Clave inválida tras carrera en '{self.key_path}'.")
+            self._private_key = loaded_key
+            self._public_key = self._private_key.public_key()
+            return
+
+        with os.fdopen(fd, "wb") as f:
+            try:
+                os.fchmod(f.fileno(), 0o600)
+            except Exception:
+                pass
+            f.write(pem_bytes)
+            f.flush()
+            os.fsync(f.fileno())
 
     @property
     def public_key_base64(self) -> str:
@@ -184,3 +219,41 @@ class NodeCryptoManager:
             "signed_at": signature_block.get("signed_at")
         }
         return NodeCryptoManager.verify_signature(payload, sig, pubkey)
+
+    def sign_connector_manifest(self, manifest_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Firma un manifiesto de conector externo con la clave privada Ed25519 del propietario."""
+        if not isinstance(manifest_dict, dict):
+            raise ValueError("manifest_dict debe ser un diccionario.")
+        payload = {k: v for k, v in manifest_dict.items() if k != "signature_ed25519"}
+        if not payload.get("owner_public_key"):
+            payload["owner_public_key"] = self.public_key_base64
+        signature = self.sign_payload(payload)
+        return {**payload, "signature_ed25519": signature}
+
+    @staticmethod
+    def verify_connector_manifest(manifest_dict: Dict[str, Any], public_key_b64: str) -> bool:
+        """Verifica la firma Ed25519 de un manifiesto de conector contra public_key_b64 confiable."""
+        if not isinstance(manifest_dict, dict) or not isinstance(public_key_b64, str) or not public_key_b64:
+            return False
+        signature = manifest_dict.get("signature_ed25519")
+        if not isinstance(signature, str) or not signature:
+            return False
+        owner_pub = manifest_dict.get("owner_public_key")
+        if owner_pub and owner_pub != public_key_b64:
+            return False
+        payload = {k: v for k, v in manifest_dict.items() if k != "signature_ed25519"}
+        return NodeCryptoManager.verify_signature(payload, signature, public_key_b64)
+
+
+def sign_connector_manifest(
+    manifest_dict: Dict[str, Any],
+    crypto_manager: Optional[NodeCryptoManager] = None,
+) -> Dict[str, Any]:
+    """Helper de módulo para firmar un manifiesto de conector Ed25519."""
+    manager = crypto_manager or NodeCryptoManager()
+    return manager.sign_connector_manifest(manifest_dict)
+
+
+def verify_connector_manifest(manifest_dict: Dict[str, Any], public_key_b64: str) -> bool:
+    """Helper de módulo para verificar un manifiesto de conector Ed25519."""
+    return NodeCryptoManager.verify_connector_manifest(manifest_dict, public_key_b64)
