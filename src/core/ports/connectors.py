@@ -5,7 +5,7 @@ Puertos hexagonales (Protocolos) para conectores enchufables del CoreKernel ("Hu
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -71,8 +71,54 @@ class OkfGovernancePort(Protocol):
 
 
 @runtime_checkable
+class PeerNetworkPort(Protocol):
+    """
+    Puerto secundario ÚNICO de red entre pares (EGM-48, `22_ §3.5`, `23_` Tarea 3.1, ver `25_`).
+
+    Contrato multi-parte direccionado por `node_uuid`/`project_uuid` que unifica el
+    listener LAN firmado (`LanWebhookNetworkConnector`, envuelve `P2PNotificationService`),
+    el canal 1:1 (`DirectPeerNetworkConnector`, envuelve un `P2PTransport` WebRTC/Null) y
+    el supervisor con *circuit breaker* (`SafePeerNetworkSupervisor`).
+
+    Un "envelope" es un `dict` de aplicación con clave `type` (`join_request`,
+    `join_decision`, `sync_pulse`, ...). La firma/verificación Ed25519 es responsabilidad
+    de cada conector según su medio. Ningún método lanza por fallos de red: degradan a
+    `False` / resultados con `failed`.
+    """
+
+    connector_mode: str
+
+    def start_listening(
+        self, local_node_uuid: str, on_envelope: Callable[[Dict[str, Any]], None]
+    ) -> bool: ...
+
+    def send_to(self, target_node_uuid: str, envelope: Dict[str, Any]) -> bool: ...
+
+    def broadcast(self, project_uuid: str, envelope: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    def get_presence(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]: ...
+
+    def reconfigure(self, settings: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    def get_status(self) -> Dict[str, Any]: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
 class PeerMeshPort(Protocol):
-    """Puerto de malla P2P multi-nodo y multi-seed."""
+    """
+    Puerto de registro de malla multi-seed (seeds, pares confiables y seguridad de sobres).
+
+    Alcance tras `25_` (EGM-48): NO es el transporte de producción. `MultiPeerMeshConnector`
+    se conserva como registro de seeds/pares y motor de sobres firmados con anti-replay,
+    anti-flood y circuit breaker por par, que hoy solo consume la UI del Laboratorio. Su
+    formato de sobre es incompatible con el listener LAN (`/webhook/p2p` verifica la firma
+    sobre `payload`, el mesh firma el núcleo del sobre), y nada en producción llama a
+    `send_to_peer`/`ingest_envelope`. Todo transporte nuevo debe implementar
+    `PeerNetworkPort`; este Protocolo queda congelado (sin métodos nuevos) hasta que su
+    verificación de sobres se reutilice como capa de `PeerNetworkPort`.
+    """
 
     def add_seed_node(self, seed_url: str) -> List[str]: ...
 

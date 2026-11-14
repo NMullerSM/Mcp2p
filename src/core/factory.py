@@ -257,6 +257,64 @@ class ApplicationFactory:
             connectors=connectors,
         )
 
+    @staticmethod
+    def create_peer_network(
+        *,
+        node_uuid: str,
+        crypto: Any,
+        db: Optional[DatabaseManager] = None,
+        signaling_url: str = "",
+        lan_port: int = 42424,
+        bind_host: Optional[str] = None,
+        transport_builder: Optional[Any] = None,
+        lan_service: Optional[Any] = None,
+    ) -> Any:
+        """
+        Compone el `PeerNetworkPort` de producción (EGM-48): `SafePeerNetworkSupervisor`
+        con el canal 1:1 (`direct`, WebRTC/Null según `signaling_url`) y el listener LAN
+        firmado (`lan`, envuelve `P2PNotificationService`). Única composición de red del
+        proceso; `main.py` ya no construye las dos pilas por separado.
+        """
+        from src.adapters.network import (
+            DirectPeerNetworkConnector,
+            LanWebhookNetworkConnector,
+            SafePeerNetworkSupervisor,
+            build_p2p_transport,
+        )
+
+        builder = transport_builder or (lambda url, c: build_p2p_transport(url, c))
+
+        def _endpoint(node: str) -> Optional[str]:
+            if db is None:
+                return None
+            row = db.get_node_by_uuid(node)
+            return (row or {}).get("p2p_endpoint")
+
+        def _project_peers(project_uuid: str) -> List[str]:
+            if db is None:
+                return []
+            return [
+                c["node_uuid"]
+                for c in db.get_project_collaborators(project_uuid)
+                if c.get("status") == "approved" and c.get("node_uuid")
+            ]
+
+        direct = DirectPeerNetworkConnector(
+            transport_factory=lambda url: builder(url, crypto),
+            signaling_url=signaling_url,
+        )
+        lan = LanWebhookNetworkConnector(
+            node_uuid=node_uuid,
+            crypto_manager=crypto,
+            is_trusted_pubkey=getattr(db, "is_trusted_public_key", None),
+            endpoint_resolver=_endpoint,
+            project_peers_resolver=_project_peers,
+            lan_port=lan_port,
+            bind_host=bind_host,
+            service=lan_service,
+        )
+        return SafePeerNetworkSupervisor({"direct": direct, "lan": lan})
+
     @classmethod
     def create_desktop_kernel(
         cls,

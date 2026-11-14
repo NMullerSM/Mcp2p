@@ -43,6 +43,7 @@ class CoreKernel:
 
     PORT_OKF = "okf"
     PORT_MESH = "p2p_mesh"
+    PORT_NETWORK = "peer_network"
     PORT_EXTENSION_GATE = "extension_gate"
     PORT_OUTBOUND_REST = "outbound_rest"
     PORT_AGENT_TERMINAL = "agent_terminal_matrix"
@@ -53,6 +54,7 @@ class CoreKernel:
     STANDARD_PORTS: Tuple[str, ...] = (
         PORT_OKF,
         PORT_MESH,
+        PORT_NETWORK,
         PORT_EXTENSION_GATE,
         PORT_OUTBOUND_REST,
         PORT_AGENT_TERMINAL,
@@ -123,6 +125,11 @@ class CoreKernel:
     @property
     def mesh_connector(self) -> Any:
         return self.get_connector(self.PORT_MESH)
+
+    @property
+    def peer_network(self) -> Any:
+        """Puerto único de red entre pares (`PeerNetworkPort`, EGM-48)."""
+        return self.get_connector(self.PORT_NETWORK)
 
     @property
     def extension_gate(self) -> Any:
@@ -242,6 +249,10 @@ class CoreKernel:
             if hasattr(conn, "public_key_base64") and name == self.PORT_CRYPTO:
                 pk = getattr(conn, "public_key_base64", "")
                 details["has_public_key"] = bool(pk)
+            if name == self.PORT_NETWORK and callable(getattr(conn, "get_status", None)):
+                net_status = conn.get_status()
+                if isinstance(net_status, dict):
+                    details["network"] = net_status
             if hasattr(conn, "transport_mode"):
                 details["transport_mode"] = getattr(conn, "transport_mode", None)
         except Exception as exc:
