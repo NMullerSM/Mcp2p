@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from src.storage.db import DatabaseManager
 from src.a2a.bus import A2ABus, A2AIntent
+from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
+from src.core.factory import ApplicationFactory
+from src.core.kernel import CoreKernel
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
@@ -55,12 +58,35 @@ def _get_staleness_info() -> tuple[str, str, bool]:
 
 
 class MCPToolsHandler:
-    """Manejador de herramientas MCP desacoplado del transporte para facilitar testing e introspección."""
+    """
+    Adaptador primario MCP (Tarea 2.3 de `23_`, ver `24_`).
 
-    def __init__(self, db_manager: Optional[DatabaseManager] = None) -> None:
-        self.db = db_manager or DatabaseManager.get_instance()
-        self.bus = A2ABus(db=self.db)
-        self.okf = OKFAdapter()
+    Desacoplado del transporte; delega toda transición gobernada (lease, release,
+    estados reservados al humano, promoción de decisiones, reconciliación OKF y
+    apertura de disputas) en los servicios del `CoreKernel` con un
+    `ActorContext(kind="agent_mcp")`. Nunca construye un actor `human_ui`.
+    """
+
+    def __init__(
+        self,
+        db_manager: Optional[DatabaseManager] = None,
+        kernel: Optional[CoreKernel] = None,
+    ) -> None:
+        if kernel is None:
+            db = db_manager or DatabaseManager.get_instance()
+            kernel = ApplicationFactory.create_mcp_kernel(db_manager=db)
+        self.kernel = kernel
+        self.db = kernel.db
+        self.bus = kernel.bus
+        okf = kernel.okf_adapter
+        if okf is None:
+            okf = OKFAdapter()
+            kernel.register_connector(CoreKernel.PORT_OKF, okf)
+        self.okf = okf
+
+    def _agent(self, node_uuid: Optional[str] = None) -> ActorContext:
+        """Actor no humano del canal MCP (identidad autodeclarada por el agente, EGM-22)."""
+        return ActorContext(kind=ACTOR_AGENT_MCP, node_uuid=(node_uuid or self.kernel.node_uuid))
 
     def _wrap_response(self, project_uuid: Optional[str], result_data: Dict[str, Any]) -> str:
         """
@@ -119,13 +145,14 @@ class MCPToolsHandler:
         No consume tokens de inferencia.
         """
         try:
-            card = self.db.create_card(
+            res = self.kernel.kanban.create_task(
                 project_uuid=project_uuid,
                 card_id=card_id,
                 title=title,
-                description=description
+                description=description,
+                actor=self._agent(),
             )
-            return json.dumps({"success": True, "card": card}, indent=2, ensure_ascii=False)
+            return json.dumps(res, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -148,25 +175,16 @@ class MCPToolsHandler:
         SQLite y el repositorio de gobernanza OKF.
         """
         try:
-            card = self.db.get_card_by_id(project_uuid, card_id)
-            if not card:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Tarjeta '{card_id}' no encontrada en el proyecto '{project_uuid}'."
-                }, indent=2, ensure_ascii=False)
-
-            updated = self.db.update_card_details(
+            res = self.kernel.kanban.update_task(
                 project_uuid=project_uuid,
                 card_id=card_id,
+                actor=self._agent(),
                 title=title,
                 description=description,
                 acceptance_criteria=acceptance_criteria,
-                assignee_node_uuid=assignee_node_uuid
+                assignee_node_uuid=assignee_node_uuid,
             )
-            return json.dumps({
-                "success": True,
-                "card": updated
-            }, indent=2, ensure_ascii=False)
+            return json.dumps(res, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -182,12 +200,12 @@ class MCPToolsHandler:
         Si otro agente mantiene un lease activo no expirado, la solicitud es rechazada para prevenir colisiones.
         """
         try:
-            card = self.db.claim_card_lease(
+            card = self.kernel.kanban.claim_lease(
                 project_uuid=project_uuid,
                 card_id=card_id,
-                node_uuid=node_uuid,
-                duration_minutes=duration_minutes
-            )
+                actor=self._agent(node_uuid),
+                duration_minutes=duration_minutes,
+            )["card"]
             return json.dumps({
                 "success": True,
                 "message": f"Tarea {card_id} adquirida exitosamente por {node_uuid}",
@@ -222,70 +240,26 @@ class MCPToolsHandler:
         y evitando disputas huérfanas sin arbitraje.
         """
         try:
-            valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged", "rejected", "discarded")
-            agent_allowed_statuses = ("backlog", "in_progress", "in_review", "disputed")
-            if target_status not in valid_statuses:
-                return json.dumps({
-                    "success": False,
-                    "error": f"target_status inválido: '{target_status}'. Valores permitidos: {list(agent_allowed_statuses)}"
-                }, indent=2, ensure_ascii=False)
-
-            card = self.db.get_card_by_id(project_uuid, card_id)
-            if not card:
-                return json.dumps({"success": False, "error": f"Tarjeta {card_id} no encontrada"}, indent=2)
-
-            # Validar que quien libera sea el titular del lease o que el lease haya expirado,
-            # salvo cuando se escala a 'disputed' (cualquier nodo revisor o auditor puede señalar una disputa).
-            if card.get("assignee_node_uuid") and card.get("assignee_node_uuid") != node_uuid:
-                if target_status != "disputed":
-                    return json.dumps({
-                        "success": False,
-                        "code": "PERMISSION_DENIED",
-                        "error": f"La tarea está asignada al nodo {card.get('assignee_node_uuid')}, no a {node_uuid}. Solo el titular puede transicionar a '{target_status}', salvo para escalar a 'disputed'."
-                    }, indent=2)
-
-            # EGM-35: transiciones terminales reservadas exclusivamente al humano con firma HITL
-            if target_status not in agent_allowed_statuses:
-                return json.dumps({
-                    "success": False,
-                    "code": "HUMAN_SIGNATURE_REQUIRED",
-                    "error": f"EGM-35: La transición a '{target_status}' requiere firma humana Ed25519 en la UI HITL. Estados permitidos vía MCP: {list(agent_allowed_statuses)}."
-                }, indent=2, ensure_ascii=False)
-
-            updated = self.db.update_card_status(
+            # Toda la política (estado válido, titularidad, EGM-35, ticket automático en
+            # 'disputed') vive en KanbanGovernanceService.release_lease.
+            res = self.kernel.kanban.release_lease(
                 project_uuid=project_uuid,
                 card_id=card_id,
-                new_status=target_status,
-                branch_ref=branch_ref
+                actor=self._agent(node_uuid),
+                target_status=target_status,
+                branch_ref=branch_ref,
+                dispute_reason=dispute_reason,
+                contender_node_uuid=contender_node_uuid,
+                auto_open_ticket=auto_open_ticket,
             )
+            if not res.get("success"):
+                return json.dumps(res, indent=2, ensure_ascii=False)
 
-            ticket = None
-            if target_status == "disputed" and auto_open_ticket:
-                existing = self.db.get_dispute_ticket_by_card(project_uuid, card_id)
-                if existing and existing.get("status") == "open":
-                    ticket = existing
-                else:
-                    reason = dispute_reason or f"Tarea {card_id} escalada a 'disputed' por el revisor {node_uuid}"
-                    contender_a = card.get("assignee_node_uuid") or "unassigned"
-                    contender_b = contender_node_uuid or node_uuid
-                    prop_a = branch_ref or card.get("branch_ref") or f"branch_{card_id}"
-                    prop_b = f"review_dispute_{card_id}_{node_uuid}"
-                    title = f"Disputa en {card_id}: {card.get('title', 'Tarea')}"
-                    ticket = self.bus.open_dispute_ticket(
-                        project_uuid=project_uuid,
-                        title=title,
-                        collision_reason=reason,
-                        contender_a_node=contender_a,
-                        contender_b_node=contender_b,
-                        proposal_a_ref=prop_a,
-                        proposal_b_ref=prop_b,
-                        card_id=card_id
-                    )
-
+            ticket = res.get("dispute_ticket")
             resp: Dict[str, Any] = {
                 "success": True,
                 "message": f"Tarea {card_id} actualizada a estado '{target_status}'" + (f" con ticket de arbitraje {ticket['ticket_id']}" if ticket else ""),
-                "card": updated
+                "card": res.get("card")
             }
             if ticket:
                 resp["dispute_ticket"] = ticket
@@ -677,35 +651,17 @@ class MCPToolsHandler:
                 return self._wrap_response(project_uuid, {"success": True, "created_path": str(p)})
 
             elif script_action == "promote_decision":
-                if not params.get("decision_id"):
-                    return self._wrap_response(project_uuid, {
-                        "success": False,
-                        "error": "promote_decision requiere el campo obligatorio 'decision_id'."
-                    })
-
-                target_state = params.get("target_state")
-                valid_states = ("approved", "discarded", "superseded")
-                if not target_state or target_state not in valid_states:
-                    return self._wrap_response(project_uuid, {
-                        "success": False,
-                        "error": f"target_state es requerido en promote_decision y debe ser uno de: {list(valid_states)}. Recibido: '{target_state}'"
-                    })
-                # EGM-35: prohibir aprobación vía MCP e ignorar cualquier signature_block del agente
-                if target_state == "approved":
-                    return self._wrap_response(project_uuid, {
-                        "success": False,
-                        "code": "HUMAN_SIGNATURE_REQUIRED",
-                        "error": "EGM-35: Un agente MCP no puede promover una decisión a 'approved'. Requiere firma humana Ed25519 en la UI HITL."
-                    })
-
-                p = self.okf.move_decision_lifecycle(
-                    gov_base_path=gov_path,
-                    dec_id=params["decision_id"],
-                    target_state=target_state,
-                    reason_or_consequences=params.get("resolution_notes", ""),
-                    signature_block=None
+                # EGM-35: el servicio rechaza 'approved' para actores no humanos y descarta
+                # cualquier signature_block aportado por el agente.
+                res = self.kernel.kanban.promote_decision(
+                    project_uuid=project_uuid,
+                    decision_id=params.get("decision_id"),
+                    target_state=params.get("target_state"),
+                    actor=self._agent(),
+                    signature_block=None,
+                    reason=params.get("resolution_notes", ""),
                 )
-                return self._wrap_response(project_uuid, {"success": True, "promoted_path": str(p)})
+                return self._wrap_response(project_uuid, res)
 
             elif script_action == "update_card":
                 card_data = params.get("card_data")
@@ -714,38 +670,21 @@ class MCPToolsHandler:
                         "success": False,
                         "error": "update_card requiere el campo obligatorio 'card_data' como objeto dict."
                     })
-                # EGM-35: prohibir mutación directa de status vía update_card desde MCP
-                if "status" in card_data and card_data.get("status") is not None:
-                    return self._wrap_response(project_uuid, {
-                        "success": False,
-                        "code": "USE_LEASE_WORKFLOW",
-                        "error": "EGM-35: No se permite cambiar 'status' directamente vía update_card. Use el flujo de lease/review y firma HITL."
-                    })
-                card_id = card_data.get("card_id") or card_data.get("id")
-                if not card_id:
-                    return self._wrap_response(project_uuid, {
-                        "success": False,
-                        "error": "card_data debe contener un identificador 'card_id' o 'id'."
-                    })
-
-                existing = self.db.get_card_by_id(project_uuid, card_id)
-                if existing:
-                    updated = self.db.update_card_details(
-                        project_uuid=project_uuid,
-                        card_id=card_id,
-                        title=card_data.get("title"),
-                        description=card_data.get("description"),
-                        acceptance_criteria=card_data.get("acceptance_criteria"),
-                        branch_ref=card_data.get("branch_ref")
-                    )
-                else:
-                    updated = self.db.create_card(
-                        project_uuid=project_uuid,
-                        card_id=card_id,
-                        title=card_data.get("title") or "Sin título",
-                        description=card_data.get("description", ""),
-                        acceptance_criteria=card_data.get("acceptance_criteria", "")
-                    )
+                # EGM-35: 'status' en card_data -> USE_LEASE_WORKFLOW (regla del servicio)
+                res = self.kernel.kanban.upsert_task(
+                    project_uuid=project_uuid,
+                    card_id=card_data.get("card_id") or card_data.get("id"),
+                    actor=self._agent(),
+                    title=card_data.get("title"),
+                    description=card_data.get("description"),
+                    acceptance_criteria=card_data.get("acceptance_criteria"),
+                    branch_ref=card_data.get("branch_ref"),
+                    status=card_data.get("status"),
+                )
+                if not res.get("success"):
+                    return self._wrap_response(project_uuid, res)
+                updated = res["card"]
+                card_id = updated.get("card_id")
                 written_path = gov_path / "docs" / "okf" / "kanban" / ("discarded" if updated.get("status") in ("discarded", "rejected") else "cards") / f"{card_id}.yaml"
                 if not written_path.exists():
                     written_path = self.okf.write_card_yaml(gov_path, updated)
@@ -756,8 +695,9 @@ class MCPToolsHandler:
                 })
 
             elif script_action == "reconcile_kanban":
-                rec = self.okf.reconcile_kanban_from_okf(gov_path, project_uuid, self.db)
-                return self._wrap_response(project_uuid, {"success": True, "reconciled": rec})
+                # EGM-49: un agente no puede blanquear estados reservados vía YAML + reconcile
+                res = self.kernel.kanban.reconcile_from_okf(project_uuid, self._agent(), self.db)
+                return self._wrap_response(project_uuid, res)
 
             else:
                 return self._wrap_response(project_uuid, {"success": False, "error": f"Acción desconocida: {script_action}"})
@@ -812,7 +752,9 @@ class MCPToolsHandler:
                 if isinstance(tasks_map, dict):
                     for card_id, target_node in tasks_map.items():
                         if card_id not in ("session_id", "sessionId", "intent", "rationale") and isinstance(target_node, str):
-                            claimed = self.db.claim_card_lease(project_uuid, card_id, target_node, duration_minutes=45)
+                            claimed = self.kernel.kanban.claim_lease(
+                                project_uuid, card_id, self._agent(target_node), duration_minutes=45
+                            )["card"]
                             applied_leases.append(claimed)
 
             return self._wrap_response(project_uuid, {
@@ -889,7 +831,7 @@ class MCPToolsHandler:
         Permite incluir una 'escalation_recommendation' ('sugiero jurado' o 'no amerita jurado' con motivo).
         """
         try:
-            res = self.bus.open_dispute_ticket(
+            res = self.kernel.tribunal.open_dispute(
                 project_uuid=project_uuid,
                 title=title,
                 collision_reason=collision_reason,
@@ -924,9 +866,9 @@ class MCPToolsHandler:
         try:
             ticket = None
             if ticket_id:
-                ticket = self.db.get_dispute_ticket(ticket_id)
+                ticket = self.kernel.tribunal.get_dispute_ticket(ticket_id)
             elif card_id:
-                ticket = self.db.get_dispute_ticket_by_card(project_uuid, card_id)
+                ticket = self.kernel.tribunal.get_dispute_ticket_by_card(project_uuid, card_id)
             else:
                 return self._wrap_response(project_uuid, {
                     "success": False,
@@ -1236,7 +1178,7 @@ class MCPToolsHandler:
         Lista los tickets de arbitraje técnico de un proyecto, con filtros opcionales de estado o card_id.
         """
         try:
-            tickets = self.db.list_dispute_tickets(project_uuid, status=status, card_id=card_id)
+            tickets = self.kernel.tribunal.list_disputes(project_uuid, status=status, card_id=card_id)
             return self._wrap_response(project_uuid, {
                 "success": True,
                 "tickets": tickets,
@@ -1300,7 +1242,7 @@ class MCPToolsHandler:
                 })
 
             scores = json.loads(evaluations_json) if isinstance(evaluations_json, str) else (evaluations_json or {})
-            res = self.bus.submit_agent_borda_evaluation(
+            res = self.kernel.tribunal.submit_agent_evaluation(
                 ticket_id=ticket_id,
                 juror_agent_id=agent_id,
                 scores_per_option=scores,
@@ -1456,7 +1398,7 @@ class MCPToolsHandler:
             handler_tools = [
                 m for m in dir(self)
                 if not m.startswith("_") and callable(getattr(self, m))
-                and m not in ("bus", "db", "okf")
+                and m not in ("bus", "db", "okf", "kernel")
             ]
             count = len(handler_tools)
         else:

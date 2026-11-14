@@ -3,9 +3,11 @@ MCP2P Fast CLI Connector (`mcp2p fast <acción>`)
 Subcomando ligero despachado tempranamente en src/app/main.py antes de importar
 ApiBridge, PyWebView o WebRTC/aiortc (EGM-44 / RF-STM-04).
 
-Aplica estrictamente las mismas reglas de gobernanza que MCPToolsHandler y el
-CoreKernel con ActorContext(kind="fast_cli"), impidiendo transiciones reservadas
-al humano Ed25519 (EGM-35).
+Adaptador primario fino sobre el CoreKernel (Tarea 2.3/2.4 de `23_`, ver `24_`):
+construye un `ActorContext(kind="fast_cli")` y delega TODA la política de gobernanza
+(lease, titularidad, estados reservados al humano EGM-35, ticket automático en
+'disputed', promoción de decisiones) en `KanbanGovernanceService`. Este módulo no
+define ninguna lista propia de estados reservados.
 """
 
 from __future__ import annotations
@@ -13,39 +15,35 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
 import sys
-from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-AGENT_ALLOWED_STATUSES = ("backlog", "in_progress", "in_review", "disputed")
-HUMAN_ONLY_STATUSES = ("merged", "rejected", "discarded")
 
 
 def _default_node_uuid() -> str:
-    try:
-        from src.app.identity import local_node_uuid
-        return local_node_uuid()
-    except ImportError:
-        return os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    from src.app.identity import local_node_uuid
+    return local_node_uuid()
+
+
+def _cli_actor(args: argparse.Namespace) -> Any:
+    from src.core.domain.context import ACTOR_FAST_CLI, ActorContext
+    return ActorContext(kind=ACTOR_FAST_CLI, node_uuid=args.node or _default_node_uuid())
 
 
 def _open_db_and_kernel(db_path: Optional[str]):
-    """Abre DatabaseManager (y CoreKernel/ApplicationFactory si está disponible) sin cargar UI ni P2P."""
+    """Abre el CoreKernel ligero (SQLite + repositorios + servicios) sin cargar UI, crypto ni P2P."""
     if db_path:
         os.environ["MCP2P_DB_PATH"] = str(db_path)
-    try:
-        from src.core.factory import ApplicationFactory
-        kernel = ApplicationFactory.create_fast_cli_kernel(db_path=db_path)
-        db = getattr(kernel, "db", None)
-        if db is None:
-            from src.storage.db import DatabaseManager
-            db = DatabaseManager.get_instance(db_path) if db_path else DatabaseManager.get_instance()
-        return db, kernel
-    except (ImportError, AttributeError):
-        from src.storage.db import DatabaseManager
-        db = DatabaseManager.get_instance(db_path) if db_path else DatabaseManager.get_instance()
-        return db, None
+    from src.core.factory import ApplicationFactory
+    kernel = ApplicationFactory.create_fast_cli_kernel(db_path=db_path)
+    return kernel.db, kernel
+
+
+def _ensure_okf_port(kernel: Any) -> None:
+    """Enchufa el OKFAdapter de forma perezosa solo para los subcomandos que lo necesitan."""
+    from src.core.kernel import CoreKernel
+    if kernel.okf_adapter is None:
+        from src.storage.okf_adapter import OKFAdapter
+        kernel.register_connector(CoreKernel.PORT_OKF, OKFAdapter())
 
 
 def _resolve_project_uuid(db: Any, project_uuid: Optional[str]) -> Optional[str]:
@@ -67,13 +65,13 @@ def _handle_kanban_list(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[
     p_uuid = _resolve_project_uuid(db, args.project)
     if not p_uuid:
         return {"success": False, "error": "No hay proyectos registrados."}
-    cards = db.get_cards(project_uuid=p_uuid, status=args.status)
+    board = kernel.kanban.get_board(p_uuid, status=args.status)
     return {
         "success": True,
         "project_uuid": p_uuid,
         "status_filter": args.status or "all",
-        "count": len(cards),
-        "cards": cards,
+        "count": board["count"],
+        "cards": board["cards"],
     }
 
 
@@ -81,120 +79,50 @@ def _handle_kanban_claim(db: Any, kernel: Any, args: argparse.Namespace) -> Dict
     p_uuid = _resolve_project_uuid(db, args.project)
     if not p_uuid:
         return {"success": False, "error": "No hay proyectos registrados."}
-    node_uuid = args.node or _default_node_uuid()
-    if kernel is not None and hasattr(kernel, "kanban"):
-        try:
-            from src.core.domain.context import ActorContext
-            actor = ActorContext(kind="fast_cli", node_uuid=node_uuid)
-            res = kernel.kanban.claim_lease(
-                project_uuid=p_uuid,
-                card_id=args.card_id,
-                actor=actor,
-                duration_minutes=args.minutes,
-            )
-            card = res.get("card") or {}
-            if res.get("success") and "lease_expires_at" not in res:
-                res["lease_expires_at"] = card.get("lease_expires_at")
-            return res
-        except PermissionError as pe:
-            return {"success": False, "code": "LEASE_COLLISION", "error": str(pe)}
-        except Exception as exc:
-            return {"success": False, "code": "CLAIM_ERROR", "error": str(exc)}
     try:
-        card = db.claim_card_lease(
+        res = kernel.kanban.claim_lease(
             project_uuid=p_uuid,
             card_id=args.card_id,
-            node_uuid=node_uuid,
+            actor=_cli_actor(args),
             duration_minutes=args.minutes,
         )
-        return {"success": True, "card": card, "lease_expires_at": card.get("lease_expires_at")}
     except PermissionError as pe:
         return {"success": False, "code": "LEASE_COLLISION", "error": str(pe)}
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        return {"success": False, "code": "CLAIM_ERROR", "error": str(exc)}
+    res["lease_expires_at"] = (res.get("card") or {}).get("lease_expires_at")
+    return res
 
 
 def _handle_kanban_release(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str, Any]:
     p_uuid = _resolve_project_uuid(db, args.project)
     if not p_uuid:
         return {"success": False, "error": "No hay proyectos registrados."}
-    node_uuid = args.node or _default_node_uuid()
-    target_status = args.status
-
-    if target_status in HUMAN_ONLY_STATUSES:
-        return {
-            "success": False,
-            "code": "HUMAN_SIGNATURE_REQUIRED",
-            "error": (
-                f"EGM-35: La transición a '{target_status}' está prohibida por fast CLI "
-                "y requiere firma humana Ed25519 en la UI HITL."
-            ),
-        }
-    if target_status not in AGENT_ALLOWED_STATUSES:
-        return {
-            "success": False,
-            "error": f"Estado inválido '{target_status}'. Permitidos: {list(AGENT_ALLOWED_STATUSES)}",
-        }
-
-    if kernel is not None and hasattr(kernel, "kanban"):
-        try:
-            from src.core.domain.context import ActorContext
-            actor = ActorContext(kind="fast_cli", node_uuid=node_uuid)
-            return kernel.kanban.release_lease(
-                project_uuid=p_uuid,
-                card_id=args.card_id,
-                actor=actor,
-                target_status=target_status,
-                branch_ref=args.branch,
-            )
-        except PermissionError as pe:
-            return {"success": False, "code": "PERMISSION_DENIED", "error": str(pe)}
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
-
-    card = db.get_card_by_id(p_uuid, args.card_id)
-    if not card:
-        return {"success": False, "error": f"Tarjeta {args.card_id} no encontrada."}
-    if card.get("assignee_node_uuid") and card.get("assignee_node_uuid") != node_uuid and target_status != "disputed":
-        return {
-            "success": False,
-            "code": "PERMISSION_DENIED",
-            "error": f"La tarea está asignada a {card.get('assignee_node_uuid')}, no a {node_uuid}.",
-        }
-    updated = db.update_card_status(
-        project_uuid=p_uuid,
-        card_id=args.card_id,
-        new_status=target_status,
-        branch_ref=args.branch,
-    )
-    return {"success": True, "card": updated}
+    try:
+        return kernel.kanban.release_lease(
+            project_uuid=p_uuid,
+            card_id=args.card_id,
+            actor=_cli_actor(args),
+            target_status=args.status,
+            branch_ref=args.branch,
+        )
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def _handle_decision_promote(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str, Any]:
-    if args.state == "approved":
-        return {
-            "success": False,
-            "code": "HUMAN_SIGNATURE_REQUIRED",
-            "error": "EGM-35: Promover una decisión a 'approved' requiere firma humana Ed25519 en HITL.",
-        }
-    if args.state not in ("discarded", "superseded"):
-        return {"success": False, "error": f"Estado inválido '{args.state}'. Permitidos: ['discarded', 'superseded']"}
     p_uuid = _resolve_project_uuid(db, args.project)
     if not p_uuid:
         return {"success": False, "error": "No hay proyectos registrados."}
-    proj = db.get_project_by_uuid(p_uuid)
-    if not proj:
-        return {"success": False, "error": f"Proyecto '{p_uuid}' no encontrado."}
-    from src.storage.okf_adapter import OKFAdapter
-    okf = OKFAdapter()
-    promoted = okf.move_decision_lifecycle(
-        gov_base_path=Path(proj["gov_repo_path"]),
-        dec_id=args.decision_id,
+    _ensure_okf_port(kernel)
+    return kernel.kanban.promote_decision(
+        project_uuid=p_uuid,
+        decision_id=args.decision_id,
         target_state=args.state,
-        reason_or_consequences=args.notes or "",
+        actor=_cli_actor(args),
         signature_block=None,
+        reason=args.notes or "",
     )
-    return {"success": True, "promoted_path": str(promoted)}
 
 
 def _handle_a2a_poll(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str, Any]:
@@ -214,9 +142,7 @@ def _handle_a2a_send(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str
         payload = json.loads(args.payload_json) if args.payload_json else {}
     except json.JSONDecodeError as exc:
         return {"success": False, "error": f"JSON inválido en --payload-json: {exc}"}
-    from src.a2a.bus import A2ABus
-    bus = A2ABus(db=db)
-    res = bus.send_signal(
+    res = kernel.bus.send_signal(
         project_uuid=p_uuid,
         sender_node_uuid=node_uuid,
         intent=args.intent,
