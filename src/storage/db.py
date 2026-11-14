@@ -131,7 +131,7 @@ class DatabaseManager:
     """Gestor de base de datos local SQLite con pool WAL LIFO de 4 conexiones + ancla read-only."""
 
     _instance: Optional[DatabaseManager] = None
-    _lock = threading.Lock()
+    _lock = threading.RLock()
     _POOL_MAX_SIZE: int = 4
 
     def __init__(self, db_path: Optional[str | Path] = None) -> None:

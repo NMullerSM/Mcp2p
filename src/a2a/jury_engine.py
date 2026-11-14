@@ -799,6 +799,40 @@ class DialecticJuryEngine:
     # =====================================================================
 
     @classmethod
+    def build_arbiter_verdict(
+        cls,
+        ticket_id: str,
+        project_uuid: str,
+        winning_option: str,
+        arbiter_node_uuid: str,
+        voter_universe: Dict[str, Any],
+        breakdown: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Construye la estructura de veredicto para un fallo emitido por un árbitro externo (EGM-01-R)."""
+        h_count = max(int(voter_universe.get("eligible_humans_count", 1)), 1)
+        return {
+            "ticket_id": ticket_id,
+            "project_uuid": project_uuid,
+            "winning_option": winning_option,
+            "consensus_ratio": 1.0,
+            "threshold_required": cls.CONSENSUS_THRESHOLD,
+            "consensus_reached": True,
+            "status": "ratified",
+            "resolution_mode": "external_arbiter_ruling",
+            "override_applied": False,
+            "arbiter_node_uuid": arbiter_node_uuid,
+            "eligible_humans": h_count,
+            "agent_jurors_count": 0,
+            "effective_agent_unit_weight": cls.AGENT_BASE_WEIGHT,
+            "total_available_points": voter_universe.get(
+                "total_available_points",
+                round(h_count * (cls.HUMAN_UNIT_WEIGHT + cls.AGENT_BASE_WEIGHT), 4),
+            ),
+            "breakdown": breakdown or {},
+            "voter_universe": voter_universe,
+        }
+
+    @classmethod
     def persist_ruling_yaml(
         cls,
         gov_base_path: str | Path,

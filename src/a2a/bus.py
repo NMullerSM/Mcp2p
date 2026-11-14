@@ -13,11 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import msgpack
 
@@ -60,6 +62,7 @@ class A2ABus:
         self.db = db or DatabaseManager.get_instance()
         self.jury_engine = DialecticJuryEngine()
         self._subscribers: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
+        self._subscribers_lock = threading.RLock()
 
     # ==========================================
     # Suscripciones y Despacho en Memoria
@@ -67,25 +70,32 @@ class A2ABus:
 
     def subscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Registra un suscriptor a un tópico (ej. 'INFORMATIVE', 'COORDINATION', '*' o project_uuid)."""
-        if topic not in self._subscribers:
-            self._subscribers[topic] = []
-        self._subscribers[topic].append(callback)
+        with self._subscribers_lock:
+            if topic not in self._subscribers:
+                self._subscribers[topic] = []
+            if callback not in self._subscribers[topic]:
+                self._subscribers[topic].append(callback)
 
     def unsubscribe(self, topic: str, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Elimina un suscriptor registrado."""
-        if topic in self._subscribers and callback in self._subscribers[topic]:
-            self._subscribers[topic].remove(callback)
+        with self._subscribers_lock:
+            if topic in self._subscribers and callback in self._subscribers[topic]:
+                self._subscribers[topic].remove(callback)
 
     def _dispatch_local(self, event: Dict[str, Any]) -> None:
-        """Despacha un evento a los suscriptores locales en memoria."""
+        """Despacha un evento sobre una copia segura de los suscriptores locales en memoria (EGM-28)."""
         topics = ["*", event.get("intent", ""), event.get("project_uuid", "")]
-        for t in topics:
-            if t in self._subscribers:
-                for cb in self._subscribers[t]:
-                    try:
-                        cb(event)
-                    except Exception as exc:
-                        logger.warning(f"Error en callback de suscriptor A2A para {t}: {exc}")
+        snapshot: List[Tuple[str, Callable[[Dict[str, Any]], None]]] = []
+        with self._subscribers_lock:
+            for t in topics:
+                if t and t in self._subscribers:
+                    for cb in list(self._subscribers[t]):
+                        snapshot.append((t, cb))
+        for t, cb in snapshot:
+            try:
+                cb(event)
+            except Exception as exc:
+                logger.warning(f"Error en callback de suscriptor A2A para {t}: {exc}")
 
     # ==========================================
     # Canal INFORMATIVO (0 Tokens con MessagePack)
@@ -359,10 +369,10 @@ class A2ABus:
         return packet
 
     def get_session_turns(self, project_uuid: str, session_id: str) -> List[Dict[str, Any]]:
-        """Recupera la secuencia de turnos de una sesión dialéctica específica en orden cronológico y de turno."""
-        messages = self.db.get_recent_a2a_messages(project_uuid=project_uuid, limit=200)
-        turns = []
-        for msg in reversed(messages):  # Invertir el DESC para orden cronológico ascendente
+        """Recupera la secuencia completa de turnos de una sesión dialéctica sin límite de ventana (EGM-34)."""
+        messages = self.db.get_session_messages(project_uuid=project_uuid, session_id=session_id)
+        turns: List[Dict[str, Any]] = []
+        for msg in messages:
             try:
                 payload = json.loads(msg["payload_rfc_yaml"])
                 if isinstance(payload, dict) and payload.get("session_id") == session_id:
@@ -370,15 +380,14 @@ class A2ABus:
                         "message_uuid": msg["message_uuid"],
                         "sender_node_uuid": msg["sender_node_uuid"],
                         "developer_name": msg.get("developer_name"),
-                        "turn": payload.get("turn", 0),
+                        "turn": payload.get("turn", msg.get("seq", 0)),
                         "stage": payload.get("stage"),
                         "payload": payload,
                         "created_at": msg["created_at"]
                     })
             except Exception:
                 continue
-        # Ordenar garantizado por número de turno
-        turns.sort(key=lambda x: x["turn"])
+        turns.sort(key=lambda x: (x["turn"], x["created_at"]))
         return turns
 
     # ==========================================
@@ -397,8 +406,7 @@ class A2ABus:
     ) -> Dict[str, Any]:
         """
         Publica un mensaje dentro de una conversación dialéctica libre entre N nodos.
-        message_type: 'PROPOSAL', 'REASONING_REPLY', 'TASK_DISTRIBUTION', 'CHECKPOINT_COMPACT', 'RESOLUTION', 'ESCALATE_TO_JURY'.
-        Calcula si la sesión requiere compactación (cada 3 turnos).
+        Usa append_session_message en BEGIN IMMEDIATE para seq correlativo atómico (EGM-34).
         """
         valid_types = {t.value for t in DialogueMessageType}
         if message_type.upper() not in valid_types:
@@ -406,40 +414,29 @@ class A2ABus:
 
         message_uuid = str(uuid.uuid4())
         now_str = datetime.now(timezone.utc).isoformat()
-
-        # Calcular número de mensaje en esta sesión
-        existing_msgs = self.get_dialogue_session_messages(project_uuid, session_id)
-        msg_seq = len(existing_msgs) + 1
+        msg_type_upper = message_type.upper()
 
         payload_dict = {
             "session_id": session_id,
-            "seq": msg_seq,
-            "message_type": message_type.upper(),
+            "message_type": msg_type_upper,
             "reasoning_text": reasoning_text,
             "structured_proposal": structured_proposal or {},
             "card_id": card_id,
             "timestamp": now_str
         }
 
-        # Guardar en SQLite
-        payload_str = json.dumps(payload_dict, ensure_ascii=False)
-        self.db.log_a2a_message(
+        appended = self.db.append_session_message(
             project_uuid=project_uuid,
-            message_uuid=message_uuid,
             sender_node_uuid=sender_node_uuid,
+            session_id=session_id,
             intent=A2AIntent.DIALOGUE.value,
-            payload_rfc_yaml=payload_str,
-            card_id=card_id
+            payload_dict=payload_dict,
+            card_id=card_id,
+            event_type=f"A2A_DIALOGUE_{msg_type_upper}",
+            message_uuid=message_uuid,
         )
-
-        # Encolar en Outbox para difusión P2P
-        self.db.enqueue_outbox_event(
-            project_uuid=project_uuid,
-            node_uuid=sender_node_uuid,
-            event_type=f"A2A_DIALOGUE_{message_type.upper()}",
-            payload_raw=payload_str,
-            event_uuid=message_uuid
-        )
+        msg_seq = appended["seq"]
+        final_payload = appended["payload"]
 
         packet = {
             "message_uuid": message_uuid,
@@ -447,17 +444,17 @@ class A2ABus:
             "sender_node_uuid": sender_node_uuid,
             "intent": A2AIntent.DIALOGUE.value,
             "card_id": card_id,
-            "payload": payload_dict,
-            "requires_compaction": (msg_seq % 3 == 0) and (message_type.upper() != "CHECKPOINT_COMPACT")
+            "payload": final_payload,
+            "requires_compaction": (msg_seq % 3 == 0) and (msg_type_upper != "CHECKPOINT_COMPACT")
         }
         self._dispatch_local(packet)
         return packet
 
     def get_dialogue_session_messages(self, project_uuid: str, session_id: str) -> List[Dict[str, Any]]:
-        """Recupera la lista completa de mensajes de diálogo de una sesión."""
-        messages = self.db.get_recent_a2a_messages(project_uuid=project_uuid, limit=300)
-        dialogue = []
-        for msg in reversed(messages):
+        """Recupera la lista completa de mensajes de diálogo de una sesión sin límite de ventana (EGM-34)."""
+        messages = self.db.get_session_messages(project_uuid=project_uuid, session_id=session_id)
+        dialogue: List[Dict[str, Any]] = []
+        for msg in messages:
             try:
                 payload = json.loads(msg["payload_rfc_yaml"])
                 if isinstance(payload, dict) and payload.get("session_id") == session_id:
@@ -465,7 +462,7 @@ class A2ABus:
                         "message_uuid": msg["message_uuid"],
                         "sender_node_uuid": msg["sender_node_uuid"],
                         "developer_name": msg.get("developer_name"),
-                        "seq": payload.get("seq", 0),
+                        "seq": payload.get("seq", msg.get("seq", 0)),
                         "message_type": payload.get("message_type"),
                         "reasoning_text": payload.get("reasoning_text", ""),
                         "structured_proposal": payload.get("structured_proposal", {}),
@@ -514,6 +511,19 @@ class A2ABus:
     # Motor de Juicio de Honor Ponderado (EGM-01 / EGM-02 / EGM-03 / EGM-04 / EGM-05)
     # ==========================================
 
+    def _get_project_voter_nodes(
+        self,
+        project_uuid: str,
+        contenders: Optional[List[str]] = None
+    ) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """Retorna (colaboradores_totales, nodos_base_para_universo_electoral)."""
+        collabs = self.db.get_project_collaborators(project_uuid)
+        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
+        if not all_nodes:
+            swarm = self.db.get_swarm_nodes()
+            all_nodes = [n["node_uuid"] for n in swarm] if swarm else [c for c in (contenders or []) if c]
+        return collabs, all_nodes
+
     def eligible_humans_count(
         self,
         project_uuid: str,
@@ -521,14 +531,10 @@ class A2ABus:
         arbiter_node_uuid: Optional[str] = None
     ) -> int:
         """
-        Calcula el universo real de humanos elegibles para un proyecto y disputa (EGM-04).
-        Excluye contendientes (en N >= 3) y al árbitro externo si fue designado.
+        Calcula el universo real de humanos elegibles para un proyecto y disputa (EGM-04 / EGM-36).
+        Delega exclusivamente en resolve_voter_universe().
         """
-        collabs = self.db.get_project_collaborators(project_uuid)
-        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
-        if not all_nodes:
-            swarm = self.db.get_swarm_nodes()
-            all_nodes = [n["node_uuid"] for n in swarm] if swarm else list(contenders or [])
+        _, all_nodes = self._get_project_voter_nodes(project_uuid, contenders=contenders)
         contenders_clean = [c for c in (contenders or []) if c]
         universe = self.jury_engine.resolve_voter_universe(
             all_nodes,
@@ -685,50 +691,78 @@ class A2ABus:
         project_uuid: str = ""
     ) -> Dict[str, Any]:
         """
-        Registra el voto humano obligatorio con autenticación Ed25519 (EGM-05).
-        Verifica:
-        - El votante no debe ser contendiente en N>=3 ni árbitro.
-        - Verificación criptográfica si signature_ed25519 y public_key están presentes.
-        - Registra delivery time para control de quórum (EGM-01).
+        Registra el voto humano obligatorio con autenticación Ed25519 estricta (EGM-05-R / EGM-36).
+        - Exige firma Ed25519 no vacía (code=401).
+        - Delega exclusión de contendientes/árbitro en resolve_voter_universe (code=403).
+        - Exige colaborador aprobado en project_collaborators con public_key registrada (code=403).
+        - Rechaza si caller envía public_key distinta a la registrada en BD (code=403).
+        - Verifica la firma exclusivamente contra collab['public_key'] registrada en BD (code=401).
         """
+        if not isinstance(signature_ed25519, str) or not signature_ed25519.strip():
+            return {"success": False, "error": "Firma Ed25519 requerida (signature_ed25519 vacía)", "code": 401}
+
         ticket = self.db.get_dispute_ticket(ticket_id) or {}
         p_uuid = project_uuid or ticket.get("project_uuid", "")
 
-        contenders = [ticket.get("contender_a_node"), ticket.get("contender_b_node")]
-        arbiter = ticket.get("arbiter_node_uuid")
+        contenders = [c for c in [ticket.get("contender_a_node"), ticket.get("contender_b_node")] if c]
+        arbiter = (ticket.get("arbiter_node_uuid") or "").strip() or None
 
-        # Exclusión de contendientes en N>=3
-        collabs = self.db.get_project_collaborators(p_uuid)
-        if len(collabs) >= 3 and node_uuid in contenders:
+        collabs, all_nodes = self._get_project_voter_nodes(p_uuid, contenders=contenders)
+        universe = self.jury_engine.resolve_voter_universe(
+            all_nodes,
+            contenders,
+            arbiter_node_uuid=arbiter
+        )
+
+        # Exclusión unificada vía resolve_voter_universe (EGM-36)
+        if node_uuid in universe.get("excluded_nodes", []):
             return {"success": False, "error": f"Nodo {node_uuid} es contendiente en disputa N>=3", "code": 403}
 
-        # Exclusión de árbitro
         if arbiter and node_uuid == arbiter:
             return {"success": False, "error": f"Nodo {node_uuid} es el árbitro designado", "code": 403}
 
-        # Verificación criptográfica Ed25519 si la clave está disponible
+        # Exigir colaborador aprobado con public_key registrada en BD (EGM-05-RESIDUAL)
         collab = next((c for c in collabs if c.get("node_uuid") == node_uuid), None)
-        pubkey = public_key or (collab.get("public_key") if collab else "")
-        if pubkey and signature_ed25519 and signature_ed25519 not in ("valid_test_signature", "sig_human_test"):
-            from src.p2p.crypto import NodeCryptoManager
-            import hashlib
-            content_text = f"VOTE:{voted_option}:TICKET:{ticket_id}:PROJECT:{p_uuid}"
-            sha = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
-            sig_block = {
-                "artifact_id": ticket_id,
-                "content_sha256": content_sha256 or sha,
-                "node_uuid": node_uuid,
-                "developer_name": developer_name,
-                "decision": voted_option,
-                "signed_at": signed_at or datetime.now(timezone.utc).isoformat(),
-                "public_key": pubkey,
-                "signature_ed25519": signature_ed25519
+        if not collab or collab.get("status") != "approved":
+            return {
+                "success": False,
+                "error": f"Nodo {node_uuid} no es un colaborador aprobado del proyecto",
+                "code": 403
             }
-            if not NodeCryptoManager.verify_artifact_signature(content_text, sig_block):
-                # Fallback para contenido sin PROJECT
-                legacy_content = f"VOTE:{voted_option}:TICKET:{ticket_id}"
-                if not NodeCryptoManager.verify_artifact_signature(legacy_content, sig_block):
-                    return {"success": False, "error": "Firma Ed25519 inválida o adulterada", "code": 401}
+
+        registered_pubkey = (collab.get("public_key") or "").strip()
+        if not registered_pubkey:
+            return {
+                "success": False,
+                "error": f"Colaborador {node_uuid} no tiene public_key Ed25519 registrada en BD",
+                "code": 403
+            }
+
+        if isinstance(public_key, str) and public_key.strip() and public_key.strip() != registered_pubkey:
+            return {
+                "success": False,
+                "error": f"La clave pública enviada no coincide con la public_key registrada para {node_uuid}",
+                "code": 403
+            }
+
+        from src.p2p.crypto import NodeCryptoManager
+        import hashlib
+        content_text = f"VOTE:{voted_option}:TICKET:{ticket_id}:PROJECT:{p_uuid}"
+        sha = hashlib.sha256(content_text.encode("utf-8")).hexdigest()
+        sig_block = {
+            "artifact_id": ticket_id,
+            "content_sha256": content_sha256 or sha,
+            "node_uuid": node_uuid,
+            "developer_name": developer_name,
+            "decision": voted_option,
+            "signed_at": signed_at or datetime.now(timezone.utc).isoformat(),
+            "public_key": registered_pubkey,
+            "signature_ed25519": signature_ed25519
+        }
+        if not NodeCryptoManager.verify_artifact_signature(content_text, sig_block):
+            legacy_content = f"VOTE:{voted_option}:TICKET:{ticket_id}"
+            if not NodeCryptoManager.verify_artifact_signature(legacy_content, sig_block):
+                return {"success": False, "error": "Firma Ed25519 inválida o adulterada", "code": 401}
 
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
@@ -737,20 +771,213 @@ class A2ABus:
             pass
 
         vote_uuid = str(uuid.uuid4())
-        res = self.db.add_human_jury_vote(
-            vote_uuid=vote_uuid,
-            ticket_id=ticket_id,
-            node_uuid=node_uuid,
-            developer_name=developer_name,
-            voted_option=voted_option,
-            signature_ed25519=signature_ed25519,
-            weight=2.0,
-            public_key=pubkey,
-            signed_at=signed_at or now_iso,
-            content_sha256=content_sha256,
-            project_uuid=p_uuid
-        )
+        try:
+            res = self.db.add_human_jury_vote(
+                vote_uuid=vote_uuid,
+                ticket_id=ticket_id,
+                node_uuid=node_uuid,
+                developer_name=developer_name,
+                voted_option=voted_option,
+                signature_ed25519=signature_ed25519,
+                weight=2.0,
+                public_key=registered_pubkey,
+                signed_at=signed_at or now_iso,
+                content_sha256=content_sha256 or sha,
+                project_uuid=p_uuid
+            )
+        except sqlite3.IntegrityError:
+            return {"success": False, "error": f"Nodo {node_uuid} ya registró un voto para {ticket_id}", "code": 409}
         return {"success": True, "vote_uuid": vote_uuid, **res}
+
+    def _persist_and_commit_ruling(
+        self,
+        project_uuid: str,
+        ticket: Dict[str, Any],
+        consensus: Dict[str, Any]
+    ) -> Optional[str]:
+        """Persiste el dictamen YAML en OKF y lo comitea si el proyecto tiene gov_repo_path."""
+        proj = self.db.get_project_by_uuid(project_uuid)
+        if not proj or not proj.get("gov_repo_path"):
+            return None
+        try:
+            matrix_list = []
+            if ticket.get("jury_matrix_json"):
+                try:
+                    matrix_list = json.loads(ticket["jury_matrix_json"])
+                except Exception:
+                    matrix_list = []
+            synth_data = {
+                "option_id": "THIRD_WAY_C",
+                "generated_by": "agent" if ticket.get("proposal_c_ref") else "pending",
+                "summary": ticket.get("proposal_c_ref", "")
+            }
+            ruling_path = self.jury_engine.persist_ruling_yaml(
+                gov_base_path=proj["gov_repo_path"],
+                ticket=ticket,
+                verdict=consensus,
+                synthesis_data=synth_data,
+                neutral_matrix=matrix_list
+            )
+            ruling_yaml_path = str(ruling_path)
+
+            from src.storage.okf_adapter import OKFAdapter
+            okf_adapter = OKFAdapter()
+            files_to_commit = [ruling_path]
+            try:
+                prec_path = okf_adapter.export_precedents_index(proj["gov_repo_path"])
+                if prec_path and Path(prec_path).exists():
+                    files_to_commit.append(prec_path)
+            except Exception as prec_err:
+                logger.debug("Omitida exportación de precedentes en ruling: %s", prec_err)
+
+            ticket_id = ticket.get("ticket_id", "")
+            winning_option = consensus.get("winning_option", "")
+            title = (ticket.get("title") or "").strip()
+            collision_reason = (ticket.get("collision_reason") or "").strip()
+            commit_message = f"ratify(jury): {ticket_id} [{winning_option}] {title}"
+            if collision_reason:
+                commit_message += f"\n\n{collision_reason}"
+            okf_adapter.commit_gov_file(proj["gov_repo_path"], files_to_commit, commit_message, push_now=True)
+            return ruling_yaml_path
+        except Exception as e:
+            logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket.get("ticket_id"), e)
+            return None
+
+    def submit_external_arbiter_ruling(
+        self,
+        ticket_id: str,
+        arbiter_node_uuid: str,
+        winning_option: str,
+        signature_ed25519: str,
+        rationale: str = "",
+        public_key: str = "",
+        signed_at: str = "",
+        content_sha256: str = "",
+        project_uuid: str = "",
+        developer_name: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Registra y ratifica el laudo vinculante de un árbitro externo pre-registrado (EGM-01-R).
+        Verifica firma Ed25519 exclusivamente contra la public_key registrada en BD.
+        """
+        valid_options = {"OPTION_A", "OPTION_B", "THIRD_WAY_C", "ASYMMETRIC_HYBRID"}
+        opt_norm = (winning_option or "").strip().upper()
+        if opt_norm not in valid_options:
+            return {"success": False, "error": f"winning_option inválida: {winning_option}", "code": 400}
+
+        if not isinstance(signature_ed25519, str) or not signature_ed25519.strip():
+            return {"success": False, "error": "Firma Ed25519 del árbitro requerida", "code": 401}
+
+        ticket = self.db.get_dispute_ticket(ticket_id)
+        if not ticket:
+            return {"success": False, "error": f"Ticket de disputa {ticket_id} no encontrado", "code": 404}
+
+        p_uuid = project_uuid or ticket.get("project_uuid", "")
+        contenders = [c for c in [ticket.get("contender_a_node"), ticket.get("contender_b_node")] if c]
+        if arbiter_node_uuid in contenders:
+            return {"success": False, "error": f"Un contendiente ({arbiter_node_uuid}) no puede arbitrar su propia disputa", "code": 403}
+
+        ticket_arbiter = (ticket.get("arbiter_node_uuid") or "").strip()
+        if ticket_arbiter and ticket_arbiter != arbiter_node_uuid:
+            return {"success": False, "error": f"Nodo {arbiter_node_uuid} no es el árbitro designado del ticket ({ticket_arbiter})", "code": 403}
+
+        registered_arbiters = {
+            (a.get("arbiter_node_uuid") or a.get("node_uuid"))
+            for a in self.db.list_project_arbiters(p_uuid)
+        }
+        if arbiter_node_uuid not in registered_arbiters:
+            return {"success": False, "error": f"Nodo {arbiter_node_uuid} no está registrado como árbitro en project_arbiters", "code": 403}
+
+        collab = self.db.get_collaborator(p_uuid, arbiter_node_uuid)
+        if collab and collab.get("status") != "approved":
+            return {"success": False, "error": f"Árbitro {arbiter_node_uuid} no está aprobado en el proyecto", "code": 403}
+
+        node_info = self.db.get_node_by_uuid(arbiter_node_uuid)
+        registered_pubkey = (
+            (collab.get("public_key") if collab else "")
+            or (node_info.get("public_key") if node_info else "")
+            or ""
+        ).strip()
+        if not registered_pubkey:
+            return {"success": False, "error": f"Árbitro {arbiter_node_uuid} sin public_key Ed25519 registrada en BD", "code": 403}
+
+        if isinstance(public_key, str) and public_key.strip() and public_key.strip() != registered_pubkey:
+            return {"success": False, "error": "public_key del árbitro no coincide con la registrada en BD", "code": 403}
+
+        from src.p2p.crypto import NodeCryptoManager
+        import hashlib
+        eff_dev_name = developer_name or (node_info.get("developer_name") if node_info else "") or arbiter_node_uuid
+        content_candidates = [
+            f"ARBITER_RULING:{opt_norm}:TICKET:{ticket_id}:PROJECT:{p_uuid}",
+            f"ARBITER_RULING:{opt_norm}:TICKET:{ticket_id}",
+            f"RULING:{opt_norm}:TICKET:{ticket_id}:PROJECT:{p_uuid}",
+        ]
+        verified = False
+        for c_text in content_candidates:
+            sha = hashlib.sha256(c_text.encode("utf-8")).hexdigest()
+            sig_block = {
+                "artifact_id": ticket_id,
+                "content_sha256": content_sha256 or sha,
+                "node_uuid": arbiter_node_uuid,
+                "developer_name": eff_dev_name,
+                "decision": opt_norm,
+                "signed_at": signed_at or datetime.now(timezone.utc).isoformat(),
+                "public_key": registered_pubkey,
+                "signature_ed25519": signature_ed25519,
+            }
+            if NodeCryptoManager.verify_artifact_signature(c_text, sig_block):
+                verified = True
+                break
+        if not verified:
+            return {"success": False, "error": "Firma Ed25519 del árbitro inválida o adulterada", "code": 401}
+
+        _, all_nodes = self._get_project_voter_nodes(p_uuid, contenders=contenders)
+        voter_universe = self.jury_engine.resolve_voter_universe(
+            all_nodes,
+            contenders,
+            arbiter_node_uuid=arbiter_node_uuid
+        )
+        verdict = self.jury_engine.build_arbiter_verdict(
+            ticket_id=ticket_id,
+            project_uuid=p_uuid,
+            winning_option=opt_norm,
+            arbiter_node_uuid=arbiter_node_uuid,
+            voter_universe=voter_universe,
+        )
+        ruling_yaml_path = self._persist_and_commit_ruling(p_uuid, ticket, verdict)
+        self.db.update_dispute_status(
+            ticket_id=ticket_id,
+            status="ratified",
+            resolution_mode="external_arbiter_ruling",
+            winning_option=opt_norm,
+            final_adr_path=ruling_yaml_path,
+        )
+        self._dispatch_local({
+            "message_uuid": str(uuid.uuid4()),
+            "project_uuid": p_uuid,
+            "sender_node_uuid": arbiter_node_uuid,
+            "intent": A2AIntent.SUMMARY_SYNTHESIS.value,
+            "card_id": ticket.get("card_id"),
+            "payload": {
+                "ticket_id": ticket_id,
+                "status": "ratified",
+                "resolution_mode": "external_arbiter_ruling",
+                "winning_option": opt_norm,
+                "rationale": rationale,
+            },
+        })
+        return {
+            "success": True,
+            "ticket_id": ticket_id,
+            "project_uuid": p_uuid,
+            "status": "ratified",
+            "resolution_mode": "external_arbiter_ruling",
+            "winning_option": opt_norm,
+            "arbiter_node_uuid": arbiter_node_uuid,
+            "rationale": rationale,
+            "ruling_yaml_path": ruling_yaml_path,
+            "consensus_reached": True,
+        }
 
     def compute_jury_verdict(self, project_uuid: str, ticket_id: str) -> Dict[str, Any]:
         """
@@ -764,15 +991,11 @@ class A2ABus:
         agent_scores = summary.get("agent_scores", [])
         ticket = self.db.get_dispute_ticket(ticket_id) or {}
 
-        # Universo de votantes del proyecto
-        collabs = self.db.get_project_collaborators(project_uuid)
-        all_nodes = [c["node_uuid"] for c in collabs if c.get("status") == "approved"]
-        if not all_nodes:
-            all_nodes = [n["node_uuid"] for n in self.db.get_swarm_nodes()]
         contenders = [
             c for c in [ticket.get("contender_a_node"), ticket.get("contender_b_node")]
             if c
         ]
+        _, all_nodes = self._get_project_voter_nodes(project_uuid, contenders=contenders)
         arbiter_node_uuid = ticket.get("arbiter_node_uuid")
         voter_universe = self.jury_engine.resolve_voter_universe(
             all_nodes,
@@ -810,47 +1033,8 @@ class A2ABus:
 
         # Persistir dictamen YAML en OKF ÚNICAMENTE si está ratificado (NEW-02)
         ruling_yaml_path = None
-        proj = self.db.get_project_by_uuid(project_uuid)
-        if status == "ratified" and proj and proj.get("gov_repo_path"):
-            try:
-                matrix_list = []
-                if ticket.get("jury_matrix_json"):
-                    try:
-                        matrix_list = json.loads(ticket["jury_matrix_json"])
-                    except Exception:
-                        matrix_list = []
-                synth_data = {
-                    "option_id": "THIRD_WAY_C",
-                    "generated_by": "agent" if ticket.get("proposal_c_ref") else "pending",
-                    "summary": ticket.get("proposal_c_ref", "")
-                }
-                ruling_path = self.jury_engine.persist_ruling_yaml(
-                    gov_base_path=proj["gov_repo_path"],
-                    ticket=ticket,
-                    verdict=consensus,
-                    synthesis_data=synth_data,
-                    neutral_matrix=matrix_list
-                )
-                ruling_yaml_path = str(ruling_path)
-
-                from src.storage.okf_adapter import OKFAdapter
-                okf_adapter = OKFAdapter()
-                files_to_commit = [ruling_path]
-                try:
-                    prec_path = okf_adapter.export_precedents_index(proj["gov_repo_path"])
-                    if prec_path and Path(prec_path).exists():
-                        files_to_commit.append(prec_path)
-                except Exception as prec_err:
-                    logger.debug("Omitida exportación de precedentes en ruling: %s", prec_err)
-
-                title = (ticket.get("title") or "").strip()
-                collision_reason = (ticket.get("collision_reason") or "").strip()
-                commit_message = f"ratify(jury): {ticket_id} [{winning_option}] {title}"
-                if collision_reason:
-                    commit_message += f"\n\n{collision_reason}"
-                okf_adapter.commit_gov_file(proj["gov_repo_path"], files_to_commit, commit_message, push_now=True)
-            except Exception as e:
-                logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket_id, e)
+        if status == "ratified":
+            ruling_yaml_path = self._persist_and_commit_ruling(project_uuid, ticket, consensus)
 
         # Actualizar estado del ticket en base de datos (NEW-02)
         self.db.update_dispute_status(
