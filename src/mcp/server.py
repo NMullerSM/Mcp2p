@@ -15,7 +15,7 @@ import sys
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 from mcp.server.mcpserver import MCPServer
-from src.mcp.tools import MCPToolsHandler
+from src.mcp.tools import LOADED_COMMIT, MCPToolsHandler
 from src.storage.db import DatabaseManager
 
 

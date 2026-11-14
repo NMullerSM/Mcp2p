@@ -1,46 +1,83 @@
 """
 MCP2P Desktop Application Entry Point
-Punto de entrada principal para la aplicación de escritorio construida con PyWebView.
+Punto de entrada principal para la aplicación de escritorio construida con PyWebView,
+con despacho temprano (< 30 ms, sin imports pesados) para `fast` CLI y `--pty-exec`.
 """
 
 from __future__ import annotations
 
-import argparse
-import logging
 import os
-import platform
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Optional
 
-# Asegurar que la raíz del proyecto esté en sys.path
+# Asegurar que la raíz del proyecto esté en sys.path antes de cualquier despacho temprano
 _root = Path(__file__).resolve().parent.parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from src.app.api_bridge import ApiBridge
-from src.app.paths import get_bundle_dir
-from src.p2p.network import P2PNotificationService
-from src.p2p.transport import NullTransportAdapter, P2PTransport
-from src.p2p.webrtc_adapter import WebRTCTransportAdapter
+
+def _dispatch_pty_exec(argv: List[str]) -> int:
+    """Trampolín POSIX (EGM-24): asigna terminal controladora (TIOCSCTTY) y reemplaza el proceso."""
+    cmd = argv[1:] if argv and argv[0] == "--" else argv
+    if not cmd:
+        sys.stderr.write("[mcp2p --pty-exec] Comando objetivo requerido.\n")
+        return 2
+    if sys.platform != "win32":
+        import fcntl
+        import termios
+        try:
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        except OSError:
+            pass
+    os.execvp(cmd[0], cmd)
+    return 0
+
+
+# Despacho temprano antes de importar ApiBridge / PyWebView / aiortc
+if __name__ == "__main__" and len(sys.argv) > 1:
+    if sys.argv[1] == "--pty-exec":
+        sys.exit(_dispatch_pty_exec(sys.argv[2:]))
+    if sys.argv[1] == "fast":
+        from src.app.fast_cli import run_fast_cli
+        sys.exit(run_fast_cli(sys.argv[2:]))
+
+import argparse
+import logging
+import platform
 
 logger = logging.getLogger("mcp2p.app.main")
 
+# Símbolos perezosos (evita importar aiortc/webview al importar main.py)
+WebRTCTransportAdapter: Any = None
 
-def _build_p2p_transport(signaling_url: str, node_crypto: Any) -> P2PTransport:
+
+def _resolve_local_node_uuid() -> str:
+    try:
+        from src.app.identity import local_node_uuid
+        return local_node_uuid()
+    except ImportError:
+        return os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+
+
+def _build_p2p_transport(signaling_url: str, node_crypto: Any) -> Any:
     """Construye el transporte P2P real (WebRTC/aiortc) o degrada a NullTransportAdapter
     ante CUALQUIER fallo de construcción -- incluido un ImportError si el wheel de aiortc
-    no está instalado o está roto en esta plataforma. Un fallo aquí nunca debe tumbar el
-    arranque de la aplicación: sin transporte en vivo, el flujo async (manual/polling) de
-    las Tareas 6/7 sigue funcionando igual."""
+    no está instalado o está roto en esta plataforma."""
+    from src.p2p.transport import NullTransportAdapter
+
     try:
-        return WebRTCTransportAdapter(signaling_url, node_crypto)
+        adapter_cls = WebRTCTransportAdapter
+        if adapter_cls is None:
+            from src.p2p.webrtc_adapter import WebRTCTransportAdapter as _WebRTCTransportAdapter
+            adapter_cls = _WebRTCTransportAdapter
+        return adapter_cls(signaling_url, node_crypto)
     except Exception as exc:
         logger.warning(f"No se pudo construir WebRTCTransportAdapter, degradando a NullTransportAdapter: {exc}")
         return NullTransportAdapter()
 
 
-def parse_arguments() -> argparse.Namespace:
+def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MCP2P: Plataforma de Colaboración Agéntica Local-First")
     parser.add_argument("--db-path", type=str, default=None, help="Ruta a la base de datos SQLite local")
     parser.add_argument("--headless", action="store_true", help="Ejecutar en modo sin cabeza (CI/CD o tests)")
@@ -53,7 +90,7 @@ def parse_arguments() -> argparse.Namespace:
         "--transport", type=str, default="stdio", choices=["stdio", "sse"],
         help="Transporte MCP a usar junto con --mcp-server",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _run_as_mcp_server(args: argparse.Namespace) -> int:
@@ -71,6 +108,8 @@ def _run_as_mcp_server(args: argparse.Namespace) -> int:
 
 def get_ui_target() -> str:
     """Resuelve la URL o ruta local al archivo index.html."""
+    from src.app.paths import get_bundle_dir
+
     root_dir = Path(get_bundle_dir())
 
     # 1. Comprobar build compilado de React (Vite)
@@ -86,8 +125,49 @@ def get_ui_target() -> str:
     raise FileNotFoundError("No se encontró ningún archivo de interfaz válido (frontend/dist ni src/ui).")
 
 
-def main() -> int:
-    args = parse_arguments()
+def _build_kernel_and_bridge(db_path: Optional[str], headless: bool = False) -> tuple[Any, Any, Any]:
+    """Construye DatabaseManager, CoreKernel (vía ApplicationFactory si está disponible) y ApiBridge
+    respetando dinámicamente --db-path en runtime (EGM-45)."""
+    from src.app.api_bridge import ApiBridge
+    from src.storage.db import DatabaseManager
+
+    db = DatabaseManager.get_instance(db_path) if db_path else DatabaseManager.get_instance()
+    resolved_db_path = str(db.db_path)
+
+    core_kernel = None
+    try:
+        from src.core.factory import ApplicationFactory
+        if headless and hasattr(ApplicationFactory, "create_headless_kernel"):
+            core_kernel = ApplicationFactory.create_headless_kernel(db_path=resolved_db_path)
+        elif hasattr(ApplicationFactory, "create_desktop_kernel"):
+            core_kernel = ApplicationFactory.create_desktop_kernel(db_path=resolved_db_path)
+        elif hasattr(ApplicationFactory, "create_kernel"):
+            core_kernel = ApplicationFactory.create_kernel(db_path=resolved_db_path)
+    except ImportError:
+        core_kernel = None
+
+    # Conectar ApiBridge al CoreKernel si su constructor lo acepta; compatibilidad previa a Hito 3.2
+    import inspect
+    sig = inspect.signature(ApiBridge.__init__)
+    if "core_kernel" in sig.parameters:
+        api = ApiBridge(db_manager=db, core_kernel=core_kernel)
+    else:
+        api = ApiBridge(db_manager=db)
+        if core_kernel is not None:
+            api.core_kernel = core_kernel
+    return db, core_kernel, api
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv:
+        if raw_argv[0] == "--pty-exec":
+            return _dispatch_pty_exec(raw_argv[1:])
+        if raw_argv[0] == "fast":
+            from src.app.fast_cli import run_fast_cli
+            return run_fast_cli(raw_argv[1:])
+
+    args = parse_arguments(raw_argv)
 
     if args.mcp_server:
         return _run_as_mcp_server(args)
@@ -95,15 +175,10 @@ def main() -> int:
     if args.db_path:
         os.environ["MCP2P_DB_PATH"] = args.db_path
 
-    # Orden de construcción: ApiBridge primero, sin transporte (toma el NullTransportAdapter
-    # por defecto), porque construir el transporte WebRTC real necesita la URL de
-    # señalización configurada -- y leerla requiere la propia ApiBridge
-    # (api.get_signaling_server_url(), que a su vez necesita self.db ya inicializada).
-    # Pedirle el transporte real a ApiBridge.__init__ antes de que exista la propia
-    # ApiBridge sería una dependencia circular, así que el transporte real se construye
-    # después y se sustituye vía el setter set_transport (que re-registra on_message
-    # contra el transporte nuevo).
-    api = ApiBridge()
+    from src.app.paths import get_bundle_dir
+    from src.p2p.network import P2PNotificationService
+
+    db, core_kernel, api = _build_kernel_and_bridge(args.db_path, headless=args.headless)
     real_transport = _build_p2p_transport(
         signaling_url=api.get_signaling_server_url(),
         node_crypto=api.crypto,
@@ -111,7 +186,7 @@ def main() -> int:
     api.set_transport(real_transport)
 
     # Iniciar servicio de red P2P en segundo plano (daemon)
-    local_node = os.environ.get("MCP2P_NODE_UUID", f"node_{platform.node().lower()[:12]}")
+    local_node = _resolve_local_node_uuid()
     p2p_network = P2PNotificationService(
         node_uuid=local_node,
         lan_port=int(os.environ.get("MCP2P_LAN_PORT", 42424)),
@@ -126,6 +201,8 @@ def main() -> int:
         info = api.get_system_info()
         print(f"[MCP2P] Nodo Local: {info['active_node']} | SQLite WAL: {info['wal_mode']} | LAN Port: {p2p_network.lan_port}")
         p2p_network.stop_lan_server()
+        if core_kernel is not None and hasattr(core_kernel, "close"):
+            core_kernel.close()
         return 0
 
     try:
@@ -133,6 +210,8 @@ def main() -> int:
     except ImportError as e:
         print(f"[MCP2P Error] PyWebView no está instalado en este entorno: {e}")
         p2p_network.stop_lan_server()
+        if core_kernel is not None and hasattr(core_kernel, "close"):
+            core_kernel.close()
         return 1
 
     target_url = get_ui_target()
@@ -160,7 +239,7 @@ def main() -> int:
 
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
-        start_kwargs = {"debug": args.debug}
+        start_kwargs: dict[str, Any] = {"debug": args.debug}
         bundle_dir = Path(get_bundle_dir())
         icon_name = "mcp2p.ico" if sys.platform == "win32" else "mcp2p.png"
         icon_cand = bundle_dir / icon_name
@@ -171,6 +250,8 @@ def main() -> int:
         webview.start(**start_kwargs)
     finally:
         p2p_network.stop_lan_server()
+        if core_kernel is not None and hasattr(core_kernel, "close"):
+            core_kernel.close()
         print("[MCP2P] Ventana cerrada. Red P2P y sesión finalizadas limpiamente.")
     return 0
 

@@ -22,6 +22,38 @@ from src.storage.validators import InvalidIdentifierError, ensure_within, is_saf
 MAX_PROPOSAL_CHARS_IN_PROMPT: int = 8000
 
 
+def _read_git_head_short() -> str:
+    """Lee el commit Git HEAD actual en disco de forma segura (solo lectura)."""
+    import subprocess
+    from src.proc_utils import check_output_hidden
+    try:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        val = check_output_hidden(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(repo_root),
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return val or "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Capturar commit al importar el módulo para detectar servidor obsoleto (EGM-42)
+LOADED_COMMIT: str = _read_git_head_short()
+
+
+def _get_staleness_info() -> tuple[str, str, bool]:
+    """Retorna (loaded_commit, disk_commit, stale)."""
+    disk_commit = _read_git_head_short()
+    loaded_commit = LOADED_COMMIT
+    stale = (
+        loaded_commit != "unknown"
+        and disk_commit != "unknown"
+        and loaded_commit != disk_commit
+    )
+    return loaded_commit, disk_commit, stale
+
+
 class MCPToolsHandler:
     """Manejador de herramientas MCP desacoplado del transporte para facilitar testing e introspección."""
 
@@ -45,6 +77,12 @@ class MCPToolsHandler:
                 unread = []
 
         result_data["unread_notifications"] = unread
+        loaded_commit, disk_commit, stale = _get_staleness_info()
+        if stale:
+            result_data["server_stale_warning"] = (
+                f"Servidor MCP desactualizado: código en memoria ({loaded_commit}) != HEAD en disco ({disk_commit}). "
+                "Reinicie el servidor MCP para aplicar los cambios recientes."
+            )
         return json.dumps(result_data, indent=2, ensure_ascii=False)
 
     def list_projects(self) -> str:
@@ -185,10 +223,11 @@ class MCPToolsHandler:
         """
         try:
             valid_statuses = ("backlog", "in_progress", "in_review", "disputed", "merged", "rejected", "discarded")
+            agent_allowed_statuses = ("backlog", "in_progress", "in_review", "disputed")
             if target_status not in valid_statuses:
                 return json.dumps({
                     "success": False,
-                    "error": f"target_status inválido: '{target_status}'. Valores permitidos: {list(valid_statuses)}"
+                    "error": f"target_status inválido: '{target_status}'. Valores permitidos: {list(agent_allowed_statuses)}"
                 }, indent=2, ensure_ascii=False)
 
             card = self.db.get_card_by_id(project_uuid, card_id)
@@ -204,6 +243,14 @@ class MCPToolsHandler:
                         "code": "PERMISSION_DENIED",
                         "error": f"La tarea está asignada al nodo {card.get('assignee_node_uuid')}, no a {node_uuid}. Solo el titular puede transicionar a '{target_status}', salvo para escalar a 'disputed'."
                     }, indent=2)
+
+            # EGM-35: transiciones terminales reservadas exclusivamente al humano con firma HITL
+            if target_status not in agent_allowed_statuses:
+                return json.dumps({
+                    "success": False,
+                    "code": "HUMAN_SIGNATURE_REQUIRED",
+                    "error": f"EGM-35: La transición a '{target_status}' requiere firma humana Ed25519 en la UI HITL. Estados permitidos vía MCP: {list(agent_allowed_statuses)}."
+                }, indent=2, ensure_ascii=False)
 
             updated = self.db.update_card_status(
                 project_uuid=project_uuid,
@@ -643,13 +690,20 @@ class MCPToolsHandler:
                         "success": False,
                         "error": f"target_state es requerido en promote_decision y debe ser uno de: {list(valid_states)}. Recibido: '{target_state}'"
                     })
+                # EGM-35: prohibir aprobación vía MCP e ignorar cualquier signature_block del agente
+                if target_state == "approved":
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "code": "HUMAN_SIGNATURE_REQUIRED",
+                        "error": "EGM-35: Un agente MCP no puede promover una decisión a 'approved'. Requiere firma humana Ed25519 en la UI HITL."
+                    })
 
                 p = self.okf.move_decision_lifecycle(
                     gov_base_path=gov_path,
                     dec_id=params["decision_id"],
                     target_state=target_state,
                     reason_or_consequences=params.get("resolution_notes", ""),
-                    signature_block=params.get("signature_block")
+                    signature_block=None
                 )
                 return self._wrap_response(project_uuid, {"success": True, "promoted_path": str(p)})
 
@@ -659,6 +713,13 @@ class MCPToolsHandler:
                     return self._wrap_response(project_uuid, {
                         "success": False,
                         "error": "update_card requiere el campo obligatorio 'card_data' como objeto dict."
+                    })
+                # EGM-35: prohibir mutación directa de status vía update_card desde MCP
+                if "status" in card_data and card_data.get("status") is not None:
+                    return self._wrap_response(project_uuid, {
+                        "success": False,
+                        "code": "USE_LEASE_WORKFLOW",
+                        "error": "EGM-35: No se permite cambiar 'status' directamente vía update_card. Use el flujo de lease/review y firma HITL."
                     })
                 card_id = card_data.get("card_id") or card_data.get("id")
                 if not card_id:
@@ -675,7 +736,6 @@ class MCPToolsHandler:
                         title=card_data.get("title"),
                         description=card_data.get("description"),
                         acceptance_criteria=card_data.get("acceptance_criteria"),
-                        status=card_data.get("status"),
                         branch_ref=card_data.get("branch_ref")
                     )
                 else:
@@ -1383,20 +1443,10 @@ class MCPToolsHandler:
     ) -> str:
         """
         Retorna la versión activa, commit de git y metadatos de runtime del servidor MCP2P.
-        Calcula dinámicamente el transporte, conteo de herramientas y commit Git en tiempo de ejecución.
+        Calcula dinámicamente el transporte, conteo de herramientas y commit Git en tiempo de ejecución,
+        e incluye detección de servidor obsoleto (EGM-42: loaded_commit vs disk_commit).
         """
-        import subprocess
-        from src.proc_utils import check_output_hidden
-        git_hash = "unknown"
-        try:
-            repo_root = Path(__file__).resolve().parent.parent.parent
-            git_hash = check_output_hidden(
-                ["git", "rev-parse", "--short", "HEAD"],
-                cwd=str(repo_root),
-                stderr=subprocess.DEVNULL
-            ).decode().strip()
-        except Exception:
-            pass
+        loaded_commit, disk_commit, stale = _get_staleness_info()
 
         resolved_transport = transport or os.environ.get("MCP2P_TRANSPORT", "stdio")
 
@@ -1416,11 +1466,18 @@ class MCPToolsHandler:
             "success": True,
             "server_name": "mcp2p-server",
             "server_version": "0.3.0",
-            "git_commit": git_hash,
+            "git_commit": disk_commit,
+            "loaded_commit": loaded_commit,
+            "disk_commit": disk_commit,
+            "stale": stale,
             "transport": resolved_transport,
             "tools_count": count,
             "status": "ready"
         }
+        if stale:
+            resp["server_stale_warning"] = (
+                f"Servidor MCP desactualizado: código en memoria ({loaded_commit}) != HEAD en disco ({disk_commit})."
+            )
         if tools_list:
             resp["tools"] = tools_list
 
