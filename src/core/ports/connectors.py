@@ -1,0 +1,180 @@
+"""
+Puertos hexagonales (Protocolos) para conectores enchufables del CoreKernel ("Hub USB").
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class OkfGovernancePort(Protocol):
+    """Puerto para gestión de gobernanza OKF, carpetas, tags, freshness e integridad."""
+
+    def validate_okf_integrity(self, gov_base_path: str | Path) -> Dict[str, Any]: ...
+
+    def get_okf_adrs(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
+
+    def get_okf_skills(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
+
+    def move_decision_lifecycle(
+        self,
+        gov_base_path: str | Path,
+        decision_id: str,
+        target_state: str,
+        signature_block: Optional[Dict[str, Any]] = None,
+        reason: str = "",
+    ) -> Dict[str, Any]: ...
+
+    def list_okf_folders(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
+
+    def add_okf_folder(
+        self,
+        gov_base_path: str | Path,
+        folder_path: str,
+        category: str = "custom",
+        description: str = "",
+    ) -> Dict[str, Any]: ...
+
+    def remove_okf_folder(
+        self,
+        gov_base_path: str | Path,
+        folder_path: str,
+        archive_if_not_empty: bool = True,
+    ) -> Dict[str, Any]: ...
+
+    def rename_okf_folder(
+        self, gov_base_path: str | Path, old_path: str, new_path: str
+    ) -> Dict[str, Any]: ...
+
+    def get_okf_freshness_report(
+        self, code_repo_path: str | Path, gov_base_path: str | Path, sla_days: int = 14
+    ) -> Dict[str, Any]: ...
+
+    def get_tags_index(self, gov_base_path: str | Path) -> Dict[str, Any]: ...
+
+    def update_artifact_tags(
+        self, gov_base_path: str | Path, rel_path: str, tags: List[str]
+    ) -> Dict[str, Any]: ...
+
+    def filter_by_tags(
+        self, gov_base_path: str | Path, tags: List[str], match_all: bool = False
+    ) -> List[Dict[str, Any]]: ...
+
+
+@runtime_checkable
+class PeerMeshPort(Protocol):
+    """Puerto de malla P2P multi-nodo y multi-seed."""
+
+    def add_seed_node(self, seed_url: str) -> List[str]: ...
+
+    def remove_seed_node(self, seed_url: str) -> List[str]: ...
+
+    def list_seed_nodes(self) -> List[str]: ...
+
+    def register_peer(self, node_uuid: str, endpoint: str = "", public_key: str = "") -> Dict[str, Any]: ...
+
+    def unregister_peer(self, node_uuid: str) -> bool: ...
+
+    def get_peers(self) -> List[Dict[str, Any]]: ...
+
+    def send_to_peer(self, target_node_uuid: str, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    def broadcast_envelope(self, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    def ingest_envelope(self, envelope: Dict[str, Any]) -> Dict[str, Any]: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class ExtensionGatePort(Protocol):
+    """Puerto de seguridad Default-Deny ("Puerta con Llave") para conectores externos."""
+
+    def unlock_connector(
+        self,
+        manifest: Any,
+        trusted_owner_pubkey: str,
+        actor_kind: str = "human_ui",
+    ) -> Dict[str, Any]: ...
+
+    def lock_connector(self, connector_id: str) -> Dict[str, Any]: ...
+
+    def is_unlocked(self, connector_id: str) -> bool: ...
+
+    def require_unlocked(self, connector_id: str) -> Any: ...
+
+    def get_gates_status(self) -> List[Dict[str, Any]]: ...
+
+
+@runtime_checkable
+class RestConnectorPort(Protocol):
+    """Puerto saliente HTTP/REST controlado por ExtensionSecurityGate y anti-SSRF."""
+
+    def validate_url(self, url: str) -> Dict[str, Any]: ...
+
+    def request(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        body: Optional[bytes | str] = None,
+    ) -> Dict[str, Any]: ...
+
+    def fetch_json(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
+class AgentTerminalPort(Protocol):
+    """Puerto para la futura malla de terminales interactivas de agentes (o NullAgentTerminalConnector)."""
+
+    def get_status(self) -> Dict[str, Any]: ...
+
+    def list_sessions(self) -> List[Dict[str, Any]]: ...
+
+    def spawn_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]: ...
+
+    def send_input(self, *args: Any, **kwargs: Any) -> Dict[str, Any]: ...
+
+    def close_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]: ...
+
+
+@runtime_checkable
+class GitWorkspacePort(Protocol):
+    """Puerto para operaciones de repositorios Git locales y remotos."""
+
+    def get_git_branches_and_log(self, repo_path: str | Path) -> Dict[str, Any]: ...
+
+    def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool: ...
+
+    def git_fetch(
+        self, repo_path: str | Path, remote: str = "origin", pat: Optional[str] = None
+    ) -> Dict[str, Any]: ...
+
+    def git_pull(
+        self,
+        repo_path: str | Path,
+        remote: str = "origin",
+        branch: Optional[str] = None,
+        rebase: bool = False,
+        pat: Optional[str] = None,
+    ) -> Dict[str, Any]: ...
+
+    def git_push_branch(
+        self,
+        repo_path: str | Path,
+        branch: str = "main",
+        remote: str = "origin",
+        pat: Optional[str] = None,
+    ) -> Dict[str, Any]: ...
+
+    def git_merge(
+        self, repo_path: str | Path, source_branch: str, target_branch: str = "main"
+    ) -> Dict[str, Any]: ...
