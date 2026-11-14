@@ -8,19 +8,23 @@ sincronización bidireccional YAML <-> SQLite y worktrees por tarea.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.proc_utils import run_hidden
-from src.storage.validators import ensure_within, validate_safe_id
+from src.storage.fs_utils import atomic_write_text
+from src.storage.okf_tags import OkfTagEngine
+from src.storage.validators import InvalidIdentifierError, ensure_within, validate_safe_id
 
 logger = logging.getLogger("mcp2p.storage.okf")
 
@@ -68,7 +72,8 @@ class OKFAdapter:
     """
 
     def __init__(self, schema: Optional[Dict[str, Any]] = None) -> None:
-        self.schema = schema or DEFAULT_OKF_SCHEMA
+        self.schema = copy.deepcopy(schema) if schema is not None else copy.deepcopy(DEFAULT_OKF_SCHEMA)
+        self.tag_engine = OkfTagEngine()
 
     # ==========================================
     # Inicialización de Estructura OKF v2
@@ -590,7 +595,8 @@ graph TD
     def write_card_yaml(
         self,
         gov_base_path: str | Path,
-        card_dict: Dict[str, Any]
+        card_dict: Dict[str, Any],
+        tags: Optional[Iterable[str] | str] = None,
     ) -> Path:
         """
         Escribe o actualiza el archivo YAML de una tarjeta Kanban en el repositorio de gobernanza.
@@ -619,7 +625,7 @@ graph TD
             except Exception:
                 rel_ids = []
 
-        clean_card = {
+        clean_card: Dict[str, Any] = {
             "id": card_id,
             "project_uuid": card_dict.get("project_uuid", ""),
             "title": card_dict.get("title", ""),
@@ -634,6 +640,9 @@ graph TD
             "created_at": card_dict.get("created_at") or datetime.now(timezone.utc).isoformat(),
             "updated_at": card_dict.get("updated_at") or datetime.now(timezone.utc).isoformat()
         }
+        raw_tags = tags if tags is not None else card_dict.get("tags")
+        if raw_tags is not None:
+            clean_card["tags"] = self.tag_engine.normalize_tags(raw_tags)
 
         yaml_content = yaml.dump(clean_card, sort_keys=False, allow_unicode=True)
 
@@ -754,7 +763,8 @@ graph TD
         item_id: str,
         title: str,
         content: str,
-        related_ids: Optional[List[str]] = None
+        related_ids: Optional[List[str]] = None,
+        tags: Optional[Iterable[str] | str] = None,
     ) -> Path:
         """
         Crea un artefacto OKF con encabezado YAML y enlaces cruzados bidireccionales.
@@ -793,6 +803,8 @@ graph TD
         status = status_map.get(artifact_type.lower(), "approved")
         rel_ids = related_ids or []
         now_str = datetime.now(timezone.utc).isoformat()
+        norm_tags = self.tag_engine.normalize_tags(tags) if tags is not None else []
+        tags_line = f"tags: {json.dumps(norm_tags)}\n" if tags is not None else ""
 
         frontmatter = (
             f"---\n"
@@ -800,6 +812,7 @@ graph TD
             f"title: \"{title}\"\n"
             f"status: {status}\n"
             f"related_ids: {json.dumps(rel_ids)}\n"
+            f"{tags_line}"
             f"created_at: \"{now_str}\"\n"
             f"---\n"
         )
@@ -1633,3 +1646,308 @@ graph TD
             "audit_timestamp": now_iso,
             "summary_markdown": summary_md
         }
+
+    # =========================================================================
+    # Gestión Dinámica de Carpetas OKF (okf_schema.json) y Tags YAML
+    # =========================================================================
+
+    @staticmethod
+    def _resolve_docs_okf(gov_base_path: str | Path) -> Path:
+        base = Path(gov_base_path)
+        if (base / "docs" / "okf").exists():
+            return (base / "docs" / "okf").resolve()
+        if (base / "okf_schema.json").exists() or (base / "01_ARQUITECTURA_Y_GOBERNANZA.md").exists():
+            return base.resolve()
+        return (base / "docs" / "okf").resolve()
+
+    @staticmethod
+    def _validate_folder_path(docs_okf: Path, folder_path: str) -> Tuple[Path, str]:
+        if not isinstance(folder_path, str):
+            raise InvalidIdentifierError("folder_path debe ser una cadena de texto.")
+        raw = folder_path.strip()
+        if not raw or "\x00" in raw or "\\" in raw or ":" in raw or raw.startswith("/"):
+            raise InvalidIdentifierError(f"Ruta de carpeta OKF inválida: {folder_path!r}")
+        raw_clean = raw.strip("/")
+        segments = [seg for seg in raw_clean.split("/") if seg != ""]
+        if not segments or any(seg in (".", "..") for seg in segments):
+            raise InvalidIdentifierError(f"Ruta de carpeta OKF inválida: {folder_path!r}")
+        validated_segments = [validate_safe_id(seg, "folder_path") for seg in segments]
+        clean_rel = "/".join(validated_segments)
+        target = docs_okf / clean_rel
+        resolved = ensure_within(docs_okf, target)
+        if resolved == docs_okf.resolve():
+            raise InvalidIdentifierError("folder_path no puede apuntar a la raíz docs/okf.")
+        return resolved, clean_rel
+
+    def _load_okf_schema_data(self, docs_okf: Path) -> Dict[str, Any]:
+        schema_file = docs_okf / "okf_schema.json"
+        data = copy.deepcopy(self.schema)
+        if schema_file.is_file():
+            try:
+                loaded = json.loads(schema_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+            except Exception as exc:
+                logger.warning(f"No se pudo parsear {schema_file}, usando esquema base: {exc}")
+        data.setdefault("required_directories", list(DEFAULT_OKF_SCHEMA["required_directories"]))
+        data.setdefault("v2_directories", list(DEFAULT_OKF_SCHEMA["v2_directories"]))
+        data.setdefault("custom_folders", [])
+        data.setdefault("active_folders", [])
+        return data
+
+    def _save_okf_schema_data(self, docs_okf: Path, schema_data: Dict[str, Any]) -> Path:
+        schema_file = docs_okf / "okf_schema.json"
+        atomic_write_text(schema_file, json.dumps(schema_data, indent=2, ensure_ascii=False))
+        return schema_file
+
+    def list_okf_folders(self, gov_base_path: str | Path) -> List[Dict[str, Any]]:
+        """Lista las carpetas activas, requeridas y personalizadas definidas en okf_schema.json."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        schema_data = self._load_okf_schema_data(docs_okf)
+
+        required_set = set(schema_data.get("required_directories", []))
+        entries_by_path: Dict[str, Dict[str, Any]] = {}
+
+        def _upsert_entry(path_str: str, category: str, description: str, required: bool) -> None:
+            norm = path_str.strip("/")
+            if not norm:
+                return
+            existing = entries_by_path.get(norm)
+            if existing is None:
+                entries_by_path[norm] = {
+                    "path": norm,
+                    "category": category,
+                    "description": description,
+                    "required": required,
+                }
+            else:
+                if category and existing.get("category") in ("", "standard"):
+                    existing["category"] = category
+                if description and not existing.get("description"):
+                    existing["description"] = description
+                existing["required"] = bool(existing.get("required") or required)
+
+        for req_dir in schema_data.get("required_directories", []):
+            _upsert_entry(str(req_dir), "required", "Directorio obligatorio del estándar OKF", True)
+        for v2_dir in schema_data.get("v2_directories", []):
+            _upsert_entry(str(v2_dir), "v2_standard", "Directorio estándar OKF v2", str(v2_dir) in required_set)
+        for item in schema_data.get("active_folders", []):
+            if isinstance(item, str):
+                _upsert_entry(item, "active", "", item in required_set)
+            elif isinstance(item, dict) and item.get("path"):
+                _upsert_entry(
+                    str(item["path"]),
+                    str(item.get("category") or "active"),
+                    str(item.get("description") or ""),
+                    bool(item.get("required") or item["path"] in required_set),
+                )
+        for item in schema_data.get("custom_folders", []):
+            if isinstance(item, str):
+                _upsert_entry(item, "custom", "", False)
+            elif isinstance(item, dict) and item.get("path"):
+                _upsert_entry(
+                    str(item["path"]),
+                    str(item.get("category") or "custom"),
+                    str(item.get("description") or ""),
+                    bool(item.get("required", False)),
+                )
+
+        result: List[Dict[str, Any]] = []
+        for path_str in sorted(entries_by_path.keys()):
+            entry = entries_by_path[path_str]
+            folder_dir = docs_okf / path_str
+            file_count = 0
+            if folder_dir.is_dir():
+                file_count = sum(1 for p in folder_dir.iterdir() if p.is_file())
+            result.append({
+                "path": entry["path"],
+                "category": entry["category"],
+                "description": entry["description"],
+                "file_count": file_count,
+                "required": entry["required"],
+            })
+        return result
+
+    def add_okf_folder(
+        self,
+        gov_base_path: str | Path,
+        folder_path: str,
+        category: str = "custom",
+        description: str = "",
+    ) -> Dict[str, Any]:
+        """Crea una nueva carpeta OKF validada y la registra en okf_schema.json."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        docs_okf.mkdir(parents=True, exist_ok=True)
+        target_dir, clean_rel = self._validate_folder_path(docs_okf, folder_path)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        schema_data = self._load_okf_schema_data(docs_okf)
+        folder_entry = {
+            "path": clean_rel,
+            "category": str(category or "custom"),
+            "description": str(description or ""),
+        }
+
+        custom_folders = [
+            f for f in schema_data.get("custom_folders", [])
+            if not (isinstance(f, dict) and f.get("path") == clean_rel) and f != clean_rel
+        ]
+        custom_folders.append(folder_entry)
+        schema_data["custom_folders"] = custom_folders
+
+        active_folders = [
+            f for f in schema_data.get("active_folders", [])
+            if not (isinstance(f, dict) and f.get("path") == clean_rel) and f != clean_rel
+        ]
+        active_folders.append(dict(folder_entry))
+        schema_data["active_folders"] = active_folders
+
+        self._save_okf_schema_data(docs_okf, schema_data)
+        folders = self.list_okf_folders(gov_base_path)
+        created = next((f for f in folders if f["path"] == clean_rel), {**folder_entry, "file_count": 0, "required": False})
+        return {"folder": created, "folders": folders}
+
+    def remove_okf_folder(
+        self,
+        gov_base_path: str | Path,
+        folder_path: str,
+        archive_if_not_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Elimina una carpeta OKF no obligatoria. Si contiene archivos y archive_if_not_empty=True,
+        la mueve de forma segura a docs/okf/history/archived_folders/.
+        """
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        target_dir, clean_rel = self._validate_folder_path(docs_okf, folder_path)
+        schema_data = self._load_okf_schema_data(docs_okf)
+
+        protected = set(schema_data.get("required_directories", [])) | {"history", "conventions"}
+        if clean_rel in protected or clean_rel.startswith("history/"):
+            raise OKFValidationError(f"No se puede eliminar la carpeta protegida: '{clean_rel}'")
+
+        archived_to: Optional[str] = None
+        if target_dir.is_dir():
+            has_entries = any(target_dir.iterdir())
+            if has_entries:
+                if not archive_if_not_empty:
+                    raise OKFValidationError(f"La carpeta '{clean_rel}' no está vacía.")
+                archive_root = docs_okf / "history" / "archived_folders"
+                archive_root.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                safe_slug = clean_rel.replace("/", "__")
+                dest = ensure_within(archive_root, archive_root / f"{safe_slug}_{ts}")
+                shutil.move(str(target_dir), str(dest))
+                archived_to = dest.relative_to(docs_okf).as_posix()
+            else:
+                target_dir.rmdir()
+
+        schema_data["custom_folders"] = [
+            f for f in schema_data.get("custom_folders", [])
+            if not (isinstance(f, dict) and f.get("path") == clean_rel) and f != clean_rel
+        ]
+        schema_data["active_folders"] = [
+            f for f in schema_data.get("active_folders", [])
+            if not (isinstance(f, dict) and f.get("path") == clean_rel) and f != clean_rel
+        ]
+        schema_data["v2_directories"] = [
+            d for d in schema_data.get("v2_directories", [])
+            if str(d).strip("/") != clean_rel
+        ]
+        self._save_okf_schema_data(docs_okf, schema_data)
+
+        return {
+            "archived_to": archived_to,
+            "folders": self.list_okf_folders(gov_base_path),
+        }
+
+    def rename_okf_folder(
+        self,
+        gov_base_path: str | Path,
+        old_path: str,
+        new_path: str,
+    ) -> Dict[str, Any]:
+        """Renombra o mueve una carpeta OKF dentro de docs/okf actualizando okf_schema.json."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        old_dir, clean_old = self._validate_folder_path(docs_okf, old_path)
+        new_dir, clean_new = self._validate_folder_path(docs_okf, new_path)
+
+        schema_data = self._load_okf_schema_data(docs_okf)
+        protected = set(schema_data.get("required_directories", [])) | {"history", "conventions"}
+        if clean_old in protected or clean_old.startswith("history/"):
+            raise OKFValidationError(f"No se puede renombrar la carpeta protegida: '{clean_old}'")
+        if not old_dir.is_dir():
+            raise FileNotFoundError(f"La carpeta origen '{clean_old}' no existe en docs/okf.")
+        if new_dir.exists():
+            raise FileExistsError(f"La carpeta destino '{clean_new}' ya existe en docs/okf.")
+
+        new_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_dir), str(new_dir))
+
+        def _replace_list(items: List[Any]) -> List[Any]:
+            updated: List[Any] = []
+            for item in items:
+                if isinstance(item, dict) and item.get("path") == clean_old:
+                    new_item = dict(item)
+                    new_item["path"] = clean_new
+                    updated.append(new_item)
+                elif isinstance(item, str) and item.strip("/") == clean_old:
+                    updated.append(clean_new)
+                else:
+                    updated.append(item)
+            return updated
+
+        schema_data["custom_folders"] = _replace_list(schema_data.get("custom_folders", []))
+        schema_data["active_folders"] = _replace_list(schema_data.get("active_folders", []))
+        schema_data["v2_directories"] = _replace_list(schema_data.get("v2_directories", []))
+        self._save_okf_schema_data(docs_okf, schema_data)
+
+        return {
+            "old_path": clean_old,
+            "new_path": clean_new,
+            "folders": self.list_okf_folders(gov_base_path),
+        }
+
+    def update_artifact_tags(
+        self,
+        gov_base_path: str | Path,
+        rel_path: str | Path,
+        tags: Iterable[str] | str,
+    ) -> Dict[str, Any]:
+        """Actualiza los tags YAML de un artefacto OKF y recompila tags_index.yaml."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        norm_tags = self.tag_engine.set_artifact_tags(docs_okf, rel_path, tags)
+        index_data = self.tag_engine.compile_tags_index(docs_okf)
+        norm_rel = Path(str(rel_path).strip()).as_posix()
+        return {
+            "path": norm_rel,
+            "tags": norm_tags,
+            "index": index_data,
+        }
+
+    def get_tags_index(
+        self,
+        gov_base_path: str | Path,
+        rebuild: bool = True,
+    ) -> Dict[str, Any]:
+        """Obtiene (y opcionalmente recompila) el índice determinista de tags OKF."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        index_path = docs_okf / "tags_index.yaml"
+        if rebuild or not index_path.is_file():
+            return self.tag_engine.compile_tags_index(docs_okf)
+        loaded = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            return self.tag_engine.compile_tags_index(docs_okf)
+        loaded.setdefault("tags", {})
+        loaded.setdefault("items", [])
+        loaded["index_path"] = str(index_path)
+        return loaded
+
+    def filter_by_tags(
+        self,
+        gov_base_path: str | Path,
+        tags: Iterable[str] | str,
+        match_all: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Filtra artefactos OKF por uno o más tags YAML."""
+        docs_okf = self._resolve_docs_okf(gov_base_path)
+        return self.tag_engine.filter_artifacts_by_tags(docs_okf, tags, match_all=match_all)
