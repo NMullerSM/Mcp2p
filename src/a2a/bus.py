@@ -742,7 +742,7 @@ class A2ABus:
             return {
                 "success": False,
                 "error": f"La clave pública enviada no coincide con la public_key registrada para {node_uuid}",
-                "code": 403
+                "code": 401
             }
 
         from src.p2p.crypto import NodeCryptoManager
@@ -902,7 +902,7 @@ class A2ABus:
             return {"success": False, "error": f"Árbitro {arbiter_node_uuid} sin public_key Ed25519 registrada en BD", "code": 403}
 
         if isinstance(public_key, str) and public_key.strip() and public_key.strip() != registered_pubkey:
-            return {"success": False, "error": "public_key del árbitro no coincide con la registrada en BD", "code": 403}
+            return {"success": False, "error": "public_key del árbitro no coincide con la registrada en BD", "code": 401}
 
         from src.p2p.crypto import NodeCryptoManager
         import hashlib

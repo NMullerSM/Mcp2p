@@ -426,13 +426,25 @@ def test_human_dominant_jury_verdict(temp_env):
             rationale="Bots unanimously prefer OPTION_A"
         )
 
-    # 1 solo humano vota por OPTION_B (con peso estándar)
+    # 1 solo humano vota por OPTION_B (con peso estándar y firma real Ed25519)
+    sig_content = f"VOTE:OPTION_B:TICKET:{ticket_id}:PROJECT:{p_uuid}"
+    sig_block = api.crypto.sign_human_approval(
+        artifact_id=ticket_id,
+        content_text=sig_content,
+        node_uuid=owner_node,
+        developer_name="Architect Nathaniel",
+        decision="OPTION_B",
+    )
     api.bus.submit_human_jury_vote(
         ticket_id=ticket_id,
         node_uuid=owner_node,
         developer_name="Architect Nathaniel",
         voted_option="OPTION_B",
-        signature_ed25519="valid_test_signature"
+        signature_ed25519=sig_block["signature_ed25519"],
+        public_key=sig_block["public_key"],
+        signed_at=sig_block["signed_at"],
+        content_sha256=sig_block["content_sha256"],
+        project_uuid=p_uuid,
     )
 
     # Calcular veredicto

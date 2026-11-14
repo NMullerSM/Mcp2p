@@ -22,7 +22,12 @@ def stage4_env(tmp_path):
     bridge = ApiBridge(db_manager=db_mgr)
 
     # Crear proyecto
-    proj = db_mgr.create_project(name="Stage4 Live Project", base_path=str(tmp_path / "ws_stage4"), init_git=True)
+    proj = db_mgr.create_project(
+        name="Stage4 Live Project",
+        base_path=str(tmp_path / "ws_stage4"),
+        init_git=True,
+        owner_public_key=bridge.crypto.public_key_base64,
+    )
     bridge.active_project_uuid = proj["project_uuid"]
 
     return {

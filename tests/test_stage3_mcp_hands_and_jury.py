@@ -150,14 +150,31 @@ def test_weighted_honor_jury_system(stage3_env):
     owner_node = stage3_env["db"].get_project_collaborators(p_uuid)[0]["node_uuid"]
     key_path = stage3_env["root"] / "human_dev_key.pem"
     crypto_mgr = NodeCryptoManager(key_path=key_path)
-    sig_b = crypto_mgr.sign_payload({"vote": "OPTION_B", "ticket": ticket_id})
+    stage3_env["db"].add_or_request_collaborator(
+        p_uuid,
+        owner_node,
+        public_key=crypto_mgr.public_key_base64,
+        role="owner",
+        status="approved",
+    )
+    sig_block = crypto_mgr.sign_human_approval(
+        artifact_id=ticket_id,
+        content_text=f"VOTE:OPTION_B:TICKET:{ticket_id}:PROJECT:{p_uuid}",
+        node_uuid=owner_node,
+        developer_name="Desarrollador Neutral",
+        decision="OPTION_B",
+    )
 
     bus.submit_human_jury_vote(
         ticket_id=ticket_id,
         node_uuid=owner_node,
         developer_name="Desarrollador Neutral",
         voted_option="OPTION_B",
-        signature_ed25519=sig_b
+        signature_ed25519=sig_block["signature_ed25519"],
+        public_key=sig_block["public_key"],
+        signed_at=sig_block["signed_at"],
+        content_sha256=sig_block["content_sha256"],
+        project_uuid=p_uuid,
     )
 
     # 4. Calcular veredicto:

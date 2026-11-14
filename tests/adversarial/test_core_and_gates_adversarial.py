@@ -241,7 +241,7 @@ def test_egm05r_egm37_egm01r_bus_and_bridge_reject_forged_and_rogue_votes(tmp_pa
             project_uuid=p_uuid,
         )
         assert spoof_res["success"] is False
-        assert spoof_res["code"] == 403
+        assert spoof_res["code"] in (401, 403)
 
         # 2c. EGM-37: ApiBridge.sign_and_approve_item con nodo no autorizado no debe recalcular veredicto
         bridge = ApiBridge(db_manager=db)

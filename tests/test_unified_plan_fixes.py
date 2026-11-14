@@ -2,6 +2,8 @@ import json
 import pytest
 from pathlib import Path
 from src.mcp.server import create_mcp_server
+from src.app.api_bridge import ApiBridge
+from src.p2p.crypto import NodeCryptoManager
 from src.storage.db import DatabaseManager
 from src.storage.okf_adapter import OKFAdapter
 from src.a2a.bus import A2ABus
@@ -145,7 +147,7 @@ async def test_release_kanban_task_rejected(mcp_setup):
         "description": "Prueba de estado rejected"
     })
 
-    # Transicionar a rejected
+    # Transicionar a rejected: MCP debe bloquearlo por EGM-35; la UI HITL humana sí puede transicionar
     db.register_or_update_node("node_reviewer", "Reviewer", "agent_reviewer")
     rel_res = await server.call_tool("release_kanban_task", {
         "project_uuid": p_uuid,
@@ -154,7 +156,13 @@ async def test_release_kanban_task_rejected(mcp_setup):
         "target_status": "rejected"
     })
     rel_out = json.loads(rel_res.content[0].text)
-    assert rel_out["success"] is True
+    assert rel_out["success"] is False
+    assert rel_out["code"] == "HUMAN_SIGNATURE_REQUIRED"
+
+    bridge = ApiBridge(db_manager=db)
+    bridge.active_project_uuid = p_uuid
+    ui_res = bridge.update_task_status("CARD-REJ-01", "rejected")
+    assert ui_res["success"] is True
 
     card = db.get_card_by_id(p_uuid, "CARD-REJ-01")
     assert card["status"] == "rejected"
@@ -251,14 +259,33 @@ def test_ruling_and_precedents_atomic_commit(mcp_setup):
     )
     t_id = ticket["ticket_id"]
 
-    # Voto humano del desarrollador registrado en el proyecto (EGM-05 anti-Sybil)
+    # Voto humano del desarrollador registrado en el proyecto (EGM-05 anti-Sybil) con firma Ed25519 real
     owner_node = db.get_project_collaborators(p_uuid)[0]["node_uuid"]
+    crypto = NodeCryptoManager()
+    db.add_or_request_collaborator(
+        p_uuid,
+        owner_node,
+        public_key=crypto.public_key_base64,
+        role="owner",
+        status="approved",
+    )
+    sig_block = crypto.sign_human_approval(
+        artifact_id=t_id,
+        content_text=f"VOTE:OPTION_A:TICKET:{t_id}:PROJECT:{p_uuid}",
+        node_uuid=owner_node,
+        developer_name="Human Dev",
+        decision="OPTION_A",
+    )
     bus.submit_human_jury_vote(
         ticket_id=t_id,
         node_uuid=owner_node,
         developer_name="Human Dev",
         voted_option="OPTION_A",
-        signature_ed25519="sig_human_test"
+        signature_ed25519=sig_block["signature_ed25519"],
+        public_key=sig_block["public_key"],
+        signed_at=sig_block["signed_at"],
+        content_sha256=sig_block["content_sha256"],
+        project_uuid=p_uuid,
     )
 
     verdict = bus.compute_jury_verdict(p_uuid, t_id)

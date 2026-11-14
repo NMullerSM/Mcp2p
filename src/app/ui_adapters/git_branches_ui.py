@@ -188,7 +188,7 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
             )
 
         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-        ref_check = subprocess.run(
+        ref_check = self._subprocess_run(
             ["git", "show-ref", "--verify", f"refs/heads/{orphan_branch}"],
             cwd=str(gov_path),
             capture_output=True,
@@ -197,7 +197,7 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
 
         if ref_check.returncode != 0 and self.github.has_remote(gov_path, "origin"):
             self.github.git_fetch(gov_path, "origin")
-            fetch_orphan = subprocess.run(
+            fetch_orphan = self._subprocess_run(
                 ["git", "fetch", "origin", f"{orphan_branch}:{orphan_branch}"],
                 cwd=str(gov_path),
                 capture_output=True,
@@ -207,7 +207,7 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
                 ref_check.returncode = 0
 
         if ref_check.returncode == 0:
-            wt_res = subprocess.run(
+            wt_res = self._subprocess_run(
                 ["git", "worktree", "add", str(wt_path), orphan_branch],
                 cwd=str(gov_path),
                 capture_output=True,
@@ -217,7 +217,7 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
                 err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
                 raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
         else:
-            wt_res = subprocess.run(
+            wt_res = self._subprocess_run(
                 ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(wt_path)],
                 cwd=str(gov_path),
                 capture_output=True,
@@ -233,8 +233,8 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
                         f"# Memoria Conversacional Desacoplada\n\nUUID: `{project_uuid}`\nRama: `{orphan_branch}`\n",
                         encoding="utf-8",
                     )
-                subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                commit_res = subprocess.run(
+                self._subprocess_run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
+                commit_res = self._subprocess_run(
                     ["git", "commit", "-m", f"init(orphan): initialize decoupled conversational memory for {project_uuid}"],
                     cwd=str(wt_path),
                     capture_output=True,
@@ -400,8 +400,8 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
                         }
                         f.write(json.dumps(line_data, ensure_ascii=False) + "\n")
 
-                subprocess.run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                commit_res = subprocess.run(
+                self._subprocess_run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
+                commit_res = self._subprocess_run(
                     ["git", "commit", "-m", f"sync(orphan): flush {len(pending_events)} events from node {local_node}"],
                     cwd=str(wt_path),
                     capture_output=True,

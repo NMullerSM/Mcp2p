@@ -7,6 +7,7 @@ delegando en el CoreKernel hexagonal sin SQL crudo.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple

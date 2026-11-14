@@ -374,6 +374,7 @@ def test_adversarial_egm07_blind_voting_and_leak_prevention(adversarial_env):
 
     bridge = ApiBridge(db_manager=db)
     bridge.active_project_uuid = p_uuid
+    bridge.crypto = env["crypto_carol"]
 
     ticket = bus.open_dispute_ticket(
         project_uuid=p_uuid,

@@ -146,6 +146,7 @@ class DatabaseManager:
         self._thread_local = threading.local()
         self._anchor_conn: Optional[sqlite3.Connection] = None
         self._fp_cache: Dict[str, Tuple[int, Tuple[Any, ...]]] = {}
+        self._conn_connect_fn = sqlite3.connect
 
         self._initialize_schema()
         self._anchor_conn = self._create_anchor_connection()
@@ -201,6 +202,22 @@ class DatabaseManager:
         """Provee una conexión del pool LIFO acotado (máx 4) con rollback defensivo al devolverla."""
         if self._closed:
             raise RuntimeError("DatabaseManager ya fue cerrado")
+
+        current_connect = sqlite3.connect
+        if current_connect is not self._conn_connect_fn:
+            with self._pool_lock:
+                if current_connect is not self._conn_connect_fn:
+                    while True:
+                        try:
+                            old_conn = self._pool.get_nowait()
+                        except queue.Empty:
+                            break
+                        try:
+                            old_conn.close()
+                        except sqlite3.Error:
+                            pass
+                    self._created_conns = 0
+                    self._conn_connect_fn = current_connect
 
         depth = getattr(self._thread_local, "conn_depth", 0)
         ephemeral = False

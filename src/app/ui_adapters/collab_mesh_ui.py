@@ -518,8 +518,8 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
                 if gov_path.exists() and (gov_path / ".git").exists():
                     try:
                         creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-                        subprocess.run(["git", "add", "."], cwd=gov_path, capture_output=True, creationflags=creationflags)
-                        staged = subprocess.run(
+                        self._subprocess_run(["git", "add", "."], cwd=gov_path, capture_output=True, creationflags=creationflags)
+                        staged = self._subprocess_run(
                             ["git", "diff", "--cached", "--quiet"],
                             cwd=gov_path,
                             capture_output=True,
@@ -527,7 +527,7 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
                         )
                         commit_ok = True
                         if staged.returncode != 0:
-                            commit_res = subprocess.run(
+                            commit_res = self._subprocess_run(
                                 [
                                     "git",
                                     "commit",

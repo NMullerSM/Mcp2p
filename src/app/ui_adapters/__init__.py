@@ -100,6 +100,13 @@ class _BaseUIAdapter:
             human_presence_verified=True,
         )
 
+    def _subprocess_run(self, *args: Any, **kwargs: Any) -> Any:
+        import subprocess as _sp
+        import sys as _sys
+        bridge_mod = _sys.modules.get("src.app.api_bridge")
+        sp_mod = getattr(bridge_mod, "subprocess", _sp) if bridge_mod is not None else _sp
+        return sp_mod.run(*args, **kwargs)
+
 
 from src.app.ui_adapters.system_projects_ui import SystemProjectsUIAdapter
 from src.app.ui_adapters.kanban_okf_ui import KanbanOkfUIAdapter
