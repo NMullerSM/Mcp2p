@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Search, Columns, X, Tag, Filter, BookOpen, GitBranch, ShieldCheck } from 'lucide-react';
+import { Search, Columns, X, Tag, Filter, BookOpen, GitBranch, ShieldCheck, Plus, LayoutGrid, CheckCircle2 } from 'lucide-react';
 import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
@@ -17,11 +17,63 @@ function extractCardTags(card) {
   return [];
 }
 
+const SPLIT_TABS_BY_CONTEXT = {
+  kanban: [
+    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
+    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+    { id: 'approvals', label: 'HITL', icon: ShieldCheck }
+  ],
+  changes: [
+    { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
+    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
+    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
+  ],
+  approvals: [
+    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
+    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
+  ],
+  okf: [
+    { id: 'okf_audit', label: 'Auditoría & Carpetas', icon: CheckCircle2 },
+    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
+    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
+  ],
+  collaborators: [
+    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
+    { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
+    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
+  ]
+};
+
+const SEARCH_META_BY_TAB = {
+  kanban: {
+    placeholder: 'Buscar en Tablero Kanban (título, ID, descripción, tag)...',
+    ariaLabel: 'Buscar en Tablero Kanban'
+  },
+  changes: {
+    placeholder: 'Buscar en Control de Cambios (ramas, commits, autor, SHA)...',
+    ariaLabel: 'Buscar en Control de Cambios'
+  },
+  approvals: {
+    placeholder: 'Buscar en Aprobaciones HITL (decisiones, juicios, PRs)...',
+    ariaLabel: 'Buscar en Aprobaciones HITL'
+  },
+  okf: {
+    placeholder: 'Buscar en Gobernanza OKF (ADRs, skills, carpetas)...',
+    ariaLabel: 'Buscar en Gobernanza OKF'
+  },
+  collaborators: {
+    placeholder: 'Buscar en Colaboradores (nombre, @usuario, nodo, rol)...',
+    ariaLabel: 'Buscar en Colaboradores'
+  }
+};
+
 export function ProjectWorkspace({
   project,
   activeTab = 'kanban',
   onTabChange,
   onBack,
+  onNewTask,
   api,
   taskTrigger = 0
 }) {
@@ -33,8 +85,14 @@ export function ProjectWorkspace({
   const [targetBranch, setTargetBranch] = useState('');
   const [gitPulseTrigger, setGitPulseTrigger] = useState(0);
 
-  // Barra de filtros y Vista Dual (Hito 4.2)
-  const [searchQuery, setSearchQuery] = useState('');
+  // Barra modular por pestaña y Panel Split contextual
+  const normalizedTab = activeTab === 'branches' ? 'changes' : activeTab;
+  const [tabSearches, setTabSearches] = useState({});
+  const searchQuery = tabSearches[normalizedTab] || '';
+  const setSearchQuery = useCallback((val) => {
+    setTabSearches(prev => ({ ...prev, [normalizedTab]: val }));
+  }, [normalizedTab]);
+
   const [selectedTag, setSelectedTag] = useState('all');
   const [nodeStatusFilter, setNodeStatusFilter] = useState('all');
   const [tagsIndex, setTagsIndex] = useState({});
@@ -49,10 +107,9 @@ export function ProjectWorkspace({
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'okf' || activeTab === 'changes' || activeTab === 'approvals') {
-      setSplitSecondaryTab(activeTab);
-    }
-  }, [activeTab]);
+    const options = SPLIT_TABS_BY_CONTEXT[normalizedTab] || SPLIT_TABS_BY_CONTEXT.kanban;
+    setSplitSecondaryTab(options[0].id);
+  }, [normalizedTab]);
 
   const loadCards = useCallback(async () => {
     if (!api || !project) return;
@@ -170,7 +227,14 @@ export function ProjectWorkspace({
     });
   }, [cards, searchQuery, selectedTag, nodeStatusFilter, tagsIndex]);
 
-  const hasActiveFilter = Boolean(searchQuery.trim() || selectedTag !== 'all' || nodeStatusFilter !== 'all');
+  const hasActiveFilter = Boolean(
+    searchQuery.trim() ||
+    ((normalizedTab === 'kanban' || normalizedTab === 'okf') && selectedTag !== 'all') ||
+    (normalizedTab === 'kanban' && nodeStatusFilter !== 'all')
+  );
+
+  const searchMeta = SEARCH_META_BY_TAB[normalizedTab] || SEARCH_META_BY_TAB.kanban;
+  const contextualSplitTabs = SPLIT_TABS_BY_CONTEXT[normalizedTab] || SPLIT_TABS_BY_CONTEXT.kanban;
 
   const handleCardMove = async (cardId, targetStatus) => {
     if (!api) return;
@@ -283,7 +347,63 @@ export function ProjectWorkspace({
     }
   };
 
+  const renderPrimaryView = () => {
+    if (normalizedTab === 'kanban') {
+      return (
+        <KanbanBoard
+          cards={filteredCards}
+          onCardMove={handleCardMove}
+          onSelectCard={(card) => setSelectedCard(card)}
+        />
+      );
+    }
+    if (normalizedTab === 'changes') {
+      return (
+        <BranchConsensusView
+          project={project}
+          api={api}
+          initialBranch={targetBranch}
+          onOpenCard={handleOpenCardById}
+          onNavigateToHitl={() => onTabChange && onTabChange('approvals')}
+          gitPulseTrigger={gitPulseTrigger}
+          searchQuery={searchQuery}
+        />
+      );
+    }
+    if (normalizedTab === 'approvals') {
+      return (
+        <HumanApprovalsView
+          project={project}
+          api={api}
+          onOpenCard={handleOpenCardById}
+          onNavigateToBranch={handleNavigateToBranch}
+          searchQuery={searchQuery}
+        />
+      );
+    }
+    if (normalizedTab === 'okf') {
+      return (
+        <OKFGovernanceView
+          project={project}
+          api={api}
+          externalTagFilter={selectedTag}
+          externalSearchQuery={searchQuery}
+        />
+      );
+    }
+    return <CollaboratorsView project={project} api={api} searchQuery={searchQuery} />;
+  };
+
   const renderSecondaryView = (tabKey) => {
+    if (tabKey === 'kanban') {
+      return (
+        <KanbanBoard
+          cards={filteredCards}
+          onCardMove={handleCardMove}
+          onSelectCard={(card) => setSelectedCard(card)}
+        />
+      );
+    }
     if (tabKey === 'changes' || tabKey === 'branches') {
       return (
         <BranchConsensusView
@@ -306,15 +426,26 @@ export function ProjectWorkspace({
         />
       );
     }
+    if (tabKey === 'okf_audit') {
+      return (
+        <OKFGovernanceView
+          project={project}
+          api={api}
+          externalTagFilter={selectedTag}
+          initialSubTab="audit"
+          hideTopTagFilter
+        />
+      );
+    }
     return <OKFGovernanceView project={project} api={api} externalTagFilter={selectedTag} />;
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden', minHeight: 0 }}>
-      {/* Barra Superior Compacta de Control (38px) */}
+      {/* Barra Modular Contextual por Pestaña (38px) */}
       <div className="mcp-toolbar" data-testid="workspace-toolbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
-          {/* Búsqueda de texto */}
+          {/* Búsqueda contextual del módulo activo */}
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -324,16 +455,16 @@ export function ProjectWorkspace({
             borderRadius: 'var(--radius-sm)',
             border: '1px solid var(--border-subtle)',
             backgroundColor: 'var(--bg-subtle)',
-            minWidth: '150px',
-            maxWidth: '250px',
-            flex: '1 1 180px'
+            minWidth: '160px',
+            maxWidth: '290px',
+            flex: '1 1 200px'
           }}>
             <Search size={12} color="var(--text-muted)" style={{ flexShrink: 0 }} />
             <input
               type="text"
               data-testid="workspace-search-input"
-              aria-label="Buscar tareas, ramas o tags"
-              placeholder="Buscar tarea, rama o tag..."
+              aria-label={searchMeta.ariaLabel}
+              placeholder={searchMeta.placeholder}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{
@@ -364,60 +495,68 @@ export function ProjectWorkspace({
             )}
           </div>
 
-          {/* Combobox filtro por Tag OKF */}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            <Tag size={12} color="var(--text-muted)" className="mcp-hide-compact" />
-            <select
-              data-testid="workspace-tag-filter"
-              aria-label="Filtrar por Tag OKF"
-              className="mcp-combobox"
-              value={selectedTag}
-              onChange={(e) => setSelectedTag(e.target.value)}
-              style={{ height: '26px', fontSize: '11.5px', maxWidth: '170px' }}
-            >
-              <option value="all">Todos los Tags OKF</option>
-              {availableTags.map(tag => (
-                <option key={tag} value={tag}>#{tag}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Combobox filtro por Nodo / Estado */}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            <Filter size={12} color="var(--text-muted)" className="mcp-hide-compact" />
-            <select
-              data-testid="workspace-node-status-filter"
-              aria-label="Filtrar por Nodo o Estado"
-              className="mcp-combobox"
-              value={nodeStatusFilter}
-              onChange={(e) => setNodeStatusFilter(e.target.value)}
-              style={{ height: '26px', fontSize: '11.5px', maxWidth: '185px' }}
-            >
-              <option value="all">Todos los Nodos / Estados</option>
-              <optgroup label="Estado">
-                <option value="status:backlog">Por Hacer</option>
-                <option value="status:in_progress">En Proceso</option>
-                <option value="status:in_review">En Revisión</option>
-                <option value="status:merged">Fusionado / Consolidado</option>
-              </optgroup>
-              <optgroup label="Nodo Asignado">
-                <option value="node:__unassigned__">Sin asignar</option>
-                {availableNodes.map(nodeUuid => (
-                  <option key={nodeUuid} value={`node:${nodeUuid}`}>
-                    {nodeUuid.slice(0, 14)}
-                  </option>
+          {/* Filtro por Tag OKF: contextual en Kanban y Gobernanza OKF */}
+          {(normalizedTab === 'kanban' || normalizedTab === 'okf') && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <Tag size={12} color="var(--text-muted)" className="mcp-hide-compact" />
+              <select
+                data-testid="workspace-tag-filter"
+                aria-label="Filtrar por Tag OKF"
+                className="mcp-combobox"
+                value={selectedTag}
+                onChange={(e) => setSelectedTag(e.target.value)}
+                style={{ height: '26px', fontSize: '11.5px', maxWidth: '170px' }}
+              >
+                <option value="all">Todos los Tags OKF</option>
+                {availableTags.map(tag => (
+                  <option key={tag} value={tag}>#{tag}</option>
                 ))}
-              </optgroup>
-            </select>
-          </div>
+              </select>
+            </div>
+          )}
+
+          {/* Filtro por Nodo / Estado: específico de Tablero Kanban */}
+          {normalizedTab === 'kanban' && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+              <Filter size={12} color="var(--text-muted)" className="mcp-hide-compact" />
+              <select
+                data-testid="workspace-node-status-filter"
+                aria-label="Filtrar por Nodo o Estado"
+                className="mcp-combobox"
+                value={nodeStatusFilter}
+                onChange={(e) => setNodeStatusFilter(e.target.value)}
+                style={{ height: '26px', fontSize: '11.5px', maxWidth: '185px' }}
+              >
+                <option value="all">Todos los Nodos / Estados</option>
+                <optgroup label="Estado">
+                  <option value="status:backlog">Por Hacer</option>
+                  <option value="status:in_progress">En Proceso</option>
+                  <option value="status:in_review">En Revisión</option>
+                  <option value="status:merged">Fusionado / Consolidado</option>
+                </optgroup>
+                <optgroup label="Nodo Asignado">
+                  <option value="node:__unassigned__">Sin asignar</option>
+                  {availableNodes.map(nodeUuid => (
+                    <option key={nodeUuid} value={`node:${nodeUuid}`}>
+                      {nodeUuid.slice(0, 14)}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+          )}
 
           {hasActiveFilter && (
             <button
               type="button"
               onClick={() => {
                 setSearchQuery('');
-                setSelectedTag('all');
-                setNodeStatusFilter('all');
+                if (normalizedTab === 'kanban' || normalizedTab === 'okf') {
+                  setSelectedTag('all');
+                }
+                if (normalizedTab === 'kanban') {
+                  setNodeStatusFilter('all');
+                }
               }}
               style={{
                 height: '26px',
@@ -431,73 +570,100 @@ export function ProjectWorkspace({
                 cursor: 'pointer'
               }}
             >
-              Limpiar ({filteredCards.length}/{cards.length})
+              {normalizedTab === 'kanban' ? `Limpiar (${filteredCards.length}/${cards.length})` : 'Limpiar'}
             </button>
           )}
         </div>
 
-        {/* Botón Toggle Vista Dual (Split) */}
-        <button
-          type="button"
-          data-testid="toggle-split-view"
-          aria-pressed={isSplitView}
-          onClick={() => setIsSplitView(prev => !prev)}
-          title="Acoplar Kanban a la izquierda y Gobernanza / Cambios / HITL a la derecha"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            height: '26px',
-            padding: '0 10px',
-            fontSize: '11.5px',
-            fontWeight: 600,
-            borderRadius: 'var(--radius-sm)',
-            border: isSplitView
-              ? '1px solid var(--accent-primary)'
-              : '1px solid var(--border-subtle)',
-            backgroundColor: isSplitView
-              ? 'rgba(var(--accent-primary-rgb), 0.16)'
-              : 'var(--bg-subtle)',
-            color: isSplitView ? 'var(--accent-primary)' : 'var(--text-primary)',
-            cursor: 'pointer',
-            flexShrink: 0,
-            transition: 'var(--transition)'
-          }}
-        >
-          <Columns size={13} />
-          <span>Vista Dual (Split)</span>
-          {isUltrawide && !isSplitView && (
-            <span
-              data-testid="split-suggested-badge"
+        {/* Acciones Derecha de Barra Modular: Nueva Tarea (solo Kanban) + Split Contextual */}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          {normalizedTab === 'kanban' && onNewTask && (
+            <button
+              type="button"
+              data-testid="kanban-new-task-btn"
+              onClick={onNewTask}
+              title="Crear Nueva Tarea Kanban (Ctrl+N)"
               style={{
-                fontSize: '9.5px',
-                fontFamily: 'var(--font-mono)',
-                padding: '1px 5px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.18)',
-                color: 'var(--accent-primary)'
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                height: '26px',
+                padding: '0 10px',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                backgroundColor: 'var(--accent-primary)',
+                color: '#ffffff',
+                cursor: 'pointer',
+                flexShrink: 0
               }}
             >
-              Sugerido
-            </span>
+              <Plus size={13} />
+              <span>Nueva Tarea</span>
+            </button>
           )}
-        </button>
+
+          {/* Botón Toggle Vista Dual (Split) Contextual */}
+          <button
+            type="button"
+            data-testid="toggle-split-view"
+            aria-pressed={isSplitView}
+            onClick={() => setIsSplitView(prev => !prev)}
+            title={`Abrir panel Split contextual para ${normalizedTab}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              height: '26px',
+              padding: '0 10px',
+              fontSize: '11.5px',
+              fontWeight: 600,
+              borderRadius: 'var(--radius-sm)',
+              border: isSplitView
+                ? '1px solid var(--accent-primary)'
+                : '1px solid var(--border-subtle)',
+              backgroundColor: isSplitView
+                ? 'rgba(var(--accent-primary-rgb), 0.16)'
+                : 'var(--bg-subtle)',
+              color: isSplitView ? 'var(--accent-primary)' : 'var(--text-primary)',
+              cursor: 'pointer',
+              flexShrink: 0,
+              transition: 'var(--transition)'
+            }}
+          >
+            <Columns size={13} />
+            <span>Vista Dual (Split)</span>
+            {isUltrawide && !isSplitView && (
+              <span
+                data-testid="split-suggested-badge"
+                style={{
+                  fontSize: '9.5px',
+                  fontFamily: 'var(--font-mono)',
+                  padding: '1px 5px',
+                  borderRadius: 'var(--radius-full)',
+                  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.18)',
+                  color: 'var(--accent-primary)'
+                }}
+              >
+                Sugerido
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Main Workspace View Content */}
       <div style={{ flex: 1, overflow: 'hidden', padding: '14px 18px', minHeight: 0 }}>
-        {isSplitView && activeTab !== 'collaborators' ? (
+        {isSplitView ? (
           <div className="mcp-split-layout" data-testid="workspace-split-container">
             <div className="mcp-split-pane">
-              <KanbanBoard
-                cards={filteredCards}
-                onCardMove={handleCardMove}
-                onSelectCard={(card) => setSelectedCard(card)}
-              />
+              {renderPrimaryView()}
             </div>
 
             <div
               className="mcp-split-pane"
+              data-testid="workspace-split-contextual-panel"
               style={{
                 backgroundColor: 'var(--bg-surface)',
                 border: '1px solid var(--border-subtle)',
@@ -508,44 +674,64 @@ export function ProjectWorkspace({
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'space-between',
                 gap: '6px',
                 marginBottom: '10px',
                 paddingBottom: '8px',
                 borderBottom: '1px solid var(--border-subtle)',
                 flexShrink: 0
               }}>
-                {[
-                  { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
-                  { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-                  { id: 'approvals', label: 'HITL', icon: ShieldCheck }
-                ].map(pane => {
-                  const Icon = pane.icon;
-                  const active = splitSecondaryTab === pane.id;
-                  return (
-                    <button
-                      key={pane.id}
-                      type="button"
-                      data-testid={`split-pane-tab-${pane.id}`}
-                      onClick={() => setSplitSecondaryTab(pane.id)}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        padding: '4px 10px',
-                        fontSize: '11.5px',
-                        fontWeight: active ? 600 : 500,
-                        borderRadius: 'var(--radius-sm)',
-                        border: active ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                        backgroundColor: active ? 'rgba(var(--accent-primary-rgb), 0.14)' : 'var(--bg-subtle)',
-                        color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <Icon size={12} />
-                      <span>{pane.label}</span>
-                    </button>
-                  );
-                })}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                  {contextualSplitTabs.map(pane => {
+                    const Icon = pane.icon;
+                    const active = splitSecondaryTab === pane.id;
+                    return (
+                      <button
+                        key={pane.id}
+                        type="button"
+                        data-testid={`split-pane-tab-${pane.id}`}
+                        onClick={() => setSplitSecondaryTab(pane.id)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '4px 10px',
+                          fontSize: '11.5px',
+                          fontWeight: active ? 600 : 500,
+                          borderRadius: 'var(--radius-sm)',
+                          border: active ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
+                          backgroundColor: active ? 'rgba(var(--accent-primary-rgb), 0.14)' : 'var(--bg-subtle)',
+                          color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Icon size={12} />
+                        <span>{pane.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  aria-label="Cerrar panel split"
+                  title="Cerrar Split"
+                  onClick={() => setIsSplitView(false)}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)',
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    flexShrink: 0
+                  }}
+                >
+                  <X size={12} />
+                </button>
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
                 {renderSecondaryView(splitSecondaryTab)}
@@ -553,39 +739,7 @@ export function ProjectWorkspace({
             </div>
           </div>
         ) : (
-          <>
-            {activeTab === 'kanban' && (
-              <KanbanBoard
-                cards={filteredCards}
-                onCardMove={handleCardMove}
-                onSelectCard={(card) => setSelectedCard(card)}
-              />
-            )}
-            {(activeTab === 'changes' || activeTab === 'branches') && (
-              <BranchConsensusView
-                project={project}
-                api={api}
-                initialBranch={targetBranch}
-                onOpenCard={handleOpenCardById}
-                onNavigateToHitl={() => onTabChange && onTabChange('approvals')}
-                gitPulseTrigger={gitPulseTrigger}
-              />
-            )}
-            {activeTab === 'approvals' && (
-              <HumanApprovalsView
-                project={project}
-                api={api}
-                onOpenCard={handleOpenCardById}
-                onNavigateToBranch={handleNavigateToBranch}
-              />
-            )}
-            {activeTab === 'okf' && (
-              <OKFGovernanceView project={project} api={api} externalTagFilter={selectedTag} />
-            )}
-            {activeTab === 'collaborators' && (
-              <CollaboratorsView project={project} api={api} />
-            )}
-          </>
+          renderPrimaryView()
         )}
       </div>
 

@@ -387,15 +387,12 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onOpenSettings={handleOpenSettings}
         activeProject={activeProject}
-        projects={projects}
-        onSelectProjectByUuid={handleSelectProjectByUuid}
         onBackToProjects={() => {
           setActiveProject(null);
           loadProjects();
         }}
         activeTab={activeTab}
         onTabChange={setActiveTab}
-        onNewTask={() => setIsNewTaskOpen(true)}
         githubStatus={githubStatus}
         projectsCount={projects.length}
       />
@@ -418,6 +415,7 @@ export default function App() {
               setActiveProject(null);
               loadProjects();
             }}
+            onNewTask={() => setIsNewTaskOpen(true)}
             api={api}
             taskTrigger={taskTrigger}
           />
@@ -444,6 +442,7 @@ export default function App() {
         projectsList={projects}
         initialTab={settingsTab}
         onGithubStatusChange={setGithubStatus}
+        onNavigateWorkspaceTab={(tabId) => setActiveTab(tabId)}
       />
 
       {/* Modales */}

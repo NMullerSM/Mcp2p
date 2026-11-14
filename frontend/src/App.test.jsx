@@ -36,6 +36,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   delete window.pywebview;
@@ -276,30 +277,54 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     };
   }
 
-  it('el Combobox de proyectos permite abrir otro proyecto directamente y volver al Hub', async () => {
-    const { api } = await renderReadyApp(makeWorkspaceApiOverrides());
+  it('reemplaza el combobox por flecha minimalista al Hub, oculta usuario GitHub en header, mueve Nueva Tarea a Kanban y personaliza tabs', async () => {
+    const { api } = await renderReadyApp({
+      ...makeWorkspaceApiOverrides(),
+      get_github_status: vi.fn(async () => ({
+        success: true,
+        github: { authenticated: true, username: 'octocat', provider: 'pat', details: 'PAT OK' }
+      }))
+    });
 
-    const switcher = await screen.findByTestId('project-switcher-combobox');
-    expect(switcher.value).toBe('__hub__');
+    // No existe project-switcher-combobox ni @octocat en la barra superior
+    expect(screen.queryByTestId('project-switcher-combobox')).toBeNull();
+    const ghHeaderBtn = await screen.findByTestId('github-header-btn');
+    expect(screen.getByTestId('github-status-dot')).toBeTruthy();
+    expect(ghHeaderBtn.textContent).not.toContain('@octocat');
 
-    // Saltar directamente a Proyecto Alpha desde el Combobox
-    fireEvent.change(switcher, { target: { value: 'proj_alpha' } });
+    // Abrir Proyecto Alpha desde el Hub
+    const openBtns = await screen.findAllByText('Abrir Espacio');
+    fireEvent.click(openBtns[0]);
     await waitFor(() => expect(api.select_project).toHaveBeenCalledWith('proj_alpha'));
+
+    expect(await screen.findByTestId('back-to-hub-btn')).toBeTruthy();
+    expect(screen.getByTestId('active-project-name').textContent).toBe('Proyecto Alpha');
     expect(await screen.findByTestId('workspace-toolbar')).toBeTruthy();
 
-    // Saltar directamente a Proyecto Beta desde el Combobox
-    fireEvent.change(screen.getByTestId('project-switcher-combobox'), { target: { value: 'proj_beta' } });
-    await waitFor(() => expect(api.select_project).toHaveBeenCalledWith('proj_beta'));
+    // Botón Nueva Tarea solo vive dentro de Kanban y desaparece al cambiar a Gobernanza OKF
+    expect(screen.getByTestId('kanban-new-task-btn')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('tab-okf'));
+    await waitFor(() => expect(screen.queryByTestId('kanban-new-task-btn')).toBeNull());
+    expect(screen.getByTestId('workspace-search-input').getAttribute('placeholder')).toContain('Gobernanza OKF');
 
-    // Volver al Hub usando la opción <- Volver al Hub de Proyectos
-    fireEvent.change(screen.getByTestId('project-switcher-combobox'), { target: { value: '__hub__' } });
+    // Personalizar barra superior: ocultar Control de Cambios y verificar persistencia
+    fireEvent.click(screen.getByTestId('customize-navbar-btn'));
+    expect(await screen.findByTestId('navbar-customizer-popover')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('navbar-toggle-changes'));
+    expect(screen.queryByTestId('tab-changes')).toBeNull();
+    fireEvent.click(screen.getByTestId('navbar-toggle-changes'));
+    expect(screen.getByTestId('tab-changes')).toBeTruthy();
+
+    // Volver al Hub usando la flecha minimalista
+    fireEvent.click(screen.getByTestId('back-to-hub-btn'));
     expect(await screen.findByText('Unirse vía P2P')).toBeTruthy();
   });
 
   it('aplica Ley de Hick (máx 2 tags + N), filtra por búsqueda/tag y activa Vista Dual (Split) con OKF Freshness', async () => {
     await renderReadyApp(makeWorkspaceApiOverrides());
 
-    fireEvent.change(await screen.findByTestId('project-switcher-combobox'), { target: { value: 'proj_alpha' } });
+    const openBtns = await screen.findAllByText('Abrir Espacio');
+    fireEvent.click(openBtns[0]);
     await screen.findByTestId('kanban-card-CARD-1');
 
     // Ley de Hick: CARD-1 tiene 3 tags ['hexagonal', 'backend', 'okf'], solo 2 visibles + '+1'

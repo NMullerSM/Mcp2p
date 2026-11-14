@@ -7,11 +7,13 @@ import {
   FileCode,
   Wrench,
   ShieldCheck,
-  ShieldAlert,
+  Shield,
   FolderOpen,
   Tag,
   Activity,
-  RefreshCw
+  RefreshCw,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 
 function getFreshnessBadgeMeta(status, score) {
@@ -39,14 +41,14 @@ function SignatureBadge({ signatureValid }) {
           display: 'inline-flex',
           alignItems: 'center',
           gap: '4px',
-          padding: '2px 7px',
+          padding: '2px 8px',
           borderRadius: 'var(--radius-full)',
           fontFamily: 'var(--font-mono)',
           fontSize: '10.5px',
           fontWeight: 600,
-          backgroundColor: 'rgba(var(--accent-primary-rgb), 0.14)',
-          color: 'var(--accent-success)',
-          border: '1px solid rgba(var(--accent-primary-rgb), 0.3)'
+          backgroundColor: 'rgba(var(--accent-primary-rgb), 0.10)',
+          color: 'var(--accent-primary)',
+          border: '1px solid rgba(var(--accent-primary-rgb), 0.25)'
         }}
       >
         <ShieldCheck size={11} /> Ed25519 OK
@@ -57,35 +59,43 @@ function SignatureBadge({ signatureValid }) {
     return (
       <span
         data-testid="ed25519-unverified-badge"
-        title="Sin firma Ed25519 válida"
+        title="Documento sin firma Ed25519 aplicada aún"
         style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: '4px',
-          padding: '2px 7px',
+          padding: '2px 8px',
           borderRadius: 'var(--radius-full)',
           fontFamily: 'var(--font-mono)',
           fontSize: '10.5px',
-          fontWeight: 600,
-          backgroundColor: 'rgba(245, 158, 11, 0.14)',
-          color: 'var(--accent-warning)',
-          border: '1px solid rgba(245, 158, 11, 0.3)'
+          fontWeight: 500,
+          backgroundColor: 'var(--bg-subtle)',
+          color: 'var(--text-muted)',
+          border: '1px solid var(--border-subtle)'
         }}
       >
-        <ShieldAlert size={11} /> Sin Firma Ed25519
+        <Shield size={11} /> Sin Firma Ed25519
       </span>
     );
   }
   return null;
 }
 
-export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
-  const [subTab, setSubTab] = useState('adrs');
+export function OKFGovernanceView({
+  project,
+  api,
+  externalTagFilter = 'all',
+  externalSearchQuery = '',
+  initialSubTab = 'adrs',
+  hideTopTagFilter = false
+}) {
+  const [subTab, setSubTab] = useState(initialSubTab || 'adrs');
   const [okfData, setOkfData] = useState(null);
   const [freshnessReport, setFreshnessReport] = useState(null);
   const [tagsIndex, setTagsIndex] = useState(null);
   const [folders, setFolders] = useState([]);
   const [selectedTag, setSelectedTag] = useState(externalTagFilter || 'all');
+  const [expandedAdrIds, setExpandedAdrIds] = useState({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -93,6 +103,12 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
       setSelectedTag(externalTagFilter);
     }
   }, [externalTagFilter]);
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
 
   const loadData = useCallback(async () => {
     if (!api || !project?.project_uuid) return;
@@ -204,116 +220,134 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
   const adrs = okfData?.adrs || [];
   const skills = okfData?.skills || [];
   const validation = okfData?.validation || {};
+  const normalizedQuery = (externalSearchQuery || '').trim().toLowerCase();
 
-  const filteredAdrs = selectedTag === 'all'
-    ? adrs
-    : adrs.filter(adr => {
-        const f = findFreshnessForAdr(adr);
-        const tags = getTagsForItem(adr, f, f?.path || adr.id);
-        return tags.includes(selectedTag);
-      });
+  const filteredAdrs = adrs.filter(adr => {
+    const f = findFreshnessForAdr(adr);
+    const tags = getTagsForItem(adr, f, f?.path || adr.id);
+    if (selectedTag !== 'all' && !tags.includes(selectedTag)) return false;
+    if (normalizedQuery) {
+      const haystack = [adr.id, adr.title, adr.context, adr.decision, adr.consequences, ...tags]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(normalizedQuery)) return false;
+    }
+    return true;
+  });
 
-  const filteredSkills = selectedTag === 'all'
-    ? skills
-    : skills.filter(sk => {
-        const f = findFreshnessForSkill(sk);
-        const expectedPath = `docs/okf/${sk.area}/${sk.slug}.md`;
-        const tags = getTagsForItem(sk, f, f?.path || expectedPath);
-        return tags.includes(selectedTag);
-      });
+  const filteredSkills = skills.filter(sk => {
+    const f = findFreshnessForSkill(sk);
+    const expectedPath = `docs/okf/${sk.area}/${sk.slug}.md`;
+    const tags = getTagsForItem(sk, f, f?.path || expectedPath);
+    if (selectedTag !== 'all' && !tags.includes(selectedTag)) return false;
+    if (normalizedQuery) {
+      const haystack = [sk.slug, sk.title, sk.area, f?.path || expectedPath, ...tags]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(normalizedQuery)) return false;
+    }
+    return true;
+  });
+
+  const filteredFreshnessItems = freshnessItems.filter(item => {
+    if (selectedTag !== 'all') {
+      const tags = item.tags || [];
+      if (!tags.includes(selectedTag)) return false;
+    }
+    if (normalizedQuery) {
+      const haystack = [item.title, item.id, item.path, ...(item.tags || [])]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!haystack.includes(normalizedQuery)) return false;
+    }
+    return true;
+  });
+
+  const toggleAdrExpand = (adrId) => {
+    setExpandedAdrIds(prev => ({ ...prev, [adrId]: !prev[adrId] }));
+  };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '12px', minHeight: 0 }}>
-      {/* Subtab Bar + Filtro de Tag YAML */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '16px', minHeight: 0 }}>
+      {/* Cabecera segmentada limpia al estilo Collaborators / Control de Cambios */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: '8px',
-        borderBottom: '1px solid var(--border-subtle)',
-        paddingBottom: '8px'
+        gap: '10px',
+        backgroundColor: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '8px 12px',
+        boxShadow: 'var(--shadow-sm)'
       }}>
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => setSubTab('adrs')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              fontSize: '12.5px',
-              fontWeight: subTab === 'adrs' ? 600 : 500,
-              borderRadius: 'var(--radius-md)',
-              border: 'none',
-              backgroundColor: subTab === 'adrs' ? 'var(--accent-primary)' : 'var(--bg-card)',
-              color: subTab === 'adrs' ? '#ffffff' : 'var(--text-primary)',
-              cursor: 'pointer'
-            }}
-          >
-            <BookOpen size={14} /> Decisiones (ADRs) ({filteredAdrs.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setSubTab('skills')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              fontSize: '12.5px',
-              fontWeight: subTab === 'skills' ? 600 : 500,
-              borderRadius: 'var(--radius-md)',
-              border: 'none',
-              backgroundColor: subTab === 'skills' ? 'var(--accent-primary)' : 'var(--bg-card)',
-              color: subTab === 'skills' ? '#ffffff' : 'var(--text-primary)',
-              cursor: 'pointer'
-            }}
-          >
-            <Cpu size={14} /> Fichas &amp; Skills ({filteredSkills.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setSubTab('audit')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              fontSize: '12.5px',
-              fontWeight: subTab === 'audit' ? 600 : 500,
-              borderRadius: 'var(--radius-md)',
-              border: 'none',
-              backgroundColor: subTab === 'audit' ? 'var(--accent-primary)' : 'var(--bg-card)',
-              color: subTab === 'audit' ? '#ffffff' : 'var(--text-primary)',
-              cursor: 'pointer'
-            }}
-          >
-            <CheckCircle2 size={14} /> Auditoría &amp; Freshness
-          </button>
+        <div style={{
+          display: 'inline-flex',
+          backgroundColor: 'var(--bg-subtle)',
+          padding: '3px',
+          borderRadius: 'var(--radius-md)',
+          gap: '4px',
+          flexWrap: 'wrap'
+        }}>
+          {[
+            { id: 'adrs', label: `Decisiones (${filteredAdrs.length})`, icon: BookOpen },
+            { id: 'skills', label: `Fichas & Skills (${filteredSkills.length})`, icon: Cpu },
+            { id: 'audit', label: 'Auditoría & Carpetas', icon: CheckCircle2 }
+          ].map(tab => {
+            const Icon = tab.icon;
+            const active = subTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setSubTab(tab.id)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: active ? 700 : 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: 'none',
+                  backgroundColor: active ? 'var(--bg-surface)' : 'transparent',
+                  color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  boxShadow: active ? 'var(--shadow-sm)' : 'none',
+                  transition: 'var(--transition)'
+                }}
+              >
+                <Icon size={13} color={active ? 'var(--accent-primary)' : 'currentColor'} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Filtro Tag YAML + Recargar */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
-            <Tag size={13} color="var(--text-muted)" />
-            <select
-              data-testid="okf-tag-filter"
-              aria-label="Filtrar artefactos OKF por Tag YAML"
-              className="mcp-combobox"
-              value={selectedTag}
-              onChange={(e) => setSelectedTag(e.target.value)}
-              style={{ height: '30px', fontSize: '12px', maxWidth: '185px' }}
-            >
-              <option value="all">Todos los Tags YAML</option>
-              {availableTags.map(t => (
-                <option key={t} value={t}>#{t}</option>
-              ))}
-            </select>
-          </div>
+          {!hideTopTagFilter && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+              <Tag size={13} color="var(--text-muted)" />
+              <select
+                data-testid="okf-tag-filter"
+                aria-label="Filtrar artefactos OKF por Tag YAML"
+                className="mcp-combobox"
+                value={selectedTag}
+                onChange={(e) => setSelectedTag(e.target.value)}
+                style={{ height: '30px', fontSize: '12px', maxWidth: '185px' }}
+              >
+                <option value="all">Todos los Tags YAML</option>
+                {availableTags.map(t => (
+                  <option key={t} value={t}>#{t}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
             type="button"
             onClick={loadData}
@@ -326,7 +360,7 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
               justifyContent: 'center',
               borderRadius: 'var(--radius-sm)',
               border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-card)',
+              backgroundColor: 'var(--bg-surface)',
               color: 'var(--text-secondary)',
               cursor: 'pointer'
             }}
@@ -336,7 +370,7 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
         </div>
       </div>
 
-      {/* Cinta compacta de Resumen Freshness + Carpetas OKF activas */}
+      {/* Resumen Sutil y Armónico (sin colores estridentes amarillos/rojos) */}
       {(freshnessSummary || folders.length > 0) && (
         <div
           data-testid="okf-summary-strip"
@@ -345,31 +379,45 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
-            gap: '8px',
-            padding: '8px 12px',
-            borderRadius: 'var(--radius-md)',
+            gap: '10px',
+            padding: '10px 16px',
+            borderRadius: 'var(--radius-lg)',
             backgroundColor: 'var(--bg-card)',
             border: '1px solid var(--border-subtle)',
-            fontSize: '11.5px'
+            fontSize: '12px'
           }}
         >
           {freshnessSummary && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                <Activity size={13} color="var(--accent-primary)" /> Freshness:
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                <Activity size={14} color="var(--accent-primary)" /> Salud OKF
               </span>
-              <span className="mcp-badge-fresh">FRESH {freshnessSummary.fresh ?? 0}</span>
-              <span className="mcp-badge-aging">AGING {freshnessSummary.aging ?? 0}</span>
-              <span className="mcp-badge-stale">STALE {freshnessSummary.stale ?? 0}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--accent-primary)' }}>
+                Vigentes: {freshnessSummary.fresh ?? 0}
+              </span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--accent-indigo)' }}>
+                Revisión: {freshnessSummary.aging ?? 0}
+              </span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
+                Desactualizados: {freshnessSummary.stale ?? 0}
+              </span>
               {typeof freshnessSummary.avg_score === 'number' && (
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>
-                  Promedio: {Math.round(freshnessSummary.avg_score <= 1 ? freshnessSummary.avg_score * 100 : freshnessSummary.avg_score)}%
+                <span style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-primary)',
+                  fontWeight: 600
+                }}>
+                  Score {Math.round(freshnessSummary.avg_score <= 1 ? freshnessSummary.avg_score * 100 : freshnessSummary.avg_score)}%
                 </span>
               )}
               {typeof freshnessSummary.verified_signatures === 'number' && (
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
-                  Firmas Ed25519: {freshnessSummary.verified_signatures}
-                  {freshnessSummary.unverified_adrs ? ` (${freshnessSummary.unverified_adrs} sin firma)` : ''}
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  Ed25519: {freshnessSummary.verified_signatures}
+                  {freshnessSummary.unverified_adrs ? ` · ${freshnessSummary.unverified_adrs} pendientes` : ''}
                 </span>
               )}
             </div>
@@ -381,29 +429,29 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
               style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}
             >
               <FolderOpen size={13} color="var(--accent-indigo)" />
-              <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
-                Carpetas OKF ({folders.length}):
+              <span style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '11.5px' }}>
+                Carpetas ({folders.length}):
               </span>
-              {folders.slice(0, 4).map(f => (
+              {folders.slice(0, 3).map(f => (
                 <span
                   key={f.path}
                   title={f.description || f.category}
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: '10.5px',
-                    padding: '1px 6px',
+                    padding: '2px 7px',
                     borderRadius: 'var(--radius-sm)',
                     backgroundColor: 'var(--bg-subtle)',
-                    color: 'var(--text-primary)',
+                    color: 'var(--text-secondary)',
                     border: '1px solid var(--border-subtle)'
                   }}
                 >
                   {f.path} ({f.file_count ?? 0})
                 </span>
               ))}
-              {folders.length > 4 && (
+              {folders.length > 3 && (
                 <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  +{folders.length - 4} más
+                  +{folders.length - 3}
                 </span>
               )}
             </div>
@@ -411,199 +459,326 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
         </div>
       )}
 
-      {/* Subtab Content */}
-      <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', minHeight: 0 }}>
+      {/* Contenido Principal */}
+      <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', minHeight: 0, scrollbarGutter: 'stable' }}>
 
-        {/* SUBTAB 1: ADRs */}
+        {/* SUBTAB 1: ADRs en formato tarjeta limpia estilo CollaboratorsView */}
         {subTab === 'adrs' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '18px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            boxShadow: 'var(--shadow-sm)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <BookOpen size={17} color="var(--accent-primary)" />
+                <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                  Registros de Decisión Arquitectónica ({filteredAdrs.length})
+                </h4>
+              </div>
+              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                Click en una decisión para expandir detalles
+              </span>
+            </div>
+
             {filteredAdrs.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-                {selectedTag === 'all' ? 'No hay ADRs registrados aún.' : `No hay ADRs con el tag #${selectedTag}.`}
+              <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                {selectedTag === 'all' && !normalizedQuery
+                  ? 'No hay ADRs registrados aún.'
+                  : 'Ningún ADR coincide con el filtro o búsqueda actual.'}
               </div>
             ) : (
-              filteredAdrs.map(adr => {
-                const fresh = findFreshnessForAdr(adr);
-                const freshBadge = getFreshnessBadgeMeta(fresh?.status, fresh?.score);
-                const sigValid = fresh?.signature_valid ?? adr.signature_valid;
-                const tags = getTagsForItem(adr, fresh, fresh?.path || adr.id);
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {filteredAdrs.map(adr => {
+                  const fresh = findFreshnessForAdr(adr);
+                  const freshBadge = getFreshnessBadgeMeta(fresh?.status, fresh?.score);
+                  const sigValid = fresh?.signature_valid ?? adr.signature_valid;
+                  const tags = getTagsForItem(adr, fresh, fresh?.path || adr.id);
+                  const isExpanded = Boolean(expandedAdrIds[adr.id]);
 
-                return (
-                  <div
-                    key={adr.id}
-                    data-testid={`adr-card-${adr.id}`}
-                    style={{
-                      backgroundColor: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '15px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '9px'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <span style={{
-                          backgroundColor: 'rgba(var(--accent-primary-rgb), 0.15)',
-                          color: 'var(--accent-primary)',
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: '11px',
-                          fontWeight: 700,
-                          padding: '2px 8px',
-                          borderRadius: 'var(--radius-sm)'
+                  return (
+                    <div
+                      key={adr.id}
+                      data-testid={`adr-card-${adr.id}`}
+                      style={{
+                        backgroundColor: 'var(--bg-surface)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '14px 16px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '10px',
+                        transition: 'var(--transition)'
+                      }}
+                    >
+                      <div
+                        onClick={() => toggleAdrExpand(adr.id)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '12px',
+                          cursor: 'pointer',
+                          flexWrap: 'wrap'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                          <div style={{
+                            width: '36px',
+                            height: '36px',
+                            borderRadius: 'var(--radius-md)',
+                            backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                            color: 'var(--accent-primary)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0
+                          }}>
+                            <BookOpen size={16} />
+                          </div>
+
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              <span style={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '10.5px',
+                                fontWeight: 700,
+                                padding: '2px 7px',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                                color: 'var(--accent-primary)'
+                              }}>
+                                {adr.id}
+                              </span>
+                              <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                                {adr.title}
+                              </span>
+                            </div>
+
+                            {adr.decision && (
+                              <div style={{
+                                fontSize: '12px',
+                                color: 'var(--text-secondary)',
+                                marginTop: '3px',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: isExpanded ? 'normal' : 'nowrap'
+                              }}>
+                                {adr.decision}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>
+                          {freshBadge && (
+                            <span
+                              className={freshBadge.cls}
+                              title={`Commits posteriores: ${fresh.commits_after ?? 0} · Antigüedad: ${fresh.days_old ?? 0} días`}
+                            >
+                              {freshBadge.label}
+                            </span>
+                          )}
+                          <SignatureBadge signatureValid={sigValid} />
+                          {isExpanded ? <ChevronDown size={14} color="var(--text-muted)" /> : <ChevronRight size={14} color="var(--text-muted)" />}
+                        </div>
+                      </div>
+
+                      {tags.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', paddingLeft: '48px' }}>
+                          {tags.slice(0, 4).map(t => (
+                            <span key={t} className="mcp-tag-pill">#{t}</span>
+                          ))}
+                          {tags.length > 4 && (
+                            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                              +{tags.length - 4}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {isExpanded && (
+                        <div style={{
+                          paddingLeft: '48px',
+                          paddingTop: '8px',
+                          borderTop: '1px solid var(--border-subtle)',
+                          fontSize: '12px',
+                          lineHeight: 1.55,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '5px'
                         }}>
-                          {adr.id}
-                        </span>
-                        <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0, color: 'var(--text-primary)' }}>
-                          {adr.title}
-                        </h4>
-                      </div>
-
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        {freshBadge && (
-                          <span
-                            className={freshBadge.cls}
-                            title={`Commits posteriores: ${fresh.commits_after ?? 0} · Antigüedad: ${fresh.days_old ?? 0} días`}
-                          >
-                            {freshBadge.label}
-                          </span>
-                        )}
-                        <SignatureBadge signatureValid={sigValid} />
-                      </div>
+                          <div>
+                            <strong style={{ color: 'var(--text-secondary)' }}>Contexto: </strong>
+                            <span style={{ color: 'var(--text-primary)' }}>{adr.context || 'Sin especificar'}</span>
+                          </div>
+                          <div>
+                            <strong style={{ color: 'var(--text-secondary)' }}>Decisión: </strong>
+                            <span style={{ color: 'var(--text-primary)' }}>{adr.decision || 'Sin especificar'}</span>
+                          </div>
+                          {adr.consequences && (
+                            <div>
+                              <strong style={{ color: 'var(--text-secondary)' }}>Consecuencias: </strong>
+                              <span style={{ color: 'var(--text-muted)' }}>{adr.consequences}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-
-                    {tags.length > 0 && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                        {tags.slice(0, 4).map(t => (
-                          <span key={t} className="mcp-tag-pill">#{t}</span>
-                        ))}
-                        {tags.length > 4 && (
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            +{tags.length - 4}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    <div style={{ fontSize: '12px', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                      <div>
-                        <strong style={{ color: 'var(--text-secondary)' }}>Contexto: </strong>
-                        <span style={{ color: 'var(--text-primary)' }}>{adr.context}</span>
-                      </div>
-                      <div>
-                        <strong style={{ color: 'var(--text-secondary)' }}>Decisión: </strong>
-                        <span style={{ color: 'var(--text-primary)' }}>{adr.decision}</span>
-                      </div>
-                      <div>
-                        <strong style={{ color: 'var(--text-secondary)' }}>Consecuencias: </strong>
-                        <span style={{ color: 'var(--text-muted)' }}>{adr.consequences}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
 
-        {/* SUBTAB 2: Skills & Fichas */}
+        {/* SUBTAB 2: Skills & Fichas con estética uniforme */}
         {subTab === 'skills' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
+          <div style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '18px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+            boxShadow: 'var(--shadow-sm)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Cpu size={17} color="var(--accent-indigo)" />
+              <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+                Fichas de Dominio &amp; Skills ({filteredSkills.length})
+              </h4>
+            </div>
+
             {filteredSkills.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-                {selectedTag === 'all' ? 'No hay fichas registradas.' : `No hay fichas con el tag #${selectedTag}.`}
+              <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                {selectedTag === 'all' && !normalizedQuery
+                  ? 'No hay fichas registradas.'
+                  : 'Ninguna ficha coincide con el filtro actual.'}
               </div>
             ) : (
-              filteredSkills.map(sk => {
-                const expectedPath = `docs/okf/${sk.area}/${sk.slug}.md`;
-                const fresh = findFreshnessForSkill(sk);
-                const freshBadge = getFreshnessBadgeMeta(fresh?.status, fresh?.score);
-                const sigValid = fresh?.signature_valid ?? sk.signature_valid;
-                const tags = getTagsForItem(sk, fresh, fresh?.path || expectedPath);
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {filteredSkills.map(sk => {
+                  const expectedPath = `docs/okf/${sk.area}/${sk.slug}.md`;
+                  const fresh = findFreshnessForSkill(sk);
+                  const freshBadge = getFreshnessBadgeMeta(fresh?.status, fresh?.score);
+                  const sigValid = fresh?.signature_valid ?? sk.signature_valid;
+                  const tags = getTagsForItem(sk, fresh, fresh?.path || expectedPath);
 
-                return (
-                  <div
-                    key={sk.slug}
-                    data-testid={`skill-card-${sk.slug}`}
-                    style={{
-                      backgroundColor: 'var(--bg-card)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '15px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '8px'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
-                      <span style={{
-                        fontSize: '10px',
-                        fontFamily: 'var(--font-mono)',
-                        fontWeight: 700,
-                        padding: '2px 6px',
-                        borderRadius: '3px',
-                        backgroundColor: sk.area === 'backend' ? 'rgba(var(--accent-indigo-rgb), 0.15)' : 'rgba(var(--accent-primary-rgb), 0.15)',
-                        color: sk.area === 'backend' ? 'var(--accent-indigo)' : 'var(--accent-success)'
-                      }}>
-                        {String(sk.area || 'okf').toUpperCase()}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  return (
+                    <div
+                      key={sk.slug}
+                      data-testid={`skill-card-${sk.slug}`}
+                      style={{
+                        backgroundColor: 'var(--bg-surface)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '12px',
+                        flexWrap: 'wrap'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: 'var(--radius-md)',
+                          backgroundColor: sk.area === 'backend'
+                            ? 'rgba(var(--accent-indigo-rgb), 0.12)'
+                            : 'rgba(var(--accent-primary-rgb), 0.12)',
+                          color: sk.area === 'backend' ? 'var(--accent-indigo)' : 'var(--accent-primary)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <Cpu size={16} />
+                        </div>
+
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                              {sk.title}
+                            </span>
+                            <span style={{
+                              fontSize: '10px',
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 700,
+                              padding: '1px 6px',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: sk.area === 'backend' ? 'rgba(var(--accent-indigo-rgb), 0.12)' : 'rgba(var(--accent-primary-rgb), 0.12)',
+                              color: sk.area === 'backend' ? 'var(--accent-indigo)' : 'var(--accent-primary)'
+                            }}>
+                              {String(sk.area || 'okf').toUpperCase()}
+                            </span>
+                          </div>
+
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px', flexWrap: 'wrap' }}>
+                            <FileCode size={11} />
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>{fresh?.path || expectedPath}</span>
+                            {tags.slice(0, 3).map(t => (
+                              <span key={t} className="mcp-tag-pill">#{t}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
                         {freshBadge && <span className={freshBadge.cls}>{freshBadge.label}</span>}
                         <SignatureBadge signatureValid={sigValid} />
                       </div>
                     </div>
-
-                    <h4 style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
-                      {sk.title}
-                    </h4>
-
-                    {tags.length > 0 && (
-                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                        {tags.slice(0, 3).map(t => (
-                          <span key={t} className="mcp-tag-pill">#{t}</span>
-                        ))}
-                        {tags.length > 3 && (
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                            +{tags.length - 3}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <FileCode size={12} />
-                      <span>{fresh?.path || expectedPath}</span>
-                    </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
 
         {/* SUBTAB 3: Auditoría, Freshness & Carpetas */}
         {subTab === 'audit' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{
               backgroundColor: 'var(--bg-card)',
               border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-md)',
-              padding: '18px',
+              borderRadius: 'var(--radius-lg)',
+              padding: '18px 20px',
               display: 'flex',
               flexDirection: 'column',
-              gap: '14px'
+              gap: '14px',
+              boxShadow: 'var(--shadow-sm)'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {validation.valid ? (
-                    <CheckCircle2 size={18} color="var(--accent-success)" />
-                  ) : (
-                    <AlertTriangle size={18} color="var(--accent-warning)" />
-                  )}
-                  <h4 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
-                    {validation.valid ? 'Especificación OKF Válida y Conforme' : 'Advertencias de Conformidad OKF'}
-                  </h4>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                    color: 'var(--accent-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {validation.valid ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+                  </div>
+                  <div>
+                    <h4 style={{ fontSize: '14.5px', fontWeight: 600, margin: 0 }}>
+                      {validation.valid ? 'Especificación OKF Conforme' : 'Revisión de Conformidad OKF'}
+                    </h4>
+                    <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                      Métricas estructurales y sincronización de memoria huérfana
+                    </span>
+                  </div>
                 </div>
 
                 <button
@@ -619,38 +794,38 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
                     fontWeight: 600,
                     borderRadius: 'var(--radius-sm)',
                     border: '1px solid var(--border-subtle)',
-                    backgroundColor: 'var(--bg-subtle)',
+                    backgroundColor: 'var(--bg-surface)',
                     color: 'var(--text-primary)',
                     cursor: 'pointer'
                   }}
                 >
-                  <Wrench size={13} /> Reparar / Sincronizar OKF
+                  <Wrench size={13} /> Sincronizar OKF
                 </button>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
-                <div style={{ background: 'var(--bg-subtle)', padding: '10px', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>ADRs Detectados</div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                     {validation.stats?.adrs_found || adrs.length || 0}
                   </div>
                 </div>
-                <div style={{ background: 'var(--bg-subtle)', padding: '10px', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Historias de Usuario</div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                     {validation.stats?.user_stories_found || 0}
                   </div>
                 </div>
-                <div style={{ background: 'var(--bg-subtle)', padding: '10px', borderRadius: 'var(--radius-sm)' }}>
+                <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Features Backend</div>
-                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                     {validation.stats?.backend_features || 0}
                   </div>
                 </div>
                 {freshnessSummary && (
-                  <div style={{ background: 'var(--bg-subtle)', padding: '10px', borderRadius: 'var(--radius-sm)' }}>
+                  <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-md)' }}>
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>Firmas Ed25519</div>
-                    <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-success)' }}>
+                    <div style={{ fontSize: '16px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', marginTop: '2px' }}>
                       {freshnessSummary.verified_signatures ?? 0}
                     </div>
                   </div>
@@ -658,38 +833,38 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
               </div>
 
               {validation.errors?.length > 0 && (
-                <div style={{ background: 'rgba(239, 68, 68, 0.1)', padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent-danger)', marginBottom: '4px' }}>Errores:</div>
-                  <ul style={{ fontSize: '11px', color: 'var(--accent-danger)', paddingLeft: '18px' }}>
+                <div style={{ background: 'var(--bg-surface)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent-danger)', marginBottom: '4px' }}>Observaciones:</div>
+                  <ul style={{ fontSize: '11.5px', color: 'var(--accent-danger)', paddingLeft: '18px' }}>
                     {validation.errors.map((e, idx) => <li key={idx}>{e}</li>)}
                   </ul>
                 </div>
               )}
             </div>
 
-            {/* Carpetas activas de OKF */}
             {folders.length > 0 && (
               <div style={{
                 backgroundColor: 'var(--bg-card)',
                 border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-md)',
-                padding: '16px',
+                borderRadius: 'var(--radius-lg)',
+                padding: '18px 20px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '10px'
+                gap: '10px',
+                boxShadow: 'var(--shadow-sm)'
               }}>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <FolderOpen size={14} color="var(--accent-primary)" /> Carpetas Activas OKF ({folders.length})
+                <h5 style={{ fontSize: '14px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FolderOpen size={15} color="var(--accent-primary)" /> Carpetas Activas OKF ({folders.length})
                 </h5>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px' }}>
                   {folders.map(folder => (
                     <div
                       key={folder.path}
                       style={{
-                        backgroundColor: 'var(--bg-subtle)',
+                        backgroundColor: 'var(--bg-surface)',
                         border: '1px solid var(--border-subtle)',
-                        borderRadius: 'var(--radius-sm)',
-                        padding: '10px',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '10px 12px',
                         display: 'flex',
                         flexDirection: 'column',
                         gap: '4px'
@@ -712,22 +887,22 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
               </div>
             )}
 
-            {/* Tabla detallada de Freshness */}
-            {freshnessItems.length > 0 && (
+            {filteredFreshnessItems.length > 0 && (
               <div style={{
                 backgroundColor: 'var(--bg-card)',
                 border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-md)',
-                padding: '16px',
+                borderRadius: 'var(--radius-lg)',
+                padding: '18px 20px',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '10px'
+                gap: '10px',
+                boxShadow: 'var(--shadow-sm)'
               }}>
-                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>
-                  Reporte del Algoritmo Freshness ({freshnessItems.length} artefactos)
+                <h5 style={{ fontSize: '14px', fontWeight: 600, margin: 0 }}>
+                  Reporte del Algoritmo Freshness ({filteredFreshnessItems.length} artefactos)
                 </h5>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {freshnessItems.map(item => {
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {filteredFreshnessItems.map(item => {
                     const badge = getFreshnessBadgeMeta(item.status, item.score);
                     return (
                       <div
@@ -738,9 +913,10 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
                           justifyContent: 'space-between',
                           flexWrap: 'wrap',
                           gap: '8px',
-                          padding: '8px 10px',
-                          borderRadius: 'var(--radius-sm)',
-                          backgroundColor: 'var(--bg-subtle)',
+                          padding: '10px 12px',
+                          borderRadius: 'var(--radius-md)',
+                          backgroundColor: 'var(--bg-surface)',
+                          border: '1px solid var(--border-subtle)',
                           fontSize: '11.5px'
                         }}
                       >
@@ -762,7 +938,6 @@ export function OKFGovernanceView({ project, api, externalTagFilter = 'all' }) {
             )}
           </div>
         )}
-
       </div>
     </div>
   );

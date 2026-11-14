@@ -26,8 +26,18 @@ import {
   Activity,
   Globe,
   Tag,
-  Server
+  Server,
+  ArrowUp,
+  ArrowDown,
+  SlidersHorizontal,
+  ArrowRight
 } from 'lucide-react';
+import {
+  DEFAULT_WORKSPACE_TABS,
+  getNavbarConfig,
+  saveNavbarConfig,
+  NAVBAR_CONFIG_EVENT
+} from './AppHeader';
 
 export function SettingsDrawer({
   isOpen,
@@ -36,7 +46,8 @@ export function SettingsDrawer({
   activeProject,
   projectsList,
   initialTab = 'p2p',
-  onGithubStatusChange
+  onGithubStatusChange,
+  onNavigateWorkspaceTab
 }) {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [inviteUrl, setInviteUrl] = useState('');
@@ -98,6 +109,40 @@ export function SettingsDrawer({
 
   const [diagnosticsResult, setDiagnosticsResult] = useState(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [navConfig, setNavConfig] = useState(() => getNavbarConfig());
+
+  useEffect(() => {
+    const syncNav = () => setNavConfig(getNavbarConfig());
+    window.addEventListener(NAVBAR_CONFIG_EVENT, syncNav);
+    return () => window.removeEventListener(NAVBAR_CONFIG_EVENT, syncNav);
+  }, []);
+
+  const orderedNavTabs = navConfig.order
+    .map(id => DEFAULT_WORKSPACE_TABS.find(t => t.id === id))
+    .filter(Boolean);
+  const visibleNavTabsCount = orderedNavTabs.filter(t => !navConfig.hidden.includes(t.id)).length;
+
+  const toggleNavTabVisibility = (tabId) => {
+    const isHidden = navConfig.hidden.includes(tabId);
+    if (!isHidden && visibleNavTabsCount <= 1) return;
+    const nextHidden = isHidden
+      ? navConfig.hidden.filter(id => id !== tabId)
+      : [...navConfig.hidden, tabId];
+    const next = { ...navConfig, hidden: nextHidden };
+    setNavConfig(next);
+    saveNavbarConfig(next);
+  };
+
+  const moveNavTab = (tabId, direction) => {
+    const idx = navConfig.order.indexOf(tabId);
+    const targetIdx = idx + direction;
+    if (idx < 0 || targetIdx < 0 || targetIdx >= navConfig.order.length) return;
+    const nextOrder = [...navConfig.order];
+    [nextOrder[idx], nextOrder[targetIdx]] = [nextOrder[targetIdx], nextOrder[idx]];
+    const next = { ...navConfig, order: nextOrder };
+    setNavConfig(next);
+    saveNavbarConfig(next);
+  };
 
   const targetProject = activeProject || (projectsList && projectsList[0]);
   const targetProjectUuid = targetProject?.project_uuid;
@@ -1299,18 +1344,25 @@ export function SettingsDrawer({
                 </div>
               )}
 
-              {/* Estado Actual */}
-              <div style={{
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-md)',
-                padding: '14px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '8px'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Estado de Sesión:</span>
+              {/* Estado Actual de Sesión e Identidad GitHub */}
+              <div
+                data-testid="github-auth-session-card"
+                style={{
+                  background: 'var(--bg-card)',
+                  border: `1px solid ${githubStatus?.authenticated ? 'rgba(var(--accent-primary-rgb), 0.35)' : 'var(--border-subtle)'}`,
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {githubStatus?.authenticated
+                      ? `Identificado como @${githubStatus.username}`
+                      : 'Sesión No Iniciada'}
+                  </span>
                   <span style={{
                     fontSize: '11px',
                     fontWeight: 600,
@@ -1319,7 +1371,7 @@ export function SettingsDrawer({
                     backgroundColor: githubStatus?.authenticated ? 'rgba(var(--accent-primary-rgb), 0.15)' : 'rgba(239, 68, 68, 0.15)',
                     color: githubStatus?.authenticated ? 'var(--accent-success)' : 'var(--accent-danger)'
                   }}>
-                    {githubStatus?.authenticated ? 'Sesión Activa' : 'No Conectado'}
+                    {githubStatus?.authenticated ? 'Sesión Activa e Identificada' : 'No Conectado'}
                   </span>
                 </div>
 
@@ -1348,7 +1400,7 @@ export function SettingsDrawer({
                 )}
 
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-subtle)', paddingTop: '6px' }}>
-                  {githubStatus?.details}
+                  {githubStatus?.details} El icono de GitHub en la barra superior muestra punto verde cuando estás identificado y rojo si falta autenticación.
                 </div>
               </div>
 
@@ -1528,11 +1580,155 @@ export function SettingsDrawer({
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div>
                 <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>
-                  Manual de Operación & Arquitectura de MCP2P
+                  Manual de Operación, Barra Superior &amp; About de MCP2P
                 </h4>
                 <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
-                  Guía técnica completa para entender y operar los módulos de colaboración local-first, enjambre agéntico y gobernanza P2P.
+                  Guía técnica, referencia de iconos de la barra superior y personalización de accesos rápidos.
                 </p>
+              </div>
+
+              {/* 0. Personalización de Barra Superior & Referencia de Iconos */}
+              <div
+                data-testid="settings-navbar-customizer"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <SlidersHorizontal size={14} /> Personalización de Barra Superior &amp; Acceso a Módulos
+                </h5>
+                <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                  Activa, oculta o reordena los iconos visibles en la barra de navegación superior. Cualquier módulo oculto sigue accesible directamente desde aquí:
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {orderedNavTabs.map((tab, idx) => {
+                    const Icon = tab.icon;
+                    const isHidden = navConfig.hidden.includes(tab.id);
+                    const isLastVisible = !isHidden && visibleNavTabsCount <= 1;
+                    return (
+                      <div
+                        key={tab.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          padding: '6px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'var(--bg-subtle)',
+                          border: '1px solid var(--border-subtle)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                          <Icon size={14} color={isHidden ? 'var(--text-muted)' : 'var(--accent-primary)'} />
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: isHidden ? 'var(--text-muted)' : 'var(--text-primary)' }}>
+                            {tab.label}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                          {activeProject && onNavigateWorkspaceTab && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onNavigateWorkspaceTab(tab.id);
+                                onClose && onClose();
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                fontSize: '10.5px',
+                                fontWeight: 600,
+                                padding: '3px 7px',
+                                borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-subtle)',
+                                backgroundColor: 'var(--bg-surface)',
+                                color: 'var(--text-primary)',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Ir <ArrowRight size={10} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => moveNavTab(tab.id, -1)}
+                            title="Subir"
+                            style={{
+                              width: '22px',
+                              height: '22px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg-surface)',
+                              color: 'var(--text-secondary)',
+                              cursor: idx === 0 ? 'not-allowed' : 'pointer',
+                              opacity: idx === 0 ? 0.4 : 1
+                            }}
+                          >
+                            <ArrowUp size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === orderedNavTabs.length - 1}
+                            onClick={() => moveNavTab(tab.id, 1)}
+                            title="Bajar"
+                            style={{
+                              width: '22px',
+                              height: '22px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg-surface)',
+                              color: 'var(--text-secondary)',
+                              cursor: idx === orderedNavTabs.length - 1 ? 'not-allowed' : 'pointer',
+                              opacity: idx === orderedNavTabs.length - 1 ? 0.4 : 1
+                            }}
+                          >
+                            <ArrowDown size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isLastVisible}
+                            onClick={() => toggleNavTabVisibility(tab.id)}
+                            title={isHidden ? 'Mostrar en barra superior' : 'Ocultar de barra superior'}
+                            style={{
+                              width: '24px',
+                              height: '22px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: isHidden ? 'transparent' : 'rgba(var(--accent-primary-rgb), 0.14)',
+                              color: isHidden ? 'var(--text-muted)' : 'var(--accent-primary)',
+                              cursor: isLastVisible ? 'not-allowed' : 'pointer'
+                            }}
+                          >
+                            {isHidden ? <EyeOff size={11} /> : <Eye size={11} />}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', lineHeight: 1.45 }}>
+                  <strong>Referencia rápida de iconos superiores:</strong> Flecha izquierda (<code style={{ fontFamily: 'var(--font-mono)' }}>&lt;-</code>) vuelve al Hub de Proyectos; Icono GitHub en <strong>verde/rojo</strong> indica sesión identificada en GitHub Auth; Sol/Luna alterna tema; <code style={{ fontFamily: 'var(--font-mono)' }}>?</code> abre este Manual &amp; About; Engranaje abre Configuración P2P, Red y Puertos.
+                </div>
               </div>
 
               {/* 1. Atajos de Teclado */}

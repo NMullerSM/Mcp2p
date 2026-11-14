@@ -24,7 +24,7 @@ export function formatLockRemaining(lockedUntilIso) {
   return `${totalMinutes}min`;
 }
 
-export function CollaboratorsView({ project, api }) {
+export function CollaboratorsView({ project, api, searchQuery = '' }) {
   const [collaborators, setCollaborators] = useState([]);
   const [mcpInfo, setMcpInfo] = useState(null);
   const [connectedAgents, setConnectedAgents] = useState([]);
@@ -146,6 +146,27 @@ export function CollaboratorsView({ project, api }) {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+  const filteredCollaborators = normalizedQuery
+    ? collaborators.filter(c =>
+        [c.developer_name, c.github_username, c.node_uuid, c.role, c.node_kind, c.status]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery)
+      )
+    : collaborators;
+
+  const filteredAgents = normalizedQuery
+    ? connectedAgents.filter(ag =>
+        [ag.developer_name, ag.agent_id, ag.node_uuid, ag.node_kind, ag.model]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery)
+      )
+    : connectedAgents;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: '18px', overflowY: 'auto', paddingRight: '4px', scrollbarGutter: 'stable' }}>
@@ -327,13 +348,17 @@ export function CollaboratorsView({ project, api }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Users size={17} color="var(--accent-primary)" />
             <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
-              Colaboradores del Proyecto ({collaborators.length})
+              Colaboradores del Proyecto ({filteredCollaborators.length})
             </h4>
           </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {collaborators.map((c) => {
+          {filteredCollaborators.length === 0 ? (
+            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+              {normalizedQuery ? 'Ningún colaborador coincide con la búsqueda.' : 'Aún no hay colaboradores registrados.'}
+            </div>
+          ) : filteredCollaborators.map((c) => {
             const isPending = c.status === 'pending_approval';
             const isOwner = c.role === 'owner';
             // locked_until viene precalculado por el backend (get_project_collaborators,
@@ -615,15 +640,15 @@ export function CollaboratorsView({ project, api }) {
         {/* Lista de Agentes Conectados */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
           <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Agentes Conectados al Enjambre ({connectedAgents.length})
+            Agentes Conectados al Enjambre ({filteredAgents.length})
           </div>
 
-          {connectedAgents.length === 0 ? (
+          {filteredAgents.length === 0 ? (
             <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-              Iniciando pasarela MCP... Ningún agente conectado aún.
+              {normalizedQuery ? 'Ningún agente coincide con la búsqueda.' : 'Iniciando pasarela MCP... Ningún agente conectado aún.'}
             </div>
           ) : (
-            connectedAgents.map((ag) => (
+            filteredAgents.map((ag) => (
               <div
                 key={ag.node_uuid}
                 style={{

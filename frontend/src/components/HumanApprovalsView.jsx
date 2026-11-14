@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X } from 'lucide-react';
 
-export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranch }) {
+export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranch, searchQuery = '' }) {
   const [loading, setLoading] = useState(true);
   const [approvals, setApprovals] = useState({
     pending_decisions: [],
@@ -111,6 +111,34 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
       setActionInProgress(null);
     }
   };
+
+  const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+  const matchesQuery = (item) => {
+    if (!normalizedQuery) return true;
+    return [
+      item?.item_id,
+      item?.card_id,
+      item?.ticket_id,
+      item?.id,
+      item?.title,
+      item?.topic,
+      item?.summary,
+      item?.description,
+      item?.branch_ref,
+      item?.branch_name,
+      item?.decision,
+      item?.status,
+      item?.author
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(normalizedQuery);
+  };
+  const filteredPendingDecisions = (approvals.pending_decisions || []).filter(matchesQuery);
+  const filteredOpenDisputes = (approvals.open_disputes || []).filter(matchesQuery);
+  const filteredPendingPrs = (approvals.pending_prs || []).filter(matchesQuery);
+  const filteredHistoryPrecedents = (approvals.history_precedents || []).filter(matchesQuery);
 
   return (
     <div style={{
@@ -335,19 +363,19 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-              Decisiones Arquitectónicas ({approvals.pending_decisions.length})
+              Decisiones Arquitectónicas ({filteredPendingDecisions.length})
             </span>
             <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
               Decisiones arquitectónicas
             </span>
           </div>
 
-          {approvals.pending_decisions.length === 0 ? (
+          {filteredPendingDecisions.length === 0 ? (
             <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px' }}>
-              No hay decisiones pendientes de firma.
+              {normalizedQuery ? 'Ninguna decisión coincide con la búsqueda.' : 'No hay decisiones pendientes de firma.'}
             </div>
           ) : (
-            approvals.pending_decisions.map(dec => (
+            filteredPendingDecisions.map(dec => (
               <div
                 key={dec.item_id}
                 onClick={() => openInspector('decision', dec, dec.item_id)}
@@ -479,19 +507,19 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-              Juicios de Honor Abiertos ({approvals.open_disputes.length})
+              Juicios de Honor Abiertos ({filteredOpenDisputes.length})
             </span>
             <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
               status: open
             </span>
           </div>
 
-          {approvals.open_disputes.length === 0 ? (
+          {filteredOpenDisputes.length === 0 ? (
             <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px' }}>
-              No hay disputas técnicas abiertas.
+              {normalizedQuery ? 'Ninguna disputa coincide con la búsqueda.' : 'No hay disputas técnicas abiertas.'}
             </div>
           ) : (
-            approvals.open_disputes.map(dispute => (
+            filteredOpenDisputes.map(dispute => (
               <div
                 key={dispute.ticket_id}
                 onClick={() => openInspector('jury_vote', dispute, dispute.ticket_id)}
@@ -772,19 +800,19 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-              Tareas en Revisión / PRs ({approvals.pending_prs.length})
+              Tareas en Revisión / PRs ({filteredPendingPrs.length})
             </span>
             <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
               status: in_review
             </span>
           </div>
 
-          {approvals.pending_prs.length === 0 ? (
+          {filteredPendingPrs.length === 0 ? (
             <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '12px' }}>
-              No hay tareas en revisión esperando merge.
+              {normalizedQuery ? 'Ninguna tarea en revisión coincide con la búsqueda.' : 'No hay tareas en revisión esperando merge.'}
             </div>
           ) : (
-            approvals.pending_prs.map(pr => (
+            filteredPendingPrs.map(pr => (
               <div
                 key={pr.card_id}
                 onClick={() => openInspector('pr_merge', pr, pr.card_id)}
@@ -930,7 +958,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
       </div>
 
       {/* 4. SECCIÓN DE TRAZABILIDAD: PRECEDENTES OKF Y JUICIOS RATIFICADOS */}
-      {approvals.history_precedents && approvals.history_precedents.length > 0 && (
+      {filteredHistoryPrecedents.length > 0 && (
         <div style={{
           backgroundColor: 'var(--bg-surface)',
           borderRadius: 'var(--radius-md)',
@@ -944,7 +972,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
             <div>
               <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-                Trazabilidad Histórica: Precedentes y Juicios Ratificados ({approvals.history_precedents.length})
+                Trazabilidad Histórica: Precedentes y Juicios Ratificados ({filteredHistoryPrecedents.length})
               </span>
               <p style={{ margin: '3px 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 Registro inmutable de dictámenes y actas de juicio en la gobernanza OKF.
@@ -956,7 +984,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-            {(historyExpanded ? approvals.history_precedents : approvals.history_precedents.slice(0, 3)).map((item, idx) => (
+            {(historyExpanded ? filteredHistoryPrecedents : filteredHistoryPrecedents.slice(0, 3)).map((item, idx) => (
               <div
                 key={item.id || idx}
                 onClick={() => openInspector(item.type === 'JURY_RULING' ? 'ruling' : 'decision', item, item.id)}
@@ -1030,7 +1058,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             ))}
           </div>
 
-          {approvals.history_precedents.length > 3 && (
+          {filteredHistoryPrecedents.length > 3 && (
             <button
               type="button"
               onClick={() => setHistoryExpanded(prev => !prev)}
@@ -1050,7 +1078,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             >
               {historyExpanded
                 ? 'Ver menos'
-                : `Ver ${approvals.history_precedents.length - 3} más`}
+                : `Ver ${filteredHistoryPrecedents.length - 3} más`}
             </button>
           )}
         </div>

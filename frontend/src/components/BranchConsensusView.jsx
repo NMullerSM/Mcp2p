@@ -33,7 +33,7 @@ const PALETTE = [
   '#43e8d8'  // Cian
 ];
 
-export function BranchConsensusView({ project, api, initialBranch = '', onOpenCard, gitPulseTrigger = 0 }) {
+export function BranchConsensusView({ project, api, initialBranch = '', onOpenCard, gitPulseTrigger = 0, searchQuery = '' }) {
   // Pestaña activa dentro de Control de Cambios: 'graph' (Grafo & Commits) vs 'consensus' (Consenso Dialéctico)
   const [subTab, setSubTab] = useState('graph');
 
@@ -308,10 +308,20 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
     return repoTarget === 'gov' ? (data.git_gov || {}) : (data.git_app || data.git || {});
   }, [data, repoTarget]);
 
-  // Lista de sesiones dialécticas corregida (tanto 'sessions' como 'consensus_sessions')
+  const normalizedQuery = (searchQuery || '').trim().toLowerCase();
+
+  // Lista de sesiones dialécticas filtrada por búsqueda modular
   const consensusSessions = useMemo(() => {
-    return data?.sessions || data?.consensus_sessions || [];
-  }, [data]);
+    const raw = data?.sessions || data?.consensus_sessions || [];
+    if (!normalizedQuery) return raw;
+    return raw.filter(s =>
+      [s.session_id, s.topic, s.branch_name, s.card_id, s.status, s.final_decision, s.summary]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery)
+    );
+  }, [data, normalizedQuery]);
 
   // Tarjetas del proyecto para enlaces bidireccionales
   const projectCards = useMemo(() => {
@@ -323,7 +333,16 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
   // carril queda libre para que una rama posterior en la lista lo reuse, en vez de crecer
   // para siempre hacia la derecha a medida que se abren y cierran ramas con el tiempo.
   const { commitsWithLanes, connections, maxLane } = useMemo(() => {
-    const rawCommits = activeGit.commits || [];
+    const allCommits = activeGit.commits || [];
+    const rawCommits = normalizedQuery
+      ? allCommits.filter(c =>
+          [c.hash, c.short_hash, c.message, c.author, ...(c.refs || [])]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery)
+        )
+      : allCommits;
     if (rawCommits.length === 0) {
       return { commitsWithLanes: [], connections: [], maxLane: 0 };
     }
@@ -417,7 +436,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
       connections: conns,
       maxLane: Math.max(maxLaneUsed, 0)
     };
-  }, [activeGit, projectCards]);
+  }, [activeGit, projectCards, normalizedQuery]);
 
   const ROW_HEIGHT = 44;
   const LANE_WIDTH = 16;
