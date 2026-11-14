@@ -190,3 +190,140 @@ describe('App - stubs de unión pendientes en el hub de proyectos (hallazgo C2)'
     expect(screen.getByText('Unirse vía P2P')).toBeTruthy();
   });
 });
+
+describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hitos 4.1-4.3)', () => {
+  const PROJ_A = {
+    project_uuid: 'proj_alpha',
+    name: 'Proyecto Alpha',
+    join_status: 'active',
+    created_at: '2026-11-10T00:00:00+00:00'
+  };
+  const PROJ_B = {
+    project_uuid: 'proj_beta',
+    name: 'Proyecto Beta',
+    join_status: 'active',
+    created_at: '2026-11-11T00:00:00+00:00'
+  };
+
+  function makeWorkspaceApiOverrides() {
+    return {
+      list_projects: vi.fn(async () => ({ success: true, projects: [PROJ_A, PROJ_B] })),
+      select_project: vi.fn(async () => ({ success: true })),
+      get_system_info: vi.fn(async () => ({ success: true, active_node: 'node_owner' })),
+      get_kanban_board: vi.fn(async () => ({
+        success: true,
+        cards: [
+          {
+            card_id: 'CARD-1',
+            title: 'Implementar Adaptador Hexagonal',
+            description: 'Puerto de dominio limpio',
+            status: 'in_progress',
+            assignee_node_uuid: 'node_alpha_1234',
+            branch_ref: 'feat/hex-core',
+            tags: ['hexagonal', 'backend', 'okf']
+          },
+          {
+            card_id: 'CARD-2',
+            title: 'Auditar Firma Ed25519',
+            description: 'Verificación de llaves',
+            status: 'backlog',
+            assignee_node_uuid: 'node_beta_9999',
+            branch_ref: 'fix/ed25519',
+            tags: ['seguridad']
+          }
+        ]
+      })),
+      subscribe_project_events: vi.fn(async () => ({ success: true })),
+      poll_project_events: vi.fn(async () => ({ success: true, events: [] })),
+      get_okf_tags_index: vi.fn(async () => ({
+        success: true,
+        tags: { hexagonal: ['docs/okf/adr/ADR-001.md'], seguridad: ['docs/okf/backend/auth.md'] },
+        items: [
+          { path: 'docs/okf/adr/ADR-001.md', tags: ['hexagonal'] },
+          { path: 'docs/okf/backend/auth.md', tags: ['seguridad'] }
+        ]
+      })),
+      get_okf_overview: vi.fn(async () => ({
+        success: true,
+        adrs: [
+          {
+            id: 'ADR-001',
+            title: 'Arquitectura Hexagonal',
+            context: 'Separar dominio de adaptadores',
+            decision: 'Puertos y adaptadores',
+            consequences: 'Testabilidad'
+          }
+        ],
+        skills: [
+          { slug: 'auth', area: 'backend', title: 'Seguridad Ed25519' }
+        ],
+        validation: { valid: true, stats: { adrs_found: 1, user_stories_found: 2, backend_features: 1 }, errors: [] }
+      })),
+      get_okf_freshness_report: vi.fn(async () => ({
+        success: true,
+        summary: { total: 2, fresh: 1, aging: 1, stale: 0, avg_score: 0.85, verified_signatures: 1, unverified_adrs: 0 },
+        items: [
+          { path: 'docs/okf/adr/ADR-001.md', id: 'ADR-001', title: 'Arquitectura Hexagonal', score: 0.95, status: 'FRESH', signature_valid: true, commits_after: 1, days_old: 2, tags: ['hexagonal'] },
+          { path: 'docs/okf/backend/auth.md', id: 'auth', title: 'Seguridad Ed25519', score: 0.72, status: 'AGING', signature_valid: false, commits_after: 4, days_old: 15, tags: ['seguridad'] }
+        ]
+      })),
+      list_okf_folders: vi.fn(async () => ({
+        success: true,
+        folders: [
+          { path: 'docs/okf/adr', category: 'adr', description: 'Decisiones', file_count: 1, required: true }
+        ]
+      }))
+    };
+  }
+
+  it('el Combobox de proyectos permite abrir otro proyecto directamente y volver al Hub', async () => {
+    const { api } = await renderReadyApp(makeWorkspaceApiOverrides());
+
+    const switcher = await screen.findByTestId('project-switcher-combobox');
+    expect(switcher.value).toBe('__hub__');
+
+    // Saltar directamente a Proyecto Alpha desde el Combobox
+    fireEvent.change(switcher, { target: { value: 'proj_alpha' } });
+    await waitFor(() => expect(api.select_project).toHaveBeenCalledWith('proj_alpha'));
+    expect(await screen.findByTestId('workspace-toolbar')).toBeTruthy();
+
+    // Saltar directamente a Proyecto Beta desde el Combobox
+    fireEvent.change(screen.getByTestId('project-switcher-combobox'), { target: { value: 'proj_beta' } });
+    await waitFor(() => expect(api.select_project).toHaveBeenCalledWith('proj_beta'));
+
+    // Volver al Hub usando la opción <- Volver al Hub de Proyectos
+    fireEvent.change(screen.getByTestId('project-switcher-combobox'), { target: { value: '__hub__' } });
+    expect(await screen.findByText('Unirse vía P2P')).toBeTruthy();
+  });
+
+  it('aplica Ley de Hick (máx 2 tags + N), filtra por búsqueda/tag y activa Vista Dual (Split) con OKF Freshness', async () => {
+    await renderReadyApp(makeWorkspaceApiOverrides());
+
+    fireEvent.change(await screen.findByTestId('project-switcher-combobox'), { target: { value: 'proj_alpha' } });
+    await screen.findByTestId('kanban-card-CARD-1');
+
+    // Ley de Hick: CARD-1 tiene 3 tags ['hexagonal', 'backend', 'okf'], solo 2 visibles + '+1'
+    expect(screen.getByTestId('card-extra-tags-CARD-1').textContent).toBe('+1');
+
+    // Filtrar por Tag OKF
+    fireEvent.change(screen.getByTestId('workspace-tag-filter'), { target: { value: 'seguridad' } });
+    expect(screen.queryByTestId('kanban-card-CARD-1')).toBeNull();
+    expect(screen.getByTestId('kanban-card-CARD-2')).toBeTruthy();
+
+    // Limpiar filtro y activar Vista Dual (Split)
+    fireEvent.change(screen.getByTestId('workspace-tag-filter'), { target: { value: 'all' } });
+    expect(screen.getByTestId('kanban-card-CARD-1')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('toggle-split-view'));
+    expect(await screen.findByTestId('workspace-split-container')).toBeTruthy();
+
+    // En el panel derecho de Split View se ve OKFGovernanceView con Freshness y Ed25519
+    expect(await screen.findByText(/FRESH · 95%/)).toBeTruthy();
+    expect(screen.getByTestId('ed25519-verified-badge')).toBeTruthy();
+    expect(screen.getByTestId('okf-active-folders-summary').textContent).toContain('docs/okf/adr (1)');
+
+    // Filtrar ADRs por tag YAML dentro de OKFGovernanceView
+    fireEvent.change(screen.getByTestId('okf-tag-filter'), { target: { value: 'seguridad' } });
+    expect(screen.queryByTestId('adr-card-ADR-001')).toBeNull();
+  });
+});

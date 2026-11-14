@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   X,
   Copy,
@@ -16,8 +16,17 @@ import {
   FolderTree,
   FileText,
   FileCode,
-  File,
-  UserCheck
+  UserCheck,
+  FlaskConical,
+  Plus,
+  Trash2,
+  Edit3,
+  Lock,
+  Unlock,
+  Activity,
+  Globe,
+  Tag,
+  Server
 } from 'lucide-react';
 
 export function SettingsDrawer({
@@ -55,8 +64,40 @@ export function SettingsDrawer({
   const [selectedFilePath, setSelectedFilePath] = useState('');
   const [selectedFileContent, setSelectedFileContent] = useState('');
   const [fileLoading, setFileLoading] = useState(false);
-  const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
   const [isAsideHidden, setIsAsideHidden] = useState(!isOpen);
+
+  // Estados Multi-Seed P2P (Hito 4.4)
+  const [p2pSeeds, setP2pSeeds] = useState([]);
+  const [p2pPeers, setP2pPeers] = useState([]);
+  const [newSeedInput, setNewSeedInput] = useState('');
+  const [seedFeedback, setSeedFeedback] = useState(null);
+  const [seedLoading, setSeedLoading] = useState(false);
+
+  // Estados Laboratorio OKF & Puertos (Hito 4.4)
+  const [okfFolders, setOkfFolders] = useState([]);
+  const [newFolderPath, setNewFolderPath] = useState('');
+  const [newFolderCategory, setNewFolderCategory] = useState('custom');
+  const [newFolderDesc, setNewFolderDesc] = useState('');
+  const [renamingFolderPath, setRenamingFolderPath] = useState(null);
+  const [renameTargetInput, setRenameTargetInput] = useState('');
+  const [folderFeedback, setFolderFeedback] = useState(null);
+
+  const [tagsItems, setTagsItems] = useState([]);
+  const [selectedTagPath, setSelectedTagPath] = useState('');
+  const [tagsEditorInput, setTagsEditorInput] = useState('');
+  const [tagsFeedback, setTagsFeedback] = useState(null);
+  const [labFreshness, setLabFreshness] = useState(null);
+  const [freshnessLoading, setFreshnessLoading] = useState(false);
+
+  const [extensionGates, setExtensionGates] = useState([]);
+  const [gateDomainInputs, setGateDomainInputs] = useState({});
+  const [gatePrivateIpsInputs, setGatePrivateIpsInputs] = useState({});
+  const [gateFeedback, setGateFeedback] = useState(null);
+  const [restTestUrl, setRestTestUrl] = useState('https://api.github.com');
+  const [restTestResult, setRestTestResult] = useState(null);
+
+  const [diagnosticsResult, setDiagnosticsResult] = useState(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
 
   const targetProject = activeProject || (projectsList && projectsList[0]);
   const targetProjectUuid = targetProject?.project_uuid;
@@ -74,12 +115,64 @@ export function SettingsDrawer({
     }
   }, [isOpen, initialTab]);
 
+  const loadP2pSeeds = useCallback(async () => {
+    if (!api?.list_p2p_seeds || !targetProjectUuid) return;
+    try {
+      const res = await api.list_p2p_seeds(targetProjectUuid);
+      if (res?.success) {
+        setP2pSeeds(res.seeds || []);
+        setP2pPeers(res.peers || []);
+      }
+    } catch { /* noop */ }
+  }, [api, targetProjectUuid]);
+
+  const loadOkfLabData = useCallback(async () => {
+    if (!api) return;
+    const promises = [
+      targetProjectUuid ? api.list_okf_folders?.(targetProjectUuid) : Promise.resolve(null),
+      targetProjectUuid ? api.get_okf_tags_index?.(targetProjectUuid) : Promise.resolve(null),
+      targetProjectUuid ? api.get_okf_freshness_report?.(targetProjectUuid) : Promise.resolve(null),
+      api.get_extension_gates_status?.()
+    ];
+    const [foldersRes, tagsRes, freshRes, gatesRes] = await Promise.allSettled(promises);
+
+    if (foldersRes?.status === 'fulfilled' && foldersRes.value?.success) {
+      setOkfFolders(foldersRes.value.folders || []);
+    }
+    if (tagsRes?.status === 'fulfilled' && tagsRes.value?.success) {
+      const items = tagsRes.value.items || [];
+      setTagsItems(items);
+      if (items.length > 0) {
+        setSelectedTagPath(prev => {
+          if (prev) return prev;
+          setTagsEditorInput(ed => ed || (items[0].tags || []).join(', '));
+          return items[0].path;
+        });
+      }
+    }
+    if (freshRes?.status === 'fulfilled' && freshRes.value?.success) {
+      setLabFreshness(freshRes.value);
+    }
+    if (gatesRes?.status === 'fulfilled' && gatesRes.value?.success) {
+      const gates = gatesRes.value.gates || [];
+      setExtensionGates(gates);
+      const domainsMap = {};
+      const privateMap = {};
+      gates.forEach(g => {
+        domainsMap[g.connector_id] = Array.isArray(g.allowed_domains) ? g.allowed_domains.join(', ') : '';
+        privateMap[g.connector_id] = Boolean(g.allow_private_ips);
+      });
+      setGateDomainInputs(prev => ({ ...domainsMap, ...prev }));
+      setGatePrivateIpsInputs(prev => ({ ...privateMap, ...prev }));
+    }
+  }, [api, targetProjectUuid]);
+
   const loadOkfTree = async (isCancelled = () => false) => {
     if (!api || !targetProject) return;
     try {
-      const res = await api.get_okf_raw_tree(targetProject.project_uuid);
+      const res = await api.get_okf_raw_tree?.(targetProject.project_uuid);
       if (isCancelled()) return;
-      if (res.success && res.tree?.length > 0) {
+      if (res?.success && res.tree?.length > 0) {
         setOkfTree(res.tree);
         const first = res.tree[0].path;
         setSelectedFilePath(first);
@@ -94,8 +187,8 @@ export function SettingsDrawer({
     if (!api || !targetProject || !path) return;
     setFileLoading(true);
     try {
-      const res = await api.read_okf_file(targetProject.project_uuid, path);
-      if (res.success) {
+      const res = await api.read_okf_file?.(targetProject.project_uuid, path);
+      if (res?.success) {
         setSelectedFilePath(path);
         setSelectedFileContent(res.content);
       }
@@ -111,13 +204,13 @@ export function SettingsDrawer({
     let cancelled = false;
 
     const promises = [
-      api.get_system_info(),
-      api.get_github_status(),
-      api.get_signaling_server_url()
+      api.get_system_info?.(),
+      api.get_github_status?.(),
+      api.get_signaling_server_url?.()
     ];
     if (targetProjectUuid) {
-      promises.push(api.generate_p2p_invite(targetProjectUuid));
-      promises.push(api.get_mcp_config_snippet(targetProjectUuid));
+      promises.push(api.generate_p2p_invite?.(targetProjectUuid));
+      promises.push(api.get_mcp_config_snippet?.(targetProjectUuid));
     }
 
     Promise.allSettled(promises).then(results => {
@@ -151,8 +244,10 @@ export function SettingsDrawer({
       }
     });
 
+    loadP2pSeeds();
+
     return () => { cancelled = true; };
-  }, [isOpen, api, targetProjectUuid, onGithubStatusChange]);
+  }, [isOpen, api, targetProjectUuid, onGithubStatusChange, loadP2pSeeds]);
 
   // Carga perezosa del arbol OKF SOLO cuando la pestaña okf_viewer este activa
   useEffect(() => {
@@ -162,6 +257,12 @@ export function SettingsDrawer({
     loadOkfTree(() => cancelled);
     return () => { cancelled = true; };
   }, [isOpen, api, targetProjectUuid, activeTab]);
+
+  // Carga perezosa de Laboratorio OKF & Puertos cuando la pestaña okf_lab esté activa
+  useEffect(() => {
+    if (!isOpen || !api || activeTab !== 'okf_lab') return;
+    loadOkfLabData();
+  }, [isOpen, api, activeTab, loadOkfLabData]);
 
   const copyToClipboard = (text, setter) => {
     navigator.clipboard.writeText(text);
@@ -252,6 +353,212 @@ export function SettingsDrawer({
     }
   };
 
+  // --- Handlers Multi-Seed P2P (Hito 4.4) ---
+  const handleAddSeed = async () => {
+    const seedUrl = newSeedInput.trim();
+    if (!api?.add_p2p_seed || !targetProjectUuid || !seedUrl) return;
+    setSeedLoading(true);
+    setSeedFeedback(null);
+    try {
+      const res = await api.add_p2p_seed(targetProjectUuid, seedUrl);
+      if (res?.success) {
+        setP2pSeeds(res.seeds || []);
+        setNewSeedInput('');
+        setSeedFeedback({ type: 'success', text: `Seed agregado: ${seedUrl}` });
+      } else {
+        setSeedFeedback({ type: 'error', text: res?.error || 'No se pudo agregar el seed' });
+      }
+    } catch (e) {
+      setSeedFeedback({ type: 'error', text: 'Error al agregar seed: ' + e });
+    } finally {
+      setSeedLoading(false);
+    }
+  };
+
+  const handleRemoveSeed = async (seedUrl) => {
+    if (!api?.remove_p2p_seed || !targetProjectUuid) return;
+    setSeedLoading(true);
+    setSeedFeedback(null);
+    try {
+      const res = await api.remove_p2p_seed(targetProjectUuid, seedUrl);
+      if (res?.success) {
+        setP2pSeeds(res.seeds || []);
+        setSeedFeedback({ type: 'info', text: `Seed eliminado: ${seedUrl}` });
+      } else {
+        setSeedFeedback({ type: 'error', text: res?.error || 'No se pudo eliminar el seed' });
+      }
+    } catch (e) {
+      setSeedFeedback({ type: 'error', text: 'Error al eliminar seed: ' + e });
+    } finally {
+      setSeedLoading(false);
+    }
+  };
+
+  // --- Handlers Laboratorio OKF & Puertos (Hito 4.4) ---
+  const handleAddOkfFolder = async () => {
+    const folderPath = newFolderPath.trim();
+    if (!api?.add_okf_folder || !targetProjectUuid || !folderPath) return;
+    setFolderFeedback(null);
+    try {
+      const res = await api.add_okf_folder(targetProjectUuid, folderPath, newFolderCategory || 'custom', newFolderDesc.trim());
+      if (res?.success) {
+        setOkfFolders(res.folders || []);
+        setNewFolderPath('');
+        setNewFolderDesc('');
+        setFolderFeedback({ type: 'success', text: `Carpeta OKF agregada: ${folderPath}` });
+      } else {
+        setFolderFeedback({ type: 'error', text: res?.error || 'No se pudo agregar la carpeta' });
+      }
+    } catch (e) {
+      setFolderFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleRenameOkfFolder = async (oldPath) => {
+    const newPath = renameTargetInput.trim();
+    if (!api?.rename_okf_folder || !targetProjectUuid || !newPath || newPath === oldPath) {
+      setRenamingFolderPath(null);
+      return;
+    }
+    setFolderFeedback(null);
+    try {
+      const res = await api.rename_okf_folder(targetProjectUuid, oldPath, newPath);
+      if (res?.success) {
+        setOkfFolders(res.folders || []);
+        setRenamingFolderPath(null);
+        setRenameTargetInput('');
+        setFolderFeedback({ type: 'success', text: `Carpeta renombrada a ${newPath}` });
+      } else {
+        setFolderFeedback({ type: 'error', text: res?.error || 'Error al renombrar carpeta' });
+      }
+    } catch (e) {
+      setFolderFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleRemoveOkfFolder = async (folderPath) => {
+    if (!api?.remove_okf_folder || !targetProjectUuid) return;
+    setFolderFeedback(null);
+    try {
+      const res = await api.remove_okf_folder(targetProjectUuid, folderPath, true);
+      if (res?.success) {
+        setOkfFolders(res.folders || []);
+        setFolderFeedback({ type: 'info', text: `Carpeta archivada/eliminada: ${folderPath}` });
+      } else {
+        setFolderFeedback({ type: 'error', text: res?.error || 'Error al eliminar carpeta' });
+      }
+    } catch (e) {
+      setFolderFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleSaveArtifactTags = async () => {
+    if (!api?.update_artifact_tags || !targetProjectUuid || !selectedTagPath.trim()) return;
+    setTagsFeedback(null);
+    const parsedTags = tagsEditorInput
+      .split(',')
+      .map(t => t.trim())
+      .filter(Boolean);
+    try {
+      const res = await api.update_artifact_tags(targetProjectUuid, selectedTagPath.trim(), parsedTags);
+      if (res?.success) {
+        if (res.index?.items) {
+          setTagsItems(res.index.items);
+        } else {
+          setTagsItems(prev => {
+            const exists = prev.some(i => i.path === selectedTagPath.trim());
+            if (!exists) return [...prev, { path: selectedTagPath.trim(), tags: res.tags || parsedTags }];
+            return prev.map(i => (i.path === selectedTagPath.trim() ? { ...i, tags: res.tags || parsedTags } : i));
+          });
+        }
+        setTagsFeedback({ type: 'success', text: `Tags YAML actualizados en ${res.path || selectedTagPath.trim()}` });
+      } else {
+        setTagsFeedback({ type: 'error', text: res?.error || 'No se pudieron guardar los tags' });
+      }
+    } catch (e) {
+      setTagsFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleRunFreshnessReport = async () => {
+    if (!api?.get_okf_freshness_report || !targetProjectUuid) return;
+    setFreshnessLoading(true);
+    try {
+      const res = await api.get_okf_freshness_report(targetProjectUuid);
+      if (res?.success) {
+        setLabFreshness(res);
+      }
+    } catch (e) {
+      console.error('Error ejecutando Freshness:', e);
+    } finally {
+      setFreshnessLoading(false);
+    }
+  };
+
+  const handleUnlockGate = async (connectorId) => {
+    if (!api?.unlock_extension_gate) return;
+    setGateFeedback(null);
+    const domainsRaw = gateDomainInputs[connectorId] || '';
+    const allowedDomains = domainsRaw.split(',').map(d => d.trim()).filter(Boolean);
+    const allowPrivate = Boolean(gatePrivateIpsInputs[connectorId]);
+    try {
+      const res = await api.unlock_extension_gate(connectorId, allowedDomains, allowPrivate);
+      if (res?.success && res.gate) {
+        setExtensionGates(prev => {
+          const exists = prev.some(g => g.connector_id === connectorId);
+          return exists
+            ? prev.map(g => (g.connector_id === connectorId ? res.gate : g))
+            : [...prev, res.gate];
+        });
+        setGateFeedback({ type: 'success', text: `Puerta '${connectorId}' desbloqueada con firma Ed25519.` });
+      } else {
+        setGateFeedback({ type: 'error', text: res?.error || 'Error al desbloquear puerta' });
+      }
+    } catch (e) {
+      setGateFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleLockGate = async (connectorId) => {
+    if (!api?.lock_extension_gate) return;
+    setGateFeedback(null);
+    try {
+      const res = await api.lock_extension_gate(connectorId);
+      if (res?.success && res.gate) {
+        setExtensionGates(prev => prev.map(g => (g.connector_id === connectorId ? res.gate : g)));
+        setGateFeedback({ type: 'info', text: `Puerta '${connectorId}' cerrada.` });
+      } else {
+        setGateFeedback({ type: 'error', text: res?.error || 'Error al cerrar puerta' });
+      }
+    } catch (e) {
+      setGateFeedback({ type: 'error', text: 'Error: ' + e });
+    }
+  };
+
+  const handleTestRestGate = async () => {
+    if (!api?.test_outbound_rest_gate || !restTestUrl.trim()) return;
+    setRestTestResult(null);
+    try {
+      const res = await api.test_outbound_rest_gate('outbound_rest', restTestUrl.trim());
+      setRestTestResult(res);
+    } catch (e) {
+      setRestTestResult({ success: false, blocked_reason: String(e) });
+    }
+  };
+
+  const handleRunDiagnostics = async () => {
+    if (!api?.run_system_diagnostics) return;
+    setDiagnosticsLoading(true);
+    try {
+      const res = await api.run_system_diagnostics(targetProjectUuid || '');
+      setDiagnosticsResult(res);
+    } catch (e) {
+      setDiagnosticsResult({ success: false, checks: [{ name: 'Bridge RPC', status: 'failed', detail: String(e) }], summary: { passed: 0, failed: 1 } });
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
+
   return (
     <>
       {/* Backdrop (FLK-03: sin blur, animado por opacidad, siempre montado) */}
@@ -334,6 +641,7 @@ export function SettingsDrawer({
         }}>
           {[
             { id: 'okf_viewer', label: 'Visor OKF', icon: FolderTree },
+            { id: 'okf_lab', label: 'Laboratorio OKF & Puertos', icon: FlaskConical },
             { id: 'p2p', label: 'Enlace P2P', icon: Share2 },
             { id: 'mcp', label: 'Agentes MCP', icon: Terminal },
             { id: 'github', label: 'GitHub Auth', icon: Github },
@@ -681,6 +989,191 @@ export function SettingsDrawer({
                   >
                     {signalingUrlLoading ? 'Guardando...' : 'Guardar'}
                   </button>
+                </div>
+              </div>
+
+              {/* Gestión de Múltiples Seeds P2P y Pares Conectados (Hito 4.4) */}
+              <div
+                data-testid="p2p-multi-seed-section"
+                style={{
+                  marginTop: '16px',
+                  background: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Server size={14} color="var(--accent-primary)" /> Múltiples Seeds P2P &amp; Pares Conectados
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={loadP2pSeeds}
+                    title="Refrescar seeds y pares"
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '4px 7px',
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11px'
+                    }}
+                  >
+                    <RefreshCw size={12} /> Refrescar
+                  </button>
+                </div>
+
+                {seedFeedback && (
+                  <div style={{
+                    padding: '7px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '11px',
+                    backgroundColor: seedFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(var(--accent-primary-rgb), 0.14)',
+                    color: seedFeedback.type === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)'
+                  }}>
+                    {seedFeedback.text}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <input
+                    type="text"
+                    data-testid="p2p-seed-input"
+                    placeholder="wss://seed-2.example.com:8765"
+                    value={newSeedInput}
+                    onChange={(e) => setNewSeedInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '7px 10px',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)',
+                      outline: 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="add-p2p-seed-btn"
+                    onClick={handleAddSeed}
+                    disabled={seedLoading || !newSeedInput.trim() || !targetProjectUuid}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '7px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: seedLoading || !newSeedInput.trim() ? 'not-allowed' : 'pointer',
+                      opacity: seedLoading || !newSeedInput.trim() ? 0.6 : 1,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    <Plus size={13} /> Agregar Seed
+                  </button>
+                </div>
+
+                {/* Lista de Seeds */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Seeds Configurados ({p2pSeeds.length})
+                  </div>
+                  {p2pSeeds.length === 0 ? (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      No hay seeds adicionales registrados para este proyecto.
+                    </div>
+                  ) : (
+                    p2pSeeds.map((seedItem, idx) => {
+                      const seedUrl = typeof seedItem === 'string' ? seedItem : (seedItem?.url || seedItem?.seed_url || JSON.stringify(seedItem));
+                      return (
+                        <div
+                          key={`${seedUrl}-${idx}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            padding: '6px 10px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-subtle)',
+                            fontSize: '11.5px',
+                            fontFamily: 'var(--font-mono)'
+                          }}
+                        >
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{seedUrl}</span>
+                          <button
+                            type="button"
+                            aria-label={`Eliminar seed ${seedUrl}`}
+                            onClick={() => handleRemoveSeed(seedUrl)}
+                            disabled={seedLoading}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '3px 7px',
+                              fontSize: '11px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid rgba(239, 68, 68, 0.35)',
+                              backgroundColor: 'transparent',
+                              color: 'var(--accent-danger)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Trash2 size={11} /> Eliminar
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Lista de Pares Conectados */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px' }}>
+                  <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Pares Conectados ({p2pPeers.length})
+                  </div>
+                  {p2pPeers.length === 0 ? (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Sin pares P2P conectados actualmente.</div>
+                  ) : (
+                    p2pPeers.map((peer, idx) => {
+                      const peerLabel = typeof peer === 'string'
+                        ? peer
+                        : (peer.node_uuid || peer.peer_id || peer.url || peer.address || `peer-${idx}`);
+                      const peerStatus = typeof peer === 'object' ? (peer.status || peer.state || 'connected') : 'connected';
+                      return (
+                        <div
+                          key={`${peerLabel}-${idx}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '5px 9px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-subtle)',
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)'
+                          }}
+                        >
+                          <span>{peerLabel}</span>
+                          <span className="mcp-badge-fresh">{peerStatus}</span>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </div>
@@ -1185,13 +1678,705 @@ export function SettingsDrawer({
                   padding: '12px 14px'
                 }}>
                   <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
-                    6. Visor OKF & Archivos en Crudo
+                    6. Visor OKF &amp; Archivos en Crudo
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
                     Ubicado en la primera pestaña de este drawer lateral. Te permite explorar el árbol de archivos de gobernanza (<code>docs/okf/</code>), leer especificaciones de arquitectura y revisar los registros de decisión de arquitectura (ADRs) sin recargar la interfaz principal.
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* TAB 5: Laboratorio OKF & Puertos (Hito 4.4) */}
+          {activeTab === 'okf_lab' && (
+            <div data-testid="okf-lab-panel" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              <div>
+                <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '0 0 4px 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FlaskConical size={16} color="var(--accent-primary)" /> Laboratorio OKF &amp; Puertos de Extensión
+                </h4>
+                <p style={{ fontSize: '11.5px', color: 'var(--text-secondary)', margin: 0 }}>
+                  Administra carpetas de conocimiento OKF, etiquetas YAML, algoritmo Freshness, Puertas con Llave Ed25519 y autodiagnóstico en vivo.
+                </p>
+              </div>
+
+              {/* (a) Gestor de Carpetas OKF */}
+              <section
+                data-testid="okf-folders-manager"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FolderTree size={14} color="var(--accent-primary)" /> Gestor de Carpetas OKF ({okfFolders.length})
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={loadOkfLabData}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '3px 7px',
+                      color: 'var(--text-secondary)',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <RefreshCw size={11} /> Sincronizar
+                  </button>
+                </div>
+
+                {folderFeedback && (
+                  <div style={{
+                    padding: '6px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '11px',
+                    backgroundColor: folderFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(var(--accent-primary-rgb), 0.14)',
+                    color: folderFeedback.type === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)'
+                  }}>
+                    {folderFeedback.text}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1.2fr auto', gap: '6px' }}>
+                  <input
+                    type="text"
+                    data-testid="okf-new-folder-path"
+                    placeholder="docs/okf/runbooks"
+                    value={newFolderPath}
+                    onChange={(e) => setNewFolderPath(e.target.value)}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '11.5px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)'
+                    }}
+                  />
+                  <select
+                    data-testid="okf-new-folder-category"
+                    value={newFolderCategory}
+                    onChange={(e) => setNewFolderCategory(e.target.value)}
+                    className="mcp-combobox"
+                    style={{ height: '30px', fontSize: '11.5px' }}
+                  >
+                    <option value="custom">custom</option>
+                    <option value="adr">adr</option>
+                    <option value="backend">backend</option>
+                    <option value="frontend">frontend</option>
+                    <option value="audit">audit</option>
+                  </select>
+                  <input
+                    type="text"
+                    data-testid="okf-new-folder-desc"
+                    placeholder="Descripción breve"
+                    value={newFolderDesc}
+                    onChange={(e) => setNewFolderDesc(e.target.value)}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '11.5px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="okf-add-folder-btn"
+                    onClick={handleAddOkfFolder}
+                    disabled={!newFolderPath.trim() || !targetProjectUuid}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '6px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: newFolderPath.trim() ? 'pointer' : 'not-allowed',
+                      opacity: newFolderPath.trim() ? 1 : 0.6
+                    }}
+                  >
+                    <Plus size={12} /> Agregar
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {okfFolders.length === 0 ? (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Sin carpetas OKF listadas.</div>
+                  ) : (
+                    okfFolders.map(folder => {
+                      const isRenaming = renamingFolderPath === folder.path;
+                      return (
+                        <div
+                          key={folder.path}
+                          data-testid={`okf-folder-row-${folder.path}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '8px',
+                            padding: '7px 10px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-subtle)',
+                            fontSize: '11.5px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 }}>
+                            {isRenaming ? (
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                <input
+                                  type="text"
+                                  data-testid={`okf-rename-input-${folder.path}`}
+                                  value={renameTargetInput}
+                                  onChange={(e) => setRenameTargetInput(e.target.value)}
+                                  style={{
+                                    padding: '4px 7px',
+                                    fontSize: '11px',
+                                    fontFamily: 'var(--font-mono)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: '1px solid var(--accent-primary)',
+                                    backgroundColor: 'var(--bg-surface)',
+                                    color: 'var(--text-primary)'
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  data-testid={`okf-rename-confirm-${folder.path}`}
+                                  onClick={() => handleRenameOkfFolder(folder.path)}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: 'none',
+                                    backgroundColor: 'var(--accent-primary)',
+                                    color: '#ffffff',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRenamingFolderPath(null)}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '11px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: '1px solid var(--border-subtle)',
+                                    backgroundColor: 'transparent',
+                                    color: 'var(--text-secondary)',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{folder.path}</span>
+                                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({folder.category})</span>
+                                  <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>
+                                    {folder.file_count ?? 0} arch.
+                                  </span>
+                                  {folder.required && (
+                                    <span style={{ fontSize: '9.5px', padding: '1px 5px', borderRadius: '3px', backgroundColor: 'rgba(var(--accent-indigo-rgb), 0.16)', color: 'var(--accent-indigo)' }}>
+                                      requerida
+                                    </span>
+                                  )}
+                                </div>
+                                {folder.description && (
+                                  <span style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{folder.description}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+
+                          {!isRenaming && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <button
+                                type="button"
+                                aria-label={`Renombrar ${folder.path}`}
+                                onClick={() => {
+                                  setRenamingFolderPath(folder.path);
+                                  setRenameTargetInput(folder.path);
+                                }}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  padding: '3px 7px',
+                                  fontSize: '11px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  border: '1px solid var(--border-subtle)',
+                                  backgroundColor: 'var(--bg-surface)',
+                                  color: 'var(--text-primary)',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <Edit3 size={11} /> Renombrar
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Eliminar ${folder.path}`}
+                                disabled={Boolean(folder.required)}
+                                onClick={() => handleRemoveOkfFolder(folder.path)}
+                                title={folder.required ? 'Carpeta estructural requerida por OKF' : 'Archivar o eliminar carpeta'}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  padding: '3px 7px',
+                                  fontSize: '11px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  border: '1px solid rgba(239, 68, 68, 0.35)',
+                                  backgroundColor: 'transparent',
+                                  color: 'var(--accent-danger)',
+                                  cursor: folder.required ? 'not-allowed' : 'pointer',
+                                  opacity: folder.required ? 0.45 : 1
+                                }}
+                              >
+                                <Trash2 size={11} /> Eliminar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </section>
+
+              {/* (b) Editor de Tags YAML + Ejecutor de Algoritmo Freshness & Firmas */}
+              <section
+                data-testid="okf-tags-freshness-lab"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Tag size={14} color="var(--accent-indigo)" /> Editor de Tags YAML &amp; Algoritmo Freshness
+                  </h5>
+                  <button
+                    type="button"
+                    data-testid="run-freshness-btn"
+                    onClick={handleRunFreshnessReport}
+                    disabled={freshnessLoading || !targetProjectUuid}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '5px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--accent-primary)',
+                      backgroundColor: 'rgba(var(--accent-primary-rgb), 0.14)',
+                      color: 'var(--accent-primary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Activity size={12} /> {freshnessLoading ? 'Analizando...' : 'Ejecutar Freshness & Firmas'}
+                  </button>
+                </div>
+
+                {tagsFeedback && (
+                  <div style={{
+                    padding: '6px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '11px',
+                    backgroundColor: tagsFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(var(--accent-primary-rgb), 0.14)',
+                    color: tagsFeedback.type === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)'
+                  }}>
+                    {tagsFeedback.text}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr auto', gap: '6px', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    data-testid="okf-tag-artifact-path"
+                    list="okf-tags-artifacts-list"
+                    placeholder="docs/okf/adr/ADR-001.md"
+                    value={selectedTagPath}
+                    onChange={(e) => {
+                      const pathVal = e.target.value;
+                      setSelectedTagPath(pathVal);
+                      const matched = tagsItems.find(it => it.path === pathVal);
+                      if (matched) setTagsEditorInput((matched.tags || []).join(', '));
+                    }}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '11.5px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)'
+                    }}
+                  />
+                  <datalist id="okf-tags-artifacts-list">
+                    {tagsItems.map(it => (
+                      <option key={it.path} value={it.path} />
+                    ))}
+                  </datalist>
+                  <input
+                    type="text"
+                    data-testid="okf-tag-values-input"
+                    placeholder="hexagonal, seguridad, p2p"
+                    value={tagsEditorInput}
+                    onChange={(e) => setTagsEditorInput(e.target.value)}
+                    style={{
+                      padding: '6px 8px',
+                      fontSize: '11.5px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="okf-save-tags-btn"
+                    onClick={handleSaveArtifactTags}
+                    disabled={!selectedTagPath.trim() || !targetProjectUuid}
+                    style={{
+                      padding: '6px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-indigo)',
+                      color: '#ffffff',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Guardar Tags
+                  </button>
+                </div>
+
+                {labFreshness?.summary && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
+                    <span className="mcp-badge-fresh">FRESH {labFreshness.summary.fresh ?? 0}</span>
+                    <span className="mcp-badge-aging">AGING {labFreshness.summary.aging ?? 0}</span>
+                    <span className="mcp-badge-stale">STALE {labFreshness.summary.stale ?? 0}</span>
+                    <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+                      Firmas Ed25519: {labFreshness.summary.verified_signatures ?? 0} · Sin firma: {labFreshness.summary.unverified_adrs ?? 0}
+                    </span>
+                  </div>
+                )}
+              </section>
+
+              {/* (c) Puerta con Llave para Conectores Externos */}
+              <section
+                data-testid="extension-gates-section"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Key size={14} color="var(--accent-warning)" /> Puerta con Llave — Conectores Externos (Ed25519)
+                </h5>
+
+                {gateFeedback && (
+                  <div style={{
+                    padding: '6px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '11px',
+                    backgroundColor: gateFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(var(--accent-primary-rgb), 0.14)',
+                    color: gateFeedback.type === 'error' ? 'var(--accent-danger)' : 'var(--accent-success)'
+                  }}>
+                    {gateFeedback.text}
+                  </div>
+                )}
+
+                {(extensionGates.length > 0
+                  ? extensionGates
+                  : [
+                      { connector_id: 'outbound_rest', unlocked: false, allowed_domains: [], allow_private_ips: false, circuit_state: 'closed' },
+                      { connector_id: 'agent_terminal_matrix', unlocked: false, allowed_domains: [], allow_private_ips: false, circuit_state: 'closed' }
+                    ]
+                ).map(gate => {
+                  const id = gate.connector_id;
+                  const domainsVal = gateDomainInputs[id] ?? (Array.isArray(gate.allowed_domains) ? gate.allowed_domains.join(', ') : '');
+                  const privateIpsVal = gatePrivateIpsInputs[id] ?? Boolean(gate.allow_private_ips);
+
+                  return (
+                    <div
+                      key={id}
+                      data-testid={`gate-card-${id}`}
+                      style={{
+                        backgroundColor: 'var(--bg-subtle)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-sm)',
+                        padding: '10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '8px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {gate.unlocked ? <Unlock size={13} color="var(--accent-success)" /> : <Lock size={13} color="var(--accent-warning)" />}
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 700 }}>{id}</span>
+                          <span className={gate.unlocked ? 'mcp-badge-fresh' : 'mcp-badge-aging'}>
+                            {gate.unlocked ? 'DESBLOQUEADA' : 'CERRADA'}
+                          </span>
+                          {gate.circuit_state && (
+                            <span style={{ fontSize: '10.5px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                              circuit: {gate.circuit_state}
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button
+                            type="button"
+                            data-testid={`unlock-gate-${id}`}
+                            onClick={() => handleUnlockGate(id)}
+                            style={{
+                              padding: '4px 9px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              borderRadius: 'var(--radius-sm)',
+                              border: 'none',
+                              backgroundColor: 'var(--accent-primary)',
+                              color: '#ffffff',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Desbloquear con Llave Ed25519
+                          </button>
+                          <button
+                            type="button"
+                            data-testid={`lock-gate-${id}`}
+                            onClick={() => handleLockGate(id)}
+                            style={{
+                              padding: '4px 9px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              borderRadius: 'var(--radius-sm)',
+                              border: '1px solid var(--border-subtle)',
+                              backgroundColor: 'var(--bg-surface)',
+                              color: 'var(--text-primary)',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Cerrar Puerta
+                          </button>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                        <input
+                          type="text"
+                          data-testid={`gate-domains-${id}`}
+                          placeholder="Dominios permitidos (ej: api.github.com, docs.python.org)"
+                          value={domainsVal}
+                          onChange={(e) => setGateDomainInputs(prev => ({ ...prev, [id]: e.target.value }))}
+                          style={{
+                            flex: 1,
+                            minWidth: '200px',
+                            padding: '5px 8px',
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-subtle)',
+                            backgroundColor: 'var(--bg-surface)',
+                            color: 'var(--text-primary)'
+                          }}
+                        />
+                        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={privateIpsVal}
+                            onChange={(e) => setGatePrivateIpsInputs(prev => ({ ...prev, [id]: e.target.checked }))}
+                          />
+                          Permitir IPs privadas
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Probador de URL en conector outbound_rest */}
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px' }}>
+                  <Globe size={13} color="var(--text-muted)" />
+                  <input
+                    type="text"
+                    data-testid="rest-gate-test-url"
+                    placeholder="https://api.github.com/zen"
+                    value={restTestUrl}
+                    onChange={(e) => setRestTestUrl(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      fontSize: '11.5px',
+                      fontFamily: 'var(--font-mono)',
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-subtle)',
+                      color: 'var(--text-primary)'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    data-testid="rest-gate-test-btn"
+                    onClick={handleTestRestGate}
+                    style={{
+                      padding: '6px 10px',
+                      fontSize: '11.5px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: '1px solid var(--border-subtle)',
+                      backgroundColor: 'var(--bg-surface)',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Probar URL REST
+                  </button>
+                </div>
+                {restTestResult && (
+                  <div
+                    data-testid="rest-gate-test-result"
+                    style={{
+                      padding: '7px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '11px',
+                      fontFamily: 'var(--font-mono)',
+                      backgroundColor: restTestResult.success ? 'rgba(var(--accent-primary-rgb), 0.14)' : 'rgba(239, 68, 68, 0.14)',
+                      color: restTestResult.success ? 'var(--accent-success)' : 'var(--accent-danger)'
+                    }}
+                  >
+                    {restTestResult.success
+                      ? `OK (${restTestResult.status_code ?? 200}): ${restTestResult.preview || 'Acceso permitido'}`
+                      : `Bloqueado: ${restTestResult.blocked_reason || 'Sin acceso'}`}
+                  </div>
+                )}
+              </section>
+
+              {/* (d) Banco de Autodiagnóstico en Vivo */}
+              <section
+                data-testid="system-diagnostics-section"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <h5 style={{ fontSize: '13px', fontWeight: 600, margin: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <ShieldCheck size={14} color="var(--accent-success)" /> Banco de Autodiagnóstico en Vivo
+                  </h5>
+                  <button
+                    type="button"
+                    data-testid="run-diagnostics-btn"
+                    onClick={handleRunDiagnostics}
+                    disabled={diagnosticsLoading}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      backgroundColor: 'var(--accent-primary)',
+                      color: '#ffffff',
+                      cursor: diagnosticsLoading ? 'not-allowed' : 'pointer',
+                      opacity: diagnosticsLoading ? 0.65 : 1
+                    }}
+                  >
+                    <Activity size={13} /> {diagnosticsLoading ? 'Ejecutando...' : 'Ejecutar Diagnóstico Completo'}
+                  </button>
+                </div>
+
+                {diagnosticsResult && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {diagnosticsResult.summary && (
+                      <div style={{ fontSize: '11.5px', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                        Resumen: <span style={{ color: 'var(--accent-success)' }}>{diagnosticsResult.summary.passed ?? 0} OK</span>
+                        {' · '}
+                        <span style={{ color: (diagnosticsResult.summary.failed ?? 0) > 0 ? 'var(--accent-danger)' : 'var(--text-muted)' }}>
+                          {diagnosticsResult.summary.failed ?? 0} Fallos
+                        </span>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      {(diagnosticsResult.checks || []).map((chk, idx) => {
+                        const ok = chk.status === 'passed' || chk.status === 'ok' || chk.status === 'pass';
+                        return (
+                          <div
+                            key={`${chk.name}-${idx}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '8px',
+                              padding: '6px 9px',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg-subtle)',
+                              fontSize: '11px'
+                            }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <span style={{ fontWeight: 600 }}>{chk.name}</span>
+                              {chk.detail && (
+                                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-secondary)' }}>
+                                  {chk.detail}
+                                </span>
+                              )}
+                            </div>
+                            <span className={ok ? 'mcp-badge-fresh' : 'mcp-badge-stale'}>
+                              {String(chk.status || '').toUpperCase()}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </section>
             </div>
           )}
 
