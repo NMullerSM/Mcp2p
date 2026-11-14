@@ -211,9 +211,26 @@ tar -xzf {q_archive} -C {q_extract}
 if [ ! -f {q_extract}/Mcp2p/Mcp2p ]; then
     exit 1
 fi
+# Modo portable: mcp2p_local.db y workspace/ pueden vivir DENTRO de {q_app_dir}
+# (ver src/app/paths.py::get_user_data_dir). El reemplazo en caliente de más abajo
+# hace rm -rf sobre esa misma carpeta, así que primero se sacan a un directorio
+# temporal fuera de {q_app_dir} y se restauran después de copiar el build nuevo —
+# sin esto, cada actualización portable borraría la base de datos del usuario y
+# todos los proyectos clonados. No-op seguro si no existen (instalación nueva, o
+# datos ya redirigidos a un directorio de usuario separado).
+PRESERVE_DIR=$(mktemp -d)
+[ -f {q_app_dir}/mcp2p_local.db ] && mv {q_app_dir}/mcp2p_local.db "$PRESERVE_DIR/"
+[ -f {q_app_dir}/mcp2p_local.db-wal ] && mv {q_app_dir}/mcp2p_local.db-wal "$PRESERVE_DIR/"
+[ -f {q_app_dir}/mcp2p_local.db-shm ] && mv {q_app_dir}/mcp2p_local.db-shm "$PRESERVE_DIR/"
+[ -d {q_app_dir}/workspace ] && mv {q_app_dir}/workspace "$PRESERVE_DIR/"
 rm -rf {q_app_dir}
 mkdir -p {q_app_dir}
 cp -a {q_extract}/Mcp2p/. {q_app_dir}/
+[ -f "$PRESERVE_DIR/mcp2p_local.db" ] && mv "$PRESERVE_DIR/mcp2p_local.db" {q_app_dir}/
+[ -f "$PRESERVE_DIR/mcp2p_local.db-wal" ] && mv "$PRESERVE_DIR/mcp2p_local.db-wal" {q_app_dir}/
+[ -f "$PRESERVE_DIR/mcp2p_local.db-shm" ] && mv "$PRESERVE_DIR/mcp2p_local.db-shm" {q_app_dir}/
+[ -d "$PRESERVE_DIR/workspace" ] && mv "$PRESERVE_DIR/workspace" {q_app_dir}/
+rm -rf "$PRESERVE_DIR"
 rm -rf {q_extract}
 chmod 755 {q_app_dir}/Mcp2p {q_app_dir}/mcp2p.sh 2>/dev/null || true
 nohup {q_app_dir}/mcp2p.sh >/dev/null 2>&1 &

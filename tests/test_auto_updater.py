@@ -1,5 +1,8 @@
 import os
 import sys
+import shutil
+import subprocess
+import tarfile
 import tempfile
 import pytest
 from src.app.auto_updater import AutoUpdateManager, OFFICIAL_RELEASE_PREFIX
@@ -166,6 +169,72 @@ def test_validate_portable_app_dir_guard():
         with open(os.path.join(app_dir, "Mcp2p"), "w") as f:
             f.write("binario simulado")
         assert manager._validate_portable_app_dir(app_dir) is True
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="El script de reemplazo en caliente generado es bash, solo aplica a Linux/macOS.",
+)
+def test_linux_relaunch_script_preserves_db_and_workspace_across_rm_rf(monkeypatch):
+    """Regresión: en modo portable, mcp2p_local.db y workspace/ viven DENTRO de
+    app_dir (ver paths.get_user_data_dir). El script de reemplazo en caliente hace
+    `rm -rf {app_dir}` para instalar la versión nueva — sin preservar/restaurar esos
+    datos, cada auto-actualización portable destruye la base de datos del usuario y
+    todos los proyectos clonados. Este test ejecuta el script bash real generado,
+    de punta a punta, sobre carpetas temporales (nunca toca el repo real)."""
+    with tempfile.TemporaryDirectory() as tmp_root:
+        # 1. App dir "portable" existente, con datos de usuario adentro (el escenario real).
+        app_dir = os.path.join(tmp_root, "Mcp2p")
+        os.makedirs(app_dir)
+        with open(os.path.join(app_dir, "Mcp2p"), "w") as f:
+            f.write("binario viejo simulado")
+        with open(os.path.join(app_dir, "mcp2p_local.db"), "w") as f:
+            f.write("DATOS CRITICOS DEL USUARIO")
+        with open(os.path.join(app_dir, "mcp2p_local.db-wal"), "w") as f:
+            f.write("wal")
+        with open(os.path.join(app_dir, "mcp2p_local.db-shm"), "w") as f:
+            f.write("shm")
+        workspace_dir = os.path.join(app_dir, "workspace", "proyecto_clonado")
+        os.makedirs(workspace_dir)
+        with open(os.path.join(workspace_dir, "archivo_del_proyecto.txt"), "w") as f:
+            f.write("contenido real de un repo clonado")
+
+        # 2. Tarball de "release nueva" válido (igual a lo que publica el CI).
+        release_src = os.path.join(tmp_root, "release_src")
+        os.makedirs(os.path.join(release_src, "Mcp2p"))
+        with open(os.path.join(release_src, "Mcp2p", "Mcp2p"), "w") as f:
+            f.write("binario nuevo simulado")
+        with open(os.path.join(release_src, "Mcp2p", "mcp2p.sh"), "w") as f:
+            f.write("#!/bin/bash\nexit 0\n")
+        archive_path = os.path.join(tmp_root, "Mcp2p-Setup-1.0.9.tar.gz")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(os.path.join(release_src, "Mcp2p"), arcname="Mcp2p")
+
+        # 3. user_data_dir == app_dir, igual que get_user_data_dir() en modo portable escribible.
+        manager = AutoUpdateManager(base_dir=tmp_root, user_data_dir=app_dir)
+        manager._temp_dir = tempfile.mkdtemp(prefix="mcp2p_update_test_", dir=tmp_root)
+
+        # El script espera a que el PID actual muera antes de reemplazar la carpeta;
+        # usamos un PID que ya no existe para que el script avance de inmediato
+        # en vez de esperar hasta 15s a que el proceso de este mismo test "muera".
+        monkeypatch.setattr(os, "getpid", lambda: 999999999)
+        script_path = manager._build_linux_relaunch_script(archive_path, app_dir)
+
+        result = subprocess.run(["bash", script_path], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, f"script falló: stdout={result.stdout} stderr={result.stderr}"
+
+        # 4. El binario se actualizó...
+        with open(os.path.join(app_dir, "Mcp2p")) as f:
+            assert f.read() == "binario nuevo simulado"
+
+        # 5. ...pero los datos del usuario sobrevivieron intactos.
+        with open(os.path.join(app_dir, "mcp2p_local.db")) as f:
+            assert f.read() == "DATOS CRITICOS DEL USUARIO"
+        assert os.path.exists(os.path.join(app_dir, "mcp2p_local.db-wal"))
+        assert os.path.exists(os.path.join(app_dir, "mcp2p_local.db-shm"))
+        restored_project_file = os.path.join(app_dir, "workspace", "proyecto_clonado", "archivo_del_proyecto.txt")
+        with open(restored_project_file) as f:
+            assert f.read() == "contenido real de un repo clonado"
 
 
 def test_get_install_mode_dev_mode():
