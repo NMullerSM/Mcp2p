@@ -14,13 +14,16 @@ import json
 import logging
 import os
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from cryptography.exceptions import InvalidSignature
+from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 logger = logging.getLogger("mcp2p.crypto")
 
@@ -29,17 +32,204 @@ class IdentityKeyCorruptError(Exception):
     """Error lanzado cuando el archivo node_identity.key existe pero está corrupto o es inválido."""
 
 
+class SigningKeyLockedError(Exception):
+    """La clave Ed25519 humana está cifrada en disco y no se ha desbloqueado en esta sesión (EGM-53)."""
+
+    code = "KEY_LOCKED"
+
+
+class SigningKeyPassphraseError(Exception):
+    """Frase de paso incorrecta o inválida al fijar/desbloquear la clave cifrada (EGM-53)."""
+
+    code = "BAD_PASSPHRASE"
+
+
+# Formato del archivo cifrado `<key_path>.enc` (EGM-53 / Gate 0c):
+# JSON {"v":1,"kdf":"scrypt","n","r","p","salt","nonce","ct","public_key"} con la semilla
+# Ed25519 (32 bytes) cifrada con AES-256-GCM bajo una clave derivada por scrypt de una frase
+# que SOLO teclea el humano. La clave pública va en claro (no es secreta) para que la identidad
+# del nodo siga disponible mientras la clave está bloqueada.
+ENCRYPTED_KEY_VERSION = 1
+MIN_PASSPHRASE_LENGTH = 10
+DEFAULT_UNLOCK_TTL_SECONDS = 900
+
+
 class NodeCryptoManager:
     """Gestiona la identidad criptográfica Ed25519 de un nodo local."""
+
+    # Parámetros scrypt (≈ 32 MiB, ~0,1 s). Atributo de clase para que los tests puedan bajarlo.
+    SCRYPT_N = 2 ** 15
+    SCRYPT_R = 8
+    SCRYPT_P = 1
 
     def __init__(self, key_path: Optional[Path | str] = None) -> None:
         self.key_path = Path(key_path) if key_path else Path.home() / ".mcp2p" / "node_identity.key"
         self._private_key: Optional[ed25519.Ed25519PrivateKey] = None
         self._public_key: Optional[ed25519.Ed25519PublicKey] = None
+        self._unlocked_until: Optional[float] = None
         self._load_or_generate_keypair()
+
+    # ------------------------------------------------------------------
+    # Clave cifrada en disco (EGM-53 / Gate 0c)
+    # ------------------------------------------------------------------
+
+    @property
+    def encrypted_key_path(self) -> Path:
+        return self.key_path.with_name(self.key_path.name + ".enc")
+
+    @property
+    def is_encrypted(self) -> bool:
+        """True si la identidad vive cifrada en disco (`<key_path>.enc`)."""
+        return self.encrypted_key_path.exists()
+
+    @property
+    def is_locked(self) -> bool:
+        """True si la clave privada no está disponible en memoria para firmar."""
+        if self._private_key is None:
+            return True
+        if self._unlocked_until is not None and time.monotonic() >= self._unlocked_until:
+            self.lock()
+            return True
+        return False
+
+    def key_status(self) -> Dict[str, Any]:
+        return {
+            "encrypted": self.is_encrypted,
+            "locked": self.is_locked,
+            "public_key": self.public_key_base64,
+        }
+
+    @classmethod
+    def _derive_kek(cls, passphrase: str, salt: bytes, n: int, r: int, p: int) -> bytes:
+        return Scrypt(salt=salt, length=32, n=n, r=r, p=p).derive(passphrase.encode("utf-8"))
+
+    @staticmethod
+    def _secure_unlink(path: Path) -> None:
+        """Sobrescribe con ceros y borra (best effort: en SSD/CoW no garantiza borrado físico)."""
+        try:
+            size = path.stat().st_size
+            with open(path, "r+b") as f:
+                f.write(b"\0" * size)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as exc:
+            logger.warning(f"No se pudo sobrescribir {path} antes de borrarla: {exc}")
+        path.unlink(missing_ok=True)
+
+    def _load_encrypted_public_key(self) -> None:
+        try:
+            meta = json.loads(self.encrypted_key_path.read_text(encoding="utf-8"))
+            if meta.get("v") != ENCRYPTED_KEY_VERSION or meta.get("kdf") != "scrypt":
+                raise ValueError("Versión o KDF de clave cifrada no soportada")
+            raw_pub = base64.urlsafe_b64decode(meta["public_key"])
+            self._public_key = ed25519.Ed25519PublicKey.from_public_bytes(raw_pub)
+        except Exception as exc:
+            raise IdentityKeyCorruptError(
+                f"Clave de identidad cifrada corrupta en '{self.encrypted_key_path}'."
+            ) from exc
+        self._private_key = None
+
+    def set_passphrase(self, passphrase: str) -> None:
+        """
+        Cifra la identidad con una frase de paso humana y borra el PEM en claro.
+
+        Migra la clave existente (no cambia la identidad pública). Si la clave ya está
+        cifrada, exige que esté desbloqueada (permite así cambiar la frase de paso).
+        """
+        if not isinstance(passphrase, str) or len(passphrase) < MIN_PASSPHRASE_LENGTH:
+            raise SigningKeyPassphraseError(
+                f"La frase de paso debe tener al menos {MIN_PASSPHRASE_LENGTH} caracteres."
+            )
+        if self.is_locked:
+            raise SigningKeyLockedError(
+                "La clave está cifrada y bloqueada: desbloquéala antes de cambiar la frase de paso."
+            )
+        salt = os.urandom(16)
+        nonce = os.urandom(12)
+        n, r, p = self.SCRYPT_N, self.SCRYPT_R, self.SCRYPT_P
+        kek = self._derive_kek(passphrase, salt, n, r, p)
+        seed = self._private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        pub_b64 = self.public_key_base64
+        ct = AESGCM(kek).encrypt(nonce, seed, pub_b64.encode("ascii"))
+        b64 = lambda b: base64.urlsafe_b64encode(b).decode("ascii")  # noqa: E731
+        blob = json.dumps({
+            "v": ENCRYPTED_KEY_VERSION, "kdf": "scrypt", "n": n, "r": r, "p": p,
+            "salt": b64(salt), "nonce": b64(nonce), "ct": b64(ct), "public_key": pub_b64,
+        }).encode("utf-8")
+
+        self.key_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.encrypted_key_path.with_name(self.encrypted_key_path.name + ".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(blob)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.encrypted_key_path)
+        if self.key_path.exists():
+            self._secure_unlink(self.key_path)
+
+    def unlock(self, passphrase: str, ttl_seconds: Optional[float] = DEFAULT_UNLOCK_TTL_SECONDS) -> None:
+        """Descifra la clave en memoria de ESTE proceso durante `ttl_seconds` (None = sin caducidad)."""
+        if not self.is_encrypted:
+            return
+        try:
+            meta = json.loads(self.encrypted_key_path.read_text(encoding="utf-8"))
+            dec = lambda k: base64.urlsafe_b64decode(meta[k])  # noqa: E731
+            kek = self._derive_kek(
+                passphrase if isinstance(passphrase, str) else "",
+                dec("salt"), int(meta["n"]), int(meta["r"]), int(meta["p"]),
+            )
+            seed = AESGCM(kek).decrypt(dec("nonce"), dec("ct"), meta["public_key"].encode("ascii"))
+            key = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
+        except InvalidTag as exc:
+            raise SigningKeyPassphraseError("Frase de paso incorrecta.") from exc
+        except Exception as exc:
+            raise SigningKeyPassphraseError(f"No se pudo descifrar la clave: {exc}") from exc
+        if key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        ) != self._public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw):
+            raise IdentityKeyCorruptError("La clave descifrada no coincide con la identidad pública.")
+        self._private_key = key
+        self._unlocked_until = (time.monotonic() + ttl_seconds) if ttl_seconds else None
+
+    def lock(self) -> None:
+        """Olvida la clave privada en memoria si la identidad está cifrada en disco."""
+        if self.is_encrypted:
+            self._private_key = None
+            self._unlocked_until = None
+
+    def _require_private_key(self) -> ed25519.Ed25519PrivateKey:
+        if self.is_locked:
+            raise SigningKeyLockedError(
+                "KEY_LOCKED: la clave de firma humana está cifrada y bloqueada en esta sesión; "
+                "desbloquéala con tu frase de paso."
+            )
+        return self._private_key
 
     def _load_or_generate_keypair(self) -> None:
         """Carga la clave privada existente o genera un nuevo par Ed25519 de forma atómica (0700/0600)."""
+        if self.is_encrypted:
+            self._load_encrypted_public_key()
+            if self.key_path.exists():
+                # Migración interrumpida: el PEM en claro sobrevivió. Borrarlo si es la misma
+                # identidad; si no lo es, fallar ruidosamente en vez de elegir una.
+                try:
+                    plain = serialization.load_pem_private_key(self.key_path.read_bytes(), password=None)
+                    same = plain.public_key().public_bytes(
+                        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+                    ) == self._public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                except Exception:
+                    same = False
+                if not same:
+                    raise IdentityKeyCorruptError(
+                        f"Coexisten '{self.key_path}' y '{self.encrypted_key_path}' con identidades distintas."
+                    )
+                self._secure_unlink(self.key_path)
+            return
         if self.key_path.exists():
             try:
                 pem_data = self.key_path.read_bytes()
@@ -105,8 +295,9 @@ class NodeCryptoManager:
 
     def sign_payload(self, payload: Dict[str, Any]) -> str:
         """Firma un diccionario JSON y devuelve la firma en Base64 URL-safe."""
+        private_key = self._require_private_key()
         canonical_bytes = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        signature = self._private_key.sign(canonical_bytes)
+        signature = private_key.sign(canonical_bytes)
         return base64.urlsafe_b64encode(signature).decode("ascii")
 
     @staticmethod

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from src.app.identity import local_node_uuid
 from src.app.ui_adapters import _BaseUIAdapter
+from src.p2p.crypto import SigningKeyLockedError
 from src.core.domain.context import ActorContext
 
 
@@ -488,6 +489,8 @@ class KanbanOkfUIAdapter(_BaseUIAdapter):
                 "backlog_cards_created": created_cards_count,
                 "signature": sig_block,
             }
+        except SigningKeyLockedError as e:
+            return {"success": False, "code": e.code, "error": str(e)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

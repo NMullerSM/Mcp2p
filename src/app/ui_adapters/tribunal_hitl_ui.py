@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from src.app.ui_adapters import _BaseUIAdapter
+from src.p2p.crypto import SigningKeyLockedError
 
 logger = logging.getLogger("mcp2p.api_bridge.tribunal")
 
@@ -729,5 +730,7 @@ class TribunalHitlUIAdapter(_BaseUIAdapter):
 
             else:
                 return {"success": False, "error": f"item_type desconocido: {item_type}"}
+        except SigningKeyLockedError as e:
+            return {"success": False, "code": e.code, "error": str(e)}
         except Exception as e:
             return {"success": False, "error": str(e)}

@@ -417,13 +417,21 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         # 2. Identidad Ed25519
         try:
             pub = self.crypto.public_key_base64
-            sig = self.crypto.sign_human_approval("DIAG_CHECK", "diagnostics", self._local_node(), self._dev_name(), "OK")
-            ok = bool(pub and sig.get("signature_ed25519"))
-            checks.append({
-                "name": "Identidad Ed25519",
-                "status": "passed" if ok else "failed",
-                "detail": f"Llave local activa ({pub[:16]}...)" if ok else "Llave Ed25519 no disponible",
-            })
+            if getattr(self.crypto, "is_locked", False):
+                # EGM-53: con la clave cifrada y bloqueada el diagnóstico no firma nada.
+                checks.append({
+                    "name": "Identidad Ed25519",
+                    "status": "passed" if pub else "failed",
+                    "detail": f"Llave local cifrada y bloqueada ({pub[:16]}...)",
+                })
+            else:
+                sig = self.crypto.sign_human_approval("DIAG_CHECK", "diagnostics", self._local_node(), self._dev_name(), "OK")
+                ok = bool(pub and sig.get("signature_ed25519"))
+                checks.append({
+                    "name": "Identidad Ed25519",
+                    "status": "passed" if ok else "failed",
+                    "detail": f"Llave local activa ({pub[:16]}...)" if ok else "Llave Ed25519 no disponible",
+                })
         except Exception as e:
             checks.append({"name": "Identidad Ed25519", "status": "failed", "detail": str(e)})
 

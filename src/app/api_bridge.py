@@ -26,7 +26,7 @@ from src.app.ui_adapters import (
     TribunalHitlUIAdapter,
 )
 from src.core.factory import ApplicationFactory
-from src.p2p.crypto import NodeCryptoManager
+from src.p2p.crypto import NodeCryptoManager, SigningKeyLockedError, SigningKeyPassphraseError
 from src.p2p.mesh_adapter import MultiPeerMeshConnector
 from src.p2p.transport import NullTransportAdapter, P2PTransport
 from src.storage.db import DatabaseManager
@@ -127,6 +127,53 @@ class ApiBridge:
     # ==========================
     # Sistema, Proyectos y Entorno
     # ==========================
+
+    # ==========================
+    # Clave de firma humana cifrada (EGM-53 / Gate 0c)
+    # ==========================
+
+    def get_signing_key_status(self) -> Dict[str, Any]:
+        """Estado de la clave Ed25519 humana: {encrypted, locked, public_key}."""
+        try:
+            return {"success": True, **self.crypto.key_status()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def set_signing_key_passphrase(self, passphrase: str) -> Dict[str, Any]:
+        """
+        Cifra la clave con una frase que teclea el humano y borra el PEM en claro (migración).
+        La frase nunca se persiste ni se pasa a procesos de agente; la clave queda desbloqueada
+        en esta sesión del proceso GUI hasta su caducidad.
+        """
+        try:
+            self.crypto.set_passphrase(passphrase)
+            self.crypto.unlock(passphrase)
+            return {"success": True, **self.crypto.key_status()}
+        except (SigningKeyLockedError, SigningKeyPassphraseError) as e:
+            return {"success": False, "code": e.code, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def unlock_signing_key(self, passphrase: str) -> Dict[str, Any]:
+        """Desbloquea en memoria (solo este proceso) la clave cifrada para firmar durante la sesión."""
+        try:
+            if not self.crypto.is_encrypted:
+                return {"success": False, "code": "KEY_NOT_ENCRYPTED",
+                        "error": "La clave no está cifrada; fija primero una frase de paso."}
+            self.crypto.unlock(passphrase)
+            return {"success": True, **self.crypto.key_status()}
+        except SigningKeyPassphraseError as e:
+            return {"success": False, "code": e.code, "error": str(e)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def lock_signing_key(self) -> Dict[str, Any]:
+        """Olvida la clave descifrada de la memoria del proceso GUI."""
+        try:
+            self.crypto.lock()
+            return {"success": True, **self.crypto.key_status()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def set_window(self, window: Any) -> None:
         self.system_ui.set_window(window)
