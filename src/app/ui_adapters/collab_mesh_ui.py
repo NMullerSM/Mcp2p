@@ -87,27 +87,29 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
         return self.db.get_setting("p2p_signaling_url", default=DEFAULT_SIGNALING_URL)
 
     def set_signaling_server_url(self, url: str) -> Dict[str, Any]:
-        """Configura la URL del servidor de señalización y reconstruye el transporte en caliente (EGM-47)."""
+        """
+        Configura la URL del servidor de señalización y reconstruye el transporte 1:1 en
+        caliente (EGM-47): cierra el anterior y construye el nuevo con la única fábrica
+        `build_p2p_transport`. Con `PeerNetworkPort` enchufado delega en
+        `DirectPeerNetworkConnector.reconfigure` (ver `25_`).
+        """
         if url != "" and not (url.startswith("wss://") or url.startswith("ws://")):
             return {"success": False, "error": "La URL debe estar vacía o comenzar con ws:// o wss://"}
         self.db.set_setting("p2p_signaling_url", url)
 
-        old_transport = self._bridge.transport
-        if old_transport is not None and hasattr(old_transport, "close"):
-            try:
-                old_transport.close()
-            except Exception as close_err:
-                logger.debug(f"Error cerrando transporte previo: {close_err}")
-
-        if url:
-            try:
-                from src.p2p.webrtc_adapter import WebRTCTransportAdapter
-                new_transport: P2PTransport = WebRTCTransportAdapter(url, self.crypto)
-            except Exception as exc:
-                logger.warning(f"No se pudo inicializar WebRTCTransportAdapter para {url!r}: {exc}")
-                new_transport = NullTransportAdapter()
+        direct = self._direct_peer_connector()
+        if direct is not None:
+            direct.reconfigure({"signaling_url": url})
+            new_transport: P2PTransport = direct.transport
         else:
-            new_transport = NullTransportAdapter()
+            old_transport = self._bridge.transport
+            if old_transport is not None and hasattr(old_transport, "close"):
+                try:
+                    old_transport.close()
+                except Exception as close_err:
+                    logger.debug(f"Error cerrando transporte previo: {close_err}")
+            from src.adapters.network.direct_peer import build_p2p_transport
+            new_transport = build_p2p_transport(url, self.crypto)
 
         self._bridge.set_transport(new_transport)
         return {"success": True, "url": url, "transport": type(new_transport).__name__}
@@ -115,6 +117,29 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
     def set_transport(self, transport: P2PTransport) -> None:
         self._bridge.transport = transport
         self._bridge.transport.on_message(self._bridge._handle_transport_message)
+        direct = self._direct_peer_connector()
+        if direct is not None:
+            direct.adopt_transport(transport)
+
+    def _notify_peer(self, node_uuid: str, envelope: Dict[str, Any]) -> bool:
+        """Envío best-effort al par: por el `PeerNetworkPort` (1:1 y luego LAN) o, sin él, por el transporte."""
+        network = self._peer_network()
+        if network is not None:
+            return bool(network.send_to(node_uuid, envelope))
+        return bool(self.transport.send(envelope))
+
+    def handle_peer_envelope(self, envelope: Dict[str, Any]) -> None:
+        """
+        Enrutador de sobres entrantes del listener LAN (antes `main.py` llamaba a
+        `api.sync_three_tiers()` para CUALQUIER evento). `join_*` va al flujo de
+        colaboradores; el resto conserva el comportamiento previo (sincronización).
+        """
+        if not isinstance(envelope, dict):
+            return
+        if envelope.get("type") in ("join_request", "join_decision"):
+            self._bridge._handle_transport_message(envelope)
+            return
+        self._bridge.sync_three_tiers()
 
     def handle_transport_message(self, message: dict) -> None:
         """Procesa mensajes P2P en vivo (join_request y join_decision approved/rejected, EGM-47)."""
@@ -558,7 +583,7 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
             }
 
             try:
-                self.transport.send({
+                self._notify_peer(node_uuid, {
                     "type": "join_decision",
                     "decision": "approved",
                     "project_uuid": project_uuid,
@@ -577,7 +602,7 @@ class CollabMeshUIAdapter(_BaseUIAdapter):
             res = self.db.record_rejection(project_uuid, node_uuid)
             try:
                 if res.get("success", True):
-                    self.transport.send({
+                    self._notify_peer(node_uuid, {
                         "type": "join_decision",
                         "decision": "rejected",
                         "project_uuid": project_uuid,

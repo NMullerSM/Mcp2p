@@ -61,20 +61,27 @@ def _resolve_local_node_uuid() -> str:
 
 
 def _build_p2p_transport(signaling_url: str, node_crypto: Any) -> Any:
-    """Construye el transporte P2P real (WebRTC/aiortc) o degrada a NullTransportAdapter
+    """Construye el transporte P2P 1:1 (WebRTC/aiortc) o degrada a NullTransportAdapter
     ante CUALQUIER fallo de construcción -- incluido un ImportError si el wheel de aiortc
-    no está instalado o está roto en esta plataforma."""
-    from src.p2p.transport import NullTransportAdapter
+    no está instalado o está roto en esta plataforma. Delega en la fábrica única
+    `src.adapters.network.direct_peer.build_p2p_transport` (EGM-48)."""
+    from src.adapters.network.direct_peer import build_p2p_transport
 
-    try:
-        adapter_cls = WebRTCTransportAdapter
-        if adapter_cls is None:
-            from src.p2p.webrtc_adapter import WebRTCTransportAdapter as _WebRTCTransportAdapter
-            adapter_cls = _WebRTCTransportAdapter
-        return adapter_cls(signaling_url, node_crypto)
-    except Exception as exc:
-        logger.warning(f"No se pudo construir WebRTCTransportAdapter, degradando a NullTransportAdapter: {exc}")
-        return NullTransportAdapter()
+    return build_p2p_transport(signaling_url, node_crypto, adapter_cls=WebRTCTransportAdapter)
+
+
+def _build_peer_network(api: Any, db: Any, local_node: str) -> Any:
+    """Compone el `PeerNetworkPort` de producción vía `ApplicationFactory.create_peer_network`."""
+    from src.core.factory import ApplicationFactory
+
+    return ApplicationFactory.create_peer_network(
+        node_uuid=local_node,
+        crypto=api.crypto,
+        db=db,
+        signaling_url=api.get_signaling_server_url(),
+        lan_port=int(os.environ.get("MCP2P_LAN_PORT", 42424)),
+        transport_builder=_build_p2p_transport,
+    )
 
 
 def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -176,31 +183,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         os.environ["MCP2P_DB_PATH"] = args.db_path
 
     from src.app.paths import get_bundle_dir
-    from src.p2p.network import P2PNotificationService
 
     db, core_kernel, api = _build_kernel_and_bridge(args.db_path, headless=args.headless)
-    real_transport = _build_p2p_transport(
-        signaling_url=api.get_signaling_server_url(),
-        node_crypto=api.crypto,
-    )
-    api.set_transport(real_transport)
 
-    # Iniciar servicio de red P2P en segundo plano (daemon)
+    # EGM-48: una sola composición de red (PeerNetworkPort) con el canal 1:1 y el listener
+    # LAN firmado, enchufada en el CoreKernel en vez de dos pilas sueltas.
     local_node = _resolve_local_node_uuid()
-    p2p_network = P2PNotificationService(
-        node_uuid=local_node,
-        lan_port=int(os.environ.get("MCP2P_LAN_PORT", 42424)),
-        on_event_callback=lambda evt: api.sync_three_tiers() if hasattr(api, "sync_three_tiers") else None,
-        crypto_manager=api.crypto,
-        is_trusted_pubkey=api.db.is_trusted_public_key,
+    p2p_network = _build_peer_network(api, db, local_node)
+    if core_kernel is not None and hasattr(core_kernel, "register_connector"):
+        from src.core.kernel import CoreKernel
+        core_kernel.register_connector(CoreKernel.PORT_NETWORK, p2p_network, replace=True)
+    p2p_network.start_listening(
+        local_node,
+        api._handle_peer_envelope,
+        handlers={"direct": api._handle_transport_message},
     )
-    p2p_network.start_lan_server()
+    api.set_transport(p2p_network.get_connector("direct").transport)
+    lan_connector = p2p_network.get_connector("lan")
 
     if args.headless:
         print("[MCP2P] Modo Headless activo. Base de datos inicializada correctamente.")
         info = api.get_system_info()
-        print(f"[MCP2P] Nodo Local: {info['active_node']} | SQLite WAL: {info['wal_mode']} | LAN Port: {p2p_network.lan_port}")
-        p2p_network.stop_lan_server()
+        print(f"[MCP2P] Nodo Local: {info['active_node']} | SQLite WAL: {info['wal_mode']} | LAN Port: {lan_connector.lan_port}")
+        p2p_network.close()
         if core_kernel is not None and hasattr(core_kernel, "close"):
             core_kernel.close()
         return 0
@@ -209,7 +214,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         import webview
     except ImportError as e:
         print(f"[MCP2P Error] PyWebView no está instalado en este entorno: {e}")
-        p2p_network.stop_lan_server()
+        p2p_network.close()
         if core_kernel is not None and hasattr(core_kernel, "close"):
             core_kernel.close()
         return 1
@@ -249,7 +254,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_kwargs["icon"] = str(icon_cand)
         webview.start(**start_kwargs)
     finally:
-        p2p_network.stop_lan_server()
+        p2p_network.close()
         if core_kernel is not None and hasattr(core_kernel, "close"):
             core_kernel.close()
         print("[MCP2P] Ventana cerrada. Red P2P y sesión finalizadas limpiamente.")

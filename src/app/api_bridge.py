@@ -217,6 +217,10 @@ class ApiBridge:
     def _handle_transport_message(self, message: dict) -> None:
         self.collab_ui.handle_transport_message(message)
 
+    def _handle_peer_envelope(self, envelope: dict) -> None:
+        """Sobres entrantes del listener LAN del `PeerNetworkPort` (privado: no expuesto a JS)."""
+        self.collab_ui.handle_peer_envelope(envelope)
+
     def join_p2p_project(self, invite_str: str) -> Dict[str, Any]:
         return self.collab_ui.join_p2p_project(invite_str)
 

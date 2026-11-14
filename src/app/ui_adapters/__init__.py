@@ -57,6 +57,20 @@ class _BaseUIAdapter:
     def mesh(self) -> Any:
         return getattr(self._bridge, "mesh", None)
 
+    def _peer_network(self) -> Any:
+        """`PeerNetworkPort` enchufado en el kernel (solo en el arranque real de `main.py`)."""
+        kernel = self.core_kernel
+        getter = getattr(kernel, "get_connector", None) if kernel is not None else None
+        if not callable(getter):
+            return None
+        from src.core.kernel import CoreKernel
+        return getter(CoreKernel.PORT_NETWORK)
+
+    def _direct_peer_connector(self) -> Any:
+        network = self._peer_network()
+        getter = getattr(network, "get_connector", None) if network is not None else None
+        return getter("direct") if callable(getter) else None
+
     def _kanban_service(self) -> Any:
         kernel = self.core_kernel
         return getattr(kernel, "kanban_service", None) if kernel is not None else None
