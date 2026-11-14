@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, User, GitBranch, CheckSquare, Maximize2, Minimize2 } from 'lucide-react';
+import { Lock, User, GitBranch, CheckSquare, Maximize2, Minimize2, Tag } from 'lucide-react';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Por Hacer', dotColor: '#94a3b8' },
@@ -7,6 +7,17 @@ const COLUMNS = [
   { id: 'in_review', title: 'En Revisión', dotColor: '#f59e0b' },
   { id: 'merged', title: 'Fusionado / Consolidado', dotColor: 'var(--accent-success)' }
 ];
+
+function normalizeCardTags(card) {
+  const raw = card?.tags || card?.okf_tags || [];
+  if (Array.isArray(raw)) {
+    return raw.map(t => String(t).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    return raw.split(',').map(t => t.trim()).filter(Boolean);
+  }
+  return [];
+}
 
 export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
   const [draggedCardId, setDraggedCardId] = useState(null);
@@ -49,17 +60,7 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
   };
 
   return (
-    <div style={{
-      display: 'flex',
-      gap: '16px',
-      height: '100%',
-      width: '100%',
-      minHeight: 0,
-      minWidth: 0,
-      overflowX: 'auto',
-      padding: '4px 0',
-      scrollBehavior: 'smooth'
-    }}>
+    <div className="mcp-kanban-grid">
       {COLUMNS.map((col) => {
         const colCards = cards.filter(c => {
           const st = c.status || 'backlog';
@@ -73,22 +74,23 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
         const isExpanded = expandedCol === col.id;
         const isAnyExpanded = Boolean(expandedCol);
 
-        let flexStyle = '1 1 270px';
-        let minWidthStyle = '250px';
-        let maxWidthStyle = '380px';
+        let flexStyle = '1 1 250px';
+        let minWidthStyle = '230px';
+        let maxWidthStyle = '400px';
         if (isExpanded) {
-          flexStyle = '3 1 540px';
-          minWidthStyle = '380px';
+          flexStyle = '3 1 500px';
+          minWidthStyle = '360px';
           maxWidthStyle = 'none';
         } else if (isAnyExpanded) {
-          flexStyle = '0 0 170px';
-          minWidthStyle = '150px';
-          maxWidthStyle = '190px';
+          flexStyle = '0 0 165px';
+          minWidthStyle = '145px';
+          maxWidthStyle = '185px';
         }
 
         return (
           <div
             key={col.id}
+            data-testid={`kanban-col-${col.id}`}
             onDragOver={(e) => handleDragOver(e, col.id)}
             onDragLeave={(e) => handleDragLeave(e, col.id)}
             onDrop={(e) => handleDrop(e, col.id)}
@@ -101,9 +103,10 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
               borderRadius: 'var(--radius-lg)',
               display: 'flex',
               flexDirection: 'column',
-              padding: isAnyExpanded && !isExpanded ? '10px' : '14px',
+              padding: isAnyExpanded && !isExpanded ? '10px' : '12px',
               transition: 'var(--transition)',
-              opacity: isAnyExpanded && !isExpanded ? 0.8 : 1
+              opacity: isAnyExpanded && !isExpanded ? 0.82 : 1,
+              minHeight: 0
             }}
           >
             {/* Column Header */}
@@ -111,8 +114,8 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              marginBottom: '12px',
-              paddingBottom: '10px',
+              marginBottom: '10px',
+              paddingBottom: '8px',
               borderBottom: '1px solid var(--border-subtle)'
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
@@ -124,7 +127,7 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
                   flexShrink: 0
                 }} />
                 <span style={{
-                  fontSize: '13px',
+                  fontSize: '12.5px',
                   fontWeight: 600,
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
@@ -133,7 +136,7 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
                   {col.title}
                 </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0 }}>
                 <span style={{
                   fontSize: '11px',
                   fontFamily: 'var(--font-mono)',
@@ -148,7 +151,8 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
                 <button
                   type="button"
                   onClick={() => setExpandedCol(isExpanded ? null : col.id)}
-                  title={isExpanded ? "Restaurar tamaño normal de columnas" : "Expandir columna para lectura amplia"}
+                  title={isExpanded ? 'Restaurar tamaño normal de columnas' : 'Expandir columna para lectura amplia'}
+                  aria-label={isExpanded ? `Restaurar ${col.title}` : `Expandir ${col.title}`}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -173,128 +177,200 @@ export function KanbanBoard({ cards, onCardMove, onSelectCard }) {
               overflowY: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              gap: '10px',
+              gap: '9px',
               paddingRight: '2px'
             }}>
-              {colCards.map((card) => {
-                const isDragging = draggedCardId === card.card_id;
-                const hasLease = card.lease_expires_at && card.status === 'in_progress';
+              {colCards.length === 0 ? (
+                <div style={{
+                  fontSize: '11px',
+                  color: 'var(--text-muted)',
+                  textAlign: 'center',
+                  padding: '18px 8px',
+                  border: '1px dashed var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)'
+                }}>
+                  Sin tareas
+                </div>
+              ) : (
+                colCards.map((card) => {
+                  const isDragging = draggedCardId === card.card_id;
+                  const hasLease = card.lease_expires_at && card.status === 'in_progress';
+                  const tags = normalizeCardTags(card);
+                  const visibleTags = tags.slice(0, 2);
+                  const extraTagsCount = tags.length - visibleTags.length;
 
-                return (
-                  <div
-                    key={card.card_id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, card.card_id)}
-                    onDragEnd={handleDragEnd}
-                    onClick={() => onSelectCard && onSelectCard(card)}
-                    title="Click para ver detalles, modificar o aceptar tarea"
-                    style={{
-                      backgroundColor: 'var(--bg-surface)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '12px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '8px',
-                      cursor: 'pointer',
-                      opacity: isDragging ? 0.35 : 1,
-                      transform: isDragging ? 'scale(0.98)' : 'scale(1)',
-                      boxShadow: 'var(--shadow-sm)',
-                      transition: 'transform 0.15s, opacity 0.15s, border-color 0.15s'
-                    }}
-                    onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
-                    onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--border-subtle)'}
-                  >
-                    {/* Card Top */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '11px',
-                        color: 'var(--text-muted)',
-                        fontWeight: 600
-                      }}>
-                        {card.card_id}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        {card.acceptance_criteria && (
-                          <span
-                            title="Tiene criterios de aceptación definidos"
-                            style={{
+                  return (
+                    <div
+                      key={card.card_id}
+                      data-testid={`kanban-card-${card.card_id}`}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, card.card_id)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => onSelectCard && onSelectCard(card)}
+                      title="Click para ver detalles, modificar o aceptar tarea"
+                      style={{
+                        backgroundColor: 'var(--bg-surface)',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        padding: '11px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '7px',
+                        cursor: 'pointer',
+                        opacity: isDragging ? 0.35 : 1,
+                        transform: isDragging ? 'scale(0.98)' : 'scale(1)',
+                        boxShadow: 'var(--shadow-sm)',
+                        transition: 'transform 0.15s, opacity 0.15s, border-color 0.15s'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent-primary)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
+                    >
+                      {/* Nivel 1 (Ley de Hick): ID + señales críticas (Criterios / Lease) */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                        <span style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '10.5px',
+                          color: 'var(--text-muted)',
+                          fontWeight: 600,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}>
+                          {card.card_id}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                          {card.acceptance_criteria && (
+                            <span
+                              title="Tiene criterios de aceptación definidos"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '2px',
+                                fontSize: '10px',
+                                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                                color: 'var(--accent-primary)',
+                                padding: '1px 5px',
+                                borderRadius: '3px'
+                              }}
+                            >
+                              <CheckSquare size={10} />
+                            </span>
+                          )}
+                          {hasLease && (
+                            <span style={{
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: '2px',
+                              gap: '3px',
                               fontSize: '10px',
-                              backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
-                              color: 'var(--accent-primary)',
+                              fontFamily: 'var(--font-mono)',
+                              backgroundColor: 'var(--badge-lease)',
+                              color: 'var(--badge-lease-text)',
                               padding: '1px 5px',
-                              borderRadius: '3px'
-                            }}
-                          >
-                            <CheckSquare size={10} /> Criterios
-                          </span>
-                        )}
-                        {hasLease && (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            fontSize: '10px',
-                            fontFamily: 'var(--font-mono)',
-                            backgroundColor: 'var(--badge-lease)',
-                            color: 'var(--badge-lease-text)',
-                            padding: '2px 6px',
-                            borderRadius: 'var(--radius-sm)'
-                          }}>
-                            <Lock size={10} /> Lease
-                          </span>
-                        )}
+                              borderRadius: 'var(--radius-sm)'
+                            }}>
+                              <Lock size={9} /> Lease
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Card Title */}
-                    <div style={{ fontSize: '13px', fontWeight: 600, lineHeight: 1.35, color: 'var(--text-primary)' }}>
-                      {card.title}
-                    </div>
-
-                    {/* Card Description */}
-                    {card.description && (
+                      {/* Nivel 2: Título principal */}
                       <div style={{
-                        fontSize: '12px',
-                        color: 'var(--text-secondary)',
+                        fontSize: '13px',
+                        fontWeight: 600,
                         lineHeight: 1.35,
+                        color: 'var(--text-primary)',
                         display: '-webkit-box',
                         WebkitLineClamp: 2,
                         WebkitBoxOrient: 'vertical',
                         overflow: 'hidden'
                       }}>
-                        {card.description}
+                        {card.title}
                       </div>
-                    )}
 
-                    {/* Card Footer */}
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      paddingTop: '6px',
-                      borderTop: '1px dashed var(--border-subtle)',
-                      fontSize: '11px',
-                      color: 'var(--text-muted)'
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <User size={12} />
-                        <span>{card.assignee_node_uuid ? card.assignee_node_uuid.slice(0, 12) : 'Sin asignar'}</span>
-                      </div>
-                      {card.branch_ref && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent-primary)' }}>
-                          <GitBranch size={10} />
-                          <span>{card.branch_ref}</span>
+                      {/* Nivel 3: Descripción breve (máx 2 líneas) */}
+                      {card.description && (
+                        <div style={{
+                          fontSize: '11.5px',
+                          color: 'var(--text-secondary)',
+                          lineHeight: 1.35,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden'
+                        }}>
+                          {card.description}
                         </div>
                       )}
+
+                      {/* Nivel 4: Máx 2 Tag pills YAML visibles (+N si hay más) */}
+                      {visibleTags.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
+                          {visibleTags.map(tag => (
+                            <span key={tag} className="mcp-tag-pill" title={tag}>
+                              <Tag size={9} style={{ marginRight: '3px', flexShrink: 0 }} />
+                              {tag}
+                            </span>
+                          ))}
+                          {extraTagsCount > 0 && (
+                            <span
+                              data-testid={`card-extra-tags-${card.card_id}`}
+                              title={tags.slice(2).join(', ')}
+                              style={{
+                                fontSize: '10px',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 600,
+                                padding: '1px 5px',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: 'var(--bg-subtle)',
+                                color: 'var(--text-secondary)'
+                              }}
+                            >
+                              +{extraTagsCount}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Nivel 5: Footer limpio */}
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        paddingTop: '6px',
+                        borderTop: '1px dashed var(--border-subtle)',
+                        fontSize: '10.5px',
+                        color: 'var(--text-muted)'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0 }}>
+                          <User size={11} style={{ flexShrink: 0 }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {card.assignee_node_uuid ? card.assignee_node_uuid.slice(0, 12) : 'Sin asignar'}
+                          </span>
+                        </div>
+                        {card.branch_ref && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '10px',
+                            color: 'var(--accent-primary)',
+                            maxWidth: '50%',
+                            overflow: 'hidden'
+                          }}>
+                            <GitBranch size={10} style={{ flexShrink: 0 }} />
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {card.branch_ref}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
         );
