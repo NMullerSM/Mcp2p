@@ -61,6 +61,9 @@ class A2ABus:
     def __init__(self, db: Optional[DatabaseManager] = None) -> None:
         self.db = db or DatabaseManager.get_instance()
         self.jury_engine = DialecticJuryEngine()
+        # EGM-56: el efecto OKF/git del laudo ratificado lo inyecta la raíz de composición
+        # (`OkfRulingPublisher.publish` del `DialecticTribunalService`); el bus no hace git.
+        self.ruling_publisher: Optional[Callable[[str, Dict[str, Any], Dict[str, Any]], Optional[str]]] = None
         self._subscribers: Dict[str, List[Callable[[Dict[str, Any]], None]]] = {}
         self._subscribers_lock = threading.RLock()
 
@@ -795,53 +798,28 @@ class A2ABus:
         ticket: Dict[str, Any],
         consensus: Dict[str, Any]
     ) -> Optional[str]:
-        """Persiste el dictamen YAML en OKF y lo comitea si el proyecto tiene gov_repo_path."""
-        proj = self.db.get_project_by_uuid(project_uuid)
-        if not proj or not proj.get("gov_repo_path"):
-            return None
-        try:
-            matrix_list = []
-            if ticket.get("jury_matrix_json"):
-                try:
-                    matrix_list = json.loads(ticket["jury_matrix_json"])
-                except Exception:
-                    matrix_list = []
-            synth_data = {
-                "option_id": "THIRD_WAY_C",
-                "generated_by": "agent" if ticket.get("proposal_c_ref") else "pending",
-                "summary": ticket.get("proposal_c_ref", "")
-            }
-            ruling_path = self.jury_engine.persist_ruling_yaml(
-                gov_base_path=proj["gov_repo_path"],
-                ticket=ticket,
-                verdict=consensus,
-                synthesis_data=synth_data,
-                neutral_matrix=matrix_list
-            )
-            ruling_yaml_path = str(ruling_path)
+        """
+        Publica el laudo ratificado delegando en `ruling_publisher` (EGM-56).
 
-            from src.storage.okf_adapter import OKFAdapter
-            okf_adapter = OKFAdapter()
-            files_to_commit = [ruling_path]
+        Sin publicador inyectado (un `A2ABus(db)` suelto, fuera de `ApplicationFactory`) se
+        conserva el comportamiento histórico construyendo el publicador del núcleo sobre
+        `OKFAdapter`; el código de git/OKF ya no vive aquí.
+        """
+        publisher = self.ruling_publisher
+        if publisher is None:
             try:
-                prec_path = okf_adapter.export_precedents_index(proj["gov_repo_path"])
-                if prec_path and Path(prec_path).exists():
-                    files_to_commit.append(prec_path)
-            except Exception as prec_err:
-                logger.debug("Omitida exportación de precedentes en ruling: %s", prec_err)
+                from src.core.services.tribunal_ruling_publisher import OkfRulingPublisher
+                from src.storage.okf_adapter import OKFAdapter
 
-            ticket_id = ticket.get("ticket_id", "")
-            winning_option = consensus.get("winning_option", "")
-            title = (ticket.get("title") or "").strip()
-            collision_reason = (ticket.get("collision_reason") or "").strip()
-            commit_message = f"ratify(jury): {ticket_id} [{winning_option}] {title}"
-            if collision_reason:
-                commit_message += f"\n\n{collision_reason}"
-            okf_adapter.commit_gov_file(proj["gov_repo_path"], files_to_commit, commit_message, push_now=True)
-            return ruling_yaml_path
-        except Exception as e:
-            logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket.get("ticket_id"), e)
-            return None
+                publisher = OkfRulingPublisher(
+                    okf_port=OKFAdapter(),
+                    project_lookup=self.db.get_project_by_uuid,
+                    jury_engine=self.jury_engine,
+                ).publish
+            except Exception as e:
+                logger.warning("No se pudo persistir ruling YAML para %s: %s", ticket.get("ticket_id"), e)
+                return None
+        return publisher(project_uuid, ticket, consensus)
 
     def submit_external_arbiter_ruling(
         self,
@@ -983,8 +961,32 @@ class A2ABus:
         """
         Calcula el veredicto ponderado continuo del Juicio de Honor Dialéctico (EGM-01/02/03):
         - R_efectivo = 0.70·h_O + 0.30·a_O con umbral de ratificación 0.80.
-        - Persiste dictamen YAML y commitea OKF SOLO si status == 'ratified'.
+        - Persiste dictamen YAML y commitea OKF SOLO si status == 'ratified' (vía `ruling_publisher`).
         - Actualiza el estado del ticket en base de datos al status del veredicto.
+
+        Ruta legacy: el núcleo usa `DialecticTribunalService.compute_verdict`, que orquesta el
+        mismo efecto sobre `evaluate_jury_verdict` (EGM-56).
+        """
+        result, ticket, consensus = self.evaluate_jury_verdict(project_uuid, ticket_id)
+        ruling_yaml_path = None
+        if result["status"] == "ratified":
+            ruling_yaml_path = self._persist_and_commit_ruling(project_uuid, ticket, consensus)
+        self.db.update_dispute_status(
+            ticket_id=ticket_id,
+            status=result["status"],
+            resolution_mode=result["resolution_mode"],
+            winning_option=result["winning_option"],
+            final_adr_path=ruling_yaml_path
+        )
+        result["ruling_yaml_path"] = ruling_yaml_path
+        return result
+
+    def evaluate_jury_verdict(
+        self, project_uuid: str, ticket_id: str
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+        """
+        Cálculo PURO del veredicto (solo lecturas): devuelve (resultado, ticket, consenso) sin
+        escribir el estado del ticket ni tocar OKF/git (EGM-56).
         """
         summary = self.db.get_jury_votes_summary(ticket_id)
         human_votes = summary.get("human_votes", [])
@@ -1031,21 +1033,9 @@ class A2ABus:
         resolution_mode = consensus["resolution_mode"]
         tie_detected = consensus["tie_detected"]
 
-        # Persistir dictamen YAML en OKF ÚNICAMENTE si está ratificado (NEW-02)
-        ruling_yaml_path = None
-        if status == "ratified":
-            ruling_yaml_path = self._persist_and_commit_ruling(project_uuid, ticket, consensus)
-
-        # Actualizar estado del ticket en base de datos (NEW-02)
-        self.db.update_dispute_status(
-            ticket_id=ticket_id,
-            status=status,
-            resolution_mode=resolution_mode,
-            winning_option=winning_option,
-            final_adr_path=ruling_yaml_path
-        )
-
-        return {
+        # El dictamen YAML (solo si 'ratified', NEW-02) y el estado del ticket los escribe quien
+        # orquesta: `compute_jury_verdict` (legacy) o `DialecticTribunalService.compute_verdict`.
+        result = {
             "ticket_id": ticket_id,
             "project_uuid": project_uuid,
             "winning_option": winning_option,
@@ -1058,9 +1048,10 @@ class A2ABus:
             "resolution_mode": resolution_mode,
             "effective_agent_weight": consensus.get("effective_agent_unit_weight", 1.5),
             "voter_universe": voter_universe,
-            "ruling_yaml_path": ruling_yaml_path,
+            "ruling_yaml_path": None,
             "breakdown": breakdown,
             "dialectic_breakdown": breakdown,
             "human_votes_count": len(human_votes),
             "agent_evaluations_count": len(agent_scores)
         }
+        return result, ticket, consensus

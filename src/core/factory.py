@@ -196,11 +196,24 @@ class ApplicationFactory:
             resolved_git_port = resolved_git_sync
 
         # Servicios de dominio / aplicación
+        # EGM-56: el efecto OKF/git del laudo vive en el núcleo y sale por OkfGovernancePort.
+        ruling_publisher = None
+        if resolved_okf is not None:
+            from src.core.services.tribunal_ruling_publisher import OkfRulingPublisher
+
+            ruling_publisher = OkfRulingPublisher(
+                okf_port=resolved_okf,
+                project_lookup=project_repo.get_project_by_uuid,
+                jury_engine=resolved_bus.jury_engine,
+            )
         tribunal_service = DialecticTribunalService(
             tribunal_repo=tribunal_repo,
             bus=resolved_bus,
             event_bus=resolved_event_bus,
+            ruling_publisher=ruling_publisher,
         )
+        if ruling_publisher is not None and getattr(resolved_bus, "ruling_publisher", None) is None:
+            resolved_bus.ruling_publisher = ruling_publisher.publish
         kanban_service = KanbanGovernanceService(
             kanban_repo=kanban_repo,
             project_repo=project_repo,

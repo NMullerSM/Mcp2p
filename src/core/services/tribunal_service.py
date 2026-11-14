@@ -10,6 +10,7 @@ from src.a2a.bus import A2ABus
 from src.core.domain.context import ActorContext, DomainEvent
 from src.core.events import DomainEventBus
 from src.core.ports.repositories import TribunalRepositoryPort
+from src.core.services.tribunal_ruling_publisher import OkfRulingPublisher
 
 
 class DialecticTribunalService:
@@ -20,10 +21,20 @@ class DialecticTribunalService:
         tribunal_repo: TribunalRepositoryPort,
         bus: A2ABus,
         event_bus: Optional[DomainEventBus] = None,
+        ruling_publisher: Optional[OkfRulingPublisher] = None,
     ) -> None:
         self.tribunal_repo = tribunal_repo
         self.bus = bus
         self.event_bus = event_bus
+        # EGM-56: dueño del efecto OKF/git del laudo ratificado (vía OkfGovernancePort).
+        self.ruling_publisher = ruling_publisher
+
+    def publish_ruling(self, project_uuid: str, ticket: Dict[str, Any], verdict: Dict[str, Any]) -> Optional[str]:
+        """Escribe el ruling YAML y lo comitea (con push) en la gobernanza OKF del proyecto."""
+        if self.ruling_publisher is not None:
+            return self.ruling_publisher.publish(project_uuid, ticket, verdict)
+        # Núcleo sin OkfGovernancePort: mismo comportamiento que el bus suelto.
+        return self.bus._persist_and_commit_ruling(project_uuid, ticket, verdict)
 
     def _emit(self, event_type: str, project_uuid: str, payload: Dict[str, Any]) -> None:
         if self.event_bus is not None:
@@ -164,8 +175,23 @@ class DialecticTribunalService:
         return res
 
     def compute_verdict(self, project_uuid: str, ticket_id: str) -> Dict[str, Any]:
-        """Calcula el veredicto ponderado y persiste ruling YAML si queda ratificado."""
-        verdict = self.bus.compute_jury_verdict(project_uuid, ticket_id)
+        """
+        Calcula el veredicto ponderado (cálculo puro en `A2ABus.evaluate_jury_verdict`) y
+        orquesta aquí los efectos: ruling YAML + commit OKF solo si queda ratificado, y estado
+        del ticket vía `TribunalRepositoryPort` (EGM-56).
+        """
+        verdict, ticket, consensus = self.bus.evaluate_jury_verdict(project_uuid, ticket_id)
+        ruling_yaml_path = None
+        if verdict["status"] == "ratified":
+            ruling_yaml_path = self.publish_ruling(project_uuid, ticket, consensus)
+        self.tribunal_repo.update_dispute_status(
+            ticket_id=ticket_id,
+            status=verdict["status"],
+            resolution_mode=verdict["resolution_mode"],
+            winning_option=verdict["winning_option"],
+            final_adr_path=ruling_yaml_path,
+        )
+        verdict["ruling_yaml_path"] = ruling_yaml_path
         self._emit(
             "tribunal.verdict_computed",
             project_uuid,

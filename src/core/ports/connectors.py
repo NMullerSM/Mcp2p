@@ -14,6 +14,17 @@ class OkfGovernancePort(Protocol):
 
     def validate_okf_integrity(self, gov_base_path: str | Path) -> Dict[str, Any]: ...
 
+    # EGM-56: efectos del laudo ratificado del Tribunal (ruling + precedentes + commit).
+    def export_precedents_index(self, gov_base_path: str | Path) -> Any: ...
+
+    def commit_gov_file(
+        self,
+        gov_base_path: str | Path,
+        file_path: Any,
+        commit_message: str,
+        push_now: bool = False,
+    ) -> bool: ...
+
     def get_okf_adrs(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
 
     def get_okf_skills(self, gov_base_path: str | Path) -> List[Dict[str, Any]]: ...
