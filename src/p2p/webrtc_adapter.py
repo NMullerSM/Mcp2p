@@ -24,6 +24,7 @@ servidor real; sólo el camino con fábricas inyectadas lo está.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import threading
@@ -58,8 +59,11 @@ class _SignalingClient:
     esas tareas en cuanto termina la negociación.
     """
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, role: str = "offerer") -> None:
+        if role not in ("offerer", "answerer"):
+            raise ValueError(f"Rol WebRTC inválido: {role!r}. Use 'offerer' o 'answerer'.")
         self.url = url
+        self.role = role
         self.pc: Optional["RTCPeerConnection"] = None
         self.node_crypto: Optional[Any] = None
         self.data_channel: Optional[Any] = None
@@ -143,15 +147,27 @@ class _SignalingClient:
         ready.wait(timeout=5.0)
 
     def _stop_loop(self) -> None:
-        if self._loop is not None:
+        loop = self._loop
+        thread = self._loop_thread
+        if loop is not None:
             try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
+                loop.call_soon_threadsafe(loop.stop)
+            except Exception:
+                pass
+        if thread is not None and thread is not threading.current_thread():
+            try:
+                thread.join(timeout=1.0)
             except Exception:
                 pass
         self._loop = None
         self._loop_thread = None
 
     async def _negotiate(self, rendezvous_id: str, timeout_s: float) -> bool:
+        if self.role == "answerer":
+            return await self._negotiate_answerer(rendezvous_id, timeout_s)
+        return await self._negotiate_offerer(rendezvous_id, timeout_s)
+
+    async def _negotiate_offerer(self, rendezvous_id: str, timeout_s: float) -> bool:
         self.data_channel = self.pc.createDataChannel("mcp2p")
         self._attach_message_handler()
 
@@ -195,6 +211,73 @@ class _SignalingClient:
 
         return True
 
+    async def _negotiate_answerer(self, rendezvous_id: str, timeout_s: float) -> bool:
+        dc_ready = asyncio.Event()
+        if hasattr(self.pc, "on"):
+            @self.pc.on("datachannel")
+            def _on_datachannel(channel: Any) -> None:
+                self.data_channel = channel
+                self._attach_message_handler()
+                if getattr(channel, "readyState", None) == "open":
+                    dc_ready.set()
+                elif hasattr(channel, "on"):
+                    @channel.on("open")
+                    def _on_open(*_args: Any) -> None:
+                        dc_ready.set()
+
+        hello_msg: Dict[str, Any] = {
+            "type": "answerer_ready",
+            "rendezvous_id": rendezvous_id,
+        }
+        if self.node_crypto is not None:
+            try:
+                hello_msg["sender_pubkey"] = self.node_crypto.public_key_base64
+                hello_msg["sig"] = self.node_crypto.sign_payload(
+                    {"rendezvous_id": rendezvous_id, "role": "answerer"}
+                )
+            except Exception as exc:
+                logger.debug(f"No se pudo firmar el saludo answerer WebRTC: {exc}")
+
+        async with websockets.connect(self.url, open_timeout=timeout_s) as ws:
+            await asyncio.wait_for(ws.send(json.dumps(hello_msg)), timeout=timeout_s)
+            raw_offer = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
+
+            offer_msg = json.loads(raw_offer)
+            if offer_msg.get("type") != "offer" or "sdp" not in offer_msg:
+                return False
+
+            offer = RTCSessionDescription(sdp=offer_msg["sdp"], type="offer")
+            await self.pc.setRemoteDescription(offer)
+
+            answer = await self.pc.createAnswer()
+            await self.pc.setLocalDescription(answer)
+
+            while self.pc.iceGatheringState != "complete":
+                await asyncio.sleep(0.05)
+
+            answer_msg: Dict[str, Any] = {
+                "type": "answer",
+                "rendezvous_id": rendezvous_id,
+                "sdp": self.pc.localDescription.sdp,
+            }
+            if self.node_crypto is not None:
+                try:
+                    answer_msg["sender_pubkey"] = self.node_crypto.public_key_base64
+                    answer_msg["sig"] = self.node_crypto.sign_payload(
+                        {"rendezvous_id": rendezvous_id, "sdp": answer_msg["sdp"]}
+                    )
+                except Exception as exc:
+                    logger.debug(f"No se pudo firmar la respuesta WebRTC: {exc}")
+
+            await asyncio.wait_for(ws.send(json.dumps(answer_msg)), timeout=timeout_s)
+
+        while self.data_channel is None or getattr(self.data_channel, "readyState", None) != "open":
+            if dc_ready.is_set() and self.data_channel is not None:
+                break
+            await asyncio.sleep(0.05)
+
+        return True
+
     def _attach_message_handler(self) -> None:
         dc = self.data_channel
 
@@ -228,20 +311,27 @@ class WebRTCTransportAdapter(P2PTransport):
         node_crypto: Any,
         pc_factory: Optional[Callable[[], Any]] = None,
         signaling_factory: Optional[Callable[[str], Any]] = None,
+        role: str = "offerer",
     ) -> None:
+        if role not in ("offerer", "answerer"):
+            raise ValueError(f"Rol WebRTC inválido: {role!r}. Use 'offerer' o 'answerer'.")
         self._signaling_url = signaling_url
         self._node_crypto = node_crypto
         self._pc_factory = pc_factory or _default_pc_factory
         self._signaling_factory = signaling_factory or _SignalingClient
+        self._role = role
         self._pc: Optional[Any] = None
         self._signaling: Optional[Any] = None
         self._connected = False
         self._message_callback: Optional[Callable[[dict], None]] = None
 
     def try_connect(self, peer_rendezvous_id: str, timeout_s: float = 8.0) -> bool:
-        self._connected = False
+        # EGM-46: liberar cualquier conexión previa antes de reasignar
+        self.close()
         if not self._signaling_url:
             return False
+        pc: Optional[Any] = None
+        signaling: Optional[Any] = None
         try:
             pc = self._pc_factory()
             signaling = self._signaling_factory(self._signaling_url)
@@ -250,10 +340,12 @@ class WebRTCTransportAdapter(P2PTransport):
             try:
                 signaling.pc = pc
                 signaling.node_crypto = self._node_crypto
+                signaling.role = self._role
             except Exception:
                 pass
 
             if not signaling.connect(peer_rendezvous_id, timeout_s):
+                self._cleanup_pair(signaling, pc)
                 return False
 
             self._pc = pc
@@ -264,7 +356,25 @@ class WebRTCTransportAdapter(P2PTransport):
             return True
         except Exception as exc:
             logger.debug(f"try_connect falló, degradando a False: {exc}")
+            self._cleanup_pair(signaling, pc)
             return False
+
+    @staticmethod
+    def _cleanup_pair(signaling: Optional[Any], pc: Optional[Any]) -> None:
+        sig_owns_pc = signaling is not None and getattr(signaling, "pc", None) is pc
+        if signaling is not None and hasattr(signaling, "close"):
+            try:
+                signaling.close()
+            except Exception as exc:
+                logger.debug(f"close falló al cerrar la señalización: {exc}")
+        if pc is not None and not sig_owns_pc and hasattr(pc, "close"):
+            try:
+                if not inspect.iscoroutinefunction(pc.close):
+                    res = pc.close()
+                    if inspect.isawaitable(res):
+                        res.close()  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.debug(f"close falló al cerrar pc: {exc}")
 
     def send(self, message: dict) -> bool:
         if not self._connected or self._signaling is None:
@@ -286,12 +396,9 @@ class WebRTCTransportAdapter(P2PTransport):
                 logger.debug(f"No se pudo registrar el callback de mensajes: {exc}")
 
     def close(self) -> None:
-        try:
-            if self._signaling is not None and hasattr(self._signaling, "close"):
-                self._signaling.close()
-        except Exception as exc:
-            logger.debug(f"close falló al cerrar la señalización: {exc}")
-        finally:
-            self._pc = None
-            self._signaling = None
-            self._connected = False
+        signaling = self._signaling
+        pc = self._pc
+        self._pc = None
+        self._signaling = None
+        self._connected = False
+        self._cleanup_pair(signaling, pc)
