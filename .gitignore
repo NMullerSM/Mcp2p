@@ -61,3 +61,6 @@ ejecutables/windows/installer/*.exe
 ejecutables/linux/Mcp2p/
 ejecutables/linux/Mcp2p-Linux-Portable.tar.gz
 ejecutables/linux/mcp2p_*_amd64.deb
+
+# Catalogo de CLIs propio del usuario (no verificado, no se versiona)
+cli_catalog.user.json

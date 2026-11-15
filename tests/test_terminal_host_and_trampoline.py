@@ -203,7 +203,8 @@ def test_ring_buffer_thread_safety() -> None:
 
 
 def test_pane_id_normalization_and_validation() -> None:
-    assert set(CLI_PROFILES.keys()) == {"claude", "gemini", "codex", "opencode", "custom_shell"}
+    assert set(CLI_PROFILES.keys()) == {"claude", "gemini", "codex", "opencode", "antigravity", "custom_shell"}
+    assert CLI_PROFILES["antigravity"] == ["agy"]
 
     for raw, expected in [
         (1, ("pane_1", 1)),
@@ -219,18 +220,33 @@ def test_pane_id_normalization_and_validation() -> None:
         with pytest.raises(ValueError):
             normalize_pane_id(bad)
 
+    # El maximo configurable (hasta 6) mueve el limite; mas alla del tope duro siempre falla.
+    assert normalize_pane_id(6, max_panes=6) == ("pane_6", 6)
+    assert normalize_pane_id("pane_5", max_panes=6) == ("pane_5", 5)
+    with pytest.raises(ValueError):
+        normalize_pane_id(7, max_panes=6)
+
     host = PosixPtyHostConnector(max_panes=4)
     try:
+        # Fuera de rango: respuesta controlada (no excepcion, para no abrir el circuit breaker).
+        over = host.spawn_session(pane_id=5, command=[sys.executable, "-V"])
+        assert over["success"] is False
+        assert over["code"] == "PANE_LIMIT_REACHED"
+        assert over["max_panes"] == 4
+        unknown = host.spawn_session(pane_id=1, cli_profile="desconocido_xyz")
+        assert unknown["success"] is False
+        assert unknown["degraded"] is False
+        assert unknown["code"] == "CLI_PROFILE_UNKNOWN"
+        assert "claude" in unknown["known_profiles"]
         with pytest.raises(ValueError):
-            host.spawn_session(pane_id=5, command=[sys.executable, "-V"])
-        with pytest.raises(ValueError):
-            host.spawn_session(pane_id=1, cli_profile="desconocido_xyz")
+            host.spawn_session(pane_id="pane_x", command=[sys.executable, "-V"])
 
         missing = host.spawn_session(pane_id=1, command=["__binario_inexistente_mcp2p_41__"])
         assert missing["success"] is False
-        assert missing["degraded"] is True
+        assert missing["degraded"] is False  # causa exacta, no "degradado" generico
         assert missing["code"] == "CLI_BINARY_NOT_FOUND"
         assert missing.get("manual_command")
+        assert missing["install_available"] is False
         assert host.list_sessions() == []
     finally:
         host.close()
@@ -438,7 +454,8 @@ def test_non_posix_and_openpty_failure_degrade_cleanly(monkeypatch: pytest.Monke
     win_resp = host.spawn_session(pane_id=1, command=[sys.executable, "-V"])
     assert win_resp["success"] is False
     assert win_resp["degraded"] is True
-    assert win_resp["code"] == "PTY_UNAVAILABLE"
+    assert win_resp["code"] == "TERMINAL_PLATFORM_UNSUPPORTED"
+    assert win_resp["manual_command"]
 
     monkeypatch.undo()
     monkeypatch.setattr(pty_host_mod.os, "name", "nt")
@@ -446,7 +463,7 @@ def test_non_posix_and_openpty_failure_degrade_cleanly(monkeypatch: pytest.Monke
     nt_resp = host.spawn_session(pane_id=1, command=[sys.executable, "-V"])
     assert nt_resp["success"] is False
     assert nt_resp["degraded"] is True
-    assert nt_resp["code"] == "PTY_UNAVAILABLE"
+    assert nt_resp["code"] == "TERMINAL_PLATFORM_UNSUPPORTED"
 
     # Restaurar plataforma y simular fallo de pty.openpty()
     monkeypatch.undo()

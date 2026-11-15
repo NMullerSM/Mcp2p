@@ -41,6 +41,10 @@ def build():
     if os.path.exists(ui_fallback_dir):
         add_data_args.append(f"--add-data={ui_fallback_dir}{sep}src/ui")
 
+    # Catalogo versionado de CLIs de agente: src.adapters.terminal.cli_catalog lo lee en runtime.
+    cli_catalog_json = os.path.join(base_dir, "src", "adapters", "terminal", "cli_catalog.json")
+    add_data_args.append(f"--add-data={cli_catalog_json}{sep}src/adapters/terminal")
+
     for asset_file in ["mcp2p.png", "mcp2p.ico"]:
         asset_path = os.path.join(base_dir, asset_file)
         if os.path.exists(asset_path):
@@ -96,6 +100,10 @@ def build():
         "--hidden-import=src.a2a",
         "--hidden-import=src.a2a.bus",
         "--hidden-import=src.a2a.jury_engine",
+        "--hidden-import=src.adapters.terminal",
+        "--hidden-import=src.adapters.terminal.cli_catalog",
+        "--hidden-import=src.adapters.terminal.pty_host",
+        "--hidden-import=src.runtime.terminal_platform",
         entry_point,
     ]
 

@@ -22,11 +22,18 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
 
 import psutil
 
+from src.adapters.terminal.cli_catalog import (
+    CliCatalogService,
+    SettingsStore,
+    legacy_profiles,
+    load_repo_catalog,
+)
 from src.proc_utils import no_window_kwargs
+from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_platform_response
 
 if os.name == "posix":
     try:
@@ -45,16 +52,26 @@ else:  # pragma: no cover - win32 / no POSIX
 logger = logging.getLogger("mcp2p.adapters.terminal.pty_host")
 
 DEFAULT_MAX_PANES = 4
+HARD_MAX_PANES = 6  # tope absoluto configurable (EGM-22 / plan 2026-11-15, seccion 5b)
+DEFAULT_MIN_AVAILABLE_MB = 1024  # admision por memoria: MemAvailable minima para abrir otro panel
+MAX_PANES_SETTING_NAMESPACE = "terminal_matrix"
+MAX_PANES_SETTING_KEY = "max_panes"
 DEFAULT_RING_BYTES = 262144  # 256 KB
 DEFAULT_MANUAL_COMMAND = "mcp2p --mcp-server --transport streamable-http --host 127.0.0.1 --port 8765"
 
-CLI_PROFILES: Dict[str, List[str]] = {
-    "claude": ["claude"],
-    "gemini": ["gemini"],
-    "codex": ["codex"],
-    "opencode": ["opencode"],
-    "custom_shell": [os.environ.get("SHELL") or "/bin/sh"],
-}
+_SHELL_DEFAULT = os.environ.get("SHELL") or "/bin/sh"
+
+
+def _build_cli_profiles() -> Dict[str, List[str]]:
+    """`CLI_PROFILES` se deriva del catalogo versionado del repo (`cli_catalog.json`)."""
+    try:
+        return legacy_profiles(load_repo_catalog(), _SHELL_DEFAULT)
+    except Exception as exc:  # pragma: no cover - solo si el artefacto del build esta corrupto
+        logger.error("cli_catalog.json no se pudo cargar; usando perfiles minimos: %s", exc)
+        return {"claude": ["claude"], "custom_shell": [_SHELL_DEFAULT]}
+
+
+CLI_PROFILES: Dict[str, List[str]] = _build_cli_profiles()
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -67,6 +84,32 @@ def _default_mcp_config() -> Dict[str, Any]:
             }
         }
     }
+
+
+class PaneLimitError(ValueError):
+    """`pane_id` numericamente valido pero por encima del maximo de paneles configurado."""
+
+
+def clamp_max_panes(value: Any, default: int = DEFAULT_MAX_PANES) -> int:
+    """Convierte un valor externo en un maximo de paneles dentro de `1..HARD_MAX_PANES`."""
+    if isinstance(value, bool):
+        return default
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(HARD_MAX_PANES, number))
+
+
+def load_configured_max_panes(settings: Optional[SettingsStore], default: int = DEFAULT_MAX_PANES) -> int:
+    """Lee el maximo de paneles persistido (si existe y es valido); si no, `default`."""
+    if settings is None:
+        return default
+    try:
+        raw = settings.get_extension_setting(MAX_PANES_SETTING_NAMESPACE, MAX_PANES_SETTING_KEY, None)
+    except Exception:
+        return default
+    return clamp_max_panes(raw, default) if raw is not None else default
 
 
 def normalize_pane_id(pane_id: Any, *, max_panes: int = DEFAULT_MAX_PANES) -> Tuple[str, int]:
@@ -88,7 +131,11 @@ def normalize_pane_id(pane_id: Any, *, max_panes: int = DEFAULT_MAX_PANES) -> Tu
         elif raw.startswith("pane_") and raw[5:].isdigit():
             index = int(raw[5:])
 
-    if index is None or index < 1 or index > limit:
+    if index is not None and index > limit:
+        raise PaneLimitError(
+            f"pane_id fuera de rango: {pane_id!r} (rango válido: 1..{limit} o 'pane_1'..'pane_{limit}')."
+        )
+    if index is None or index < 1:
         raise ValueError(
             f"pane_id fuera de rango: {pane_id!r} (rango válido: 1..{limit} o 'pane_1'..'pane_{limit}')."
         )
@@ -273,15 +320,40 @@ class PosixPtyHostConnector:
         ring_max_bytes: int = DEFAULT_RING_BYTES,
         gate: Optional[Any] = None,
         connector_id: str = "agent_terminal_matrix",
+        catalog_service: Optional[CliCatalogService] = None,
+        min_available_mb: int = DEFAULT_MIN_AVAILABLE_MB,
+        memory_probe: Optional[Callable[[], float]] = None,
     ) -> None:
-        if int(max_panes) < 1:
-            raise ValueError("max_panes debe ser >= 1.")
-        self.max_panes = int(max_panes)
+        if int(max_panes) < 1 or int(max_panes) > HARD_MAX_PANES:
+            raise ValueError(f"max_panes debe estar entre 1 y {HARD_MAX_PANES}.")
+        self._max_panes = int(max_panes)
         self.ring_max_bytes = int(ring_max_bytes)
         self.gate = gate
         self.connector_id = connector_id
+        self.catalog_service = catalog_service if catalog_service is not None else CliCatalogService()
+        self.min_available_mb = max(0, int(min_available_mb))
+        self._memory_probe = memory_probe or self._default_memory_probe
         self._lock = threading.RLock()
         self._sessions: Dict[str, _PtySession] = {}
+
+    @property
+    def max_panes(self) -> int:
+        return self._max_panes
+
+    def set_max_panes(self, value: int) -> int:
+        """Cambia el maximo (1..HARD_MAX_PANES). No cierra sesiones vivas: solo frena nuevas."""
+        number = int(value)
+        if number < 1 or number > HARD_MAX_PANES:
+            raise ValueError(f"max_panes debe estar entre 1 y {HARD_MAX_PANES}.")
+        self._max_panes = number
+        return number
+
+    @staticmethod
+    def _default_memory_probe() -> float:
+        try:
+            return float(psutil.virtual_memory().available) / (1024.0 * 1024.0)
+        except Exception:
+            return float("inf")
 
     @staticmethod
     def is_available() -> bool:
@@ -297,26 +369,27 @@ class PosixPtyHostConnector:
         return normalize_pane_id(pane_id, max_panes=self.max_panes)
 
     @staticmethod
-    def _resolve_command(cli_profile: str, command: Optional[Union[List[str], str]]) -> List[str]:
-        if command is not None:
-            if isinstance(command, str):
-                parts = shlex.split(command)
-            elif isinstance(command, (list, tuple)):
-                parts = [str(part) for part in command]
-            else:
-                raise ValueError("command debe ser str o secuencia de str.")
-            if not parts or not parts[0]:
-                raise ValueError("command no puede estar vacío.")
-            return parts
+    def _parse_command(command: Union[List[str], str]) -> List[str]:
+        if isinstance(command, str):
+            parts = shlex.split(command)
+        elif isinstance(command, (list, tuple)):
+            parts = [str(part) for part in command]
+        else:
+            raise ValueError("command debe ser str o secuencia de str.")
+        if not parts or not parts[0]:
+            raise ValueError("command no puede estar vacío.")
+        return parts
 
-        if cli_profile not in CLI_PROFILES:
-            raise ValueError(
-                f"cli_profile desconocido: {cli_profile!r}. Permitidos: {sorted(CLI_PROFILES)}."
-            )
-        base_cmd = list(CLI_PROFILES[cli_profile])
-        if not base_cmd and cli_profile == "custom_shell":
-            base_cmd = [os.environ.get("SHELL") or "/bin/sh"]
-        return base_cmd
+    def _pane_limit_response(self, norm_pane: str, reason: str, message: str) -> Dict[str, Any]:
+        return {
+            "success": False,
+            "degraded": False,
+            "code": "PANE_LIMIT_REACHED",
+            "reason": reason,
+            "pane_id": norm_pane,
+            "max_panes": self.max_panes,
+            "message": message,
+        }
 
     @staticmethod
     def _which_executable(binary: str, cwd: Optional[str]) -> Optional[str]:
@@ -531,6 +604,7 @@ class PosixPtyHostConnector:
             "mode": "posix_pty",
             "active_sessions": sum(1 for s in sessions if s["alive"]),
             "max_panes": self.max_panes,
+            "hard_max_panes": HARD_MAX_PANES,
             "sessions": sessions,
         }
 
@@ -555,13 +629,25 @@ class PosixPtyHostConnector:
         node_uuid: Optional[str] = None,
         use_trampoline: bool = True,
     ) -> Dict[str, Any]:
-        norm_pane, pane_index = self._normalize_pane(pane_id)
+        try:
+            norm_pane, pane_index = self._normalize_pane(pane_id)
+        except PaneLimitError as exc:
+            return {
+                "success": False,
+                "degraded": False,
+                "code": "PANE_LIMIT_REACHED",
+                "reason": "pane_out_of_range",
+                "pane_id": str(pane_id),
+                "max_panes": self.max_panes,
+                "message": str(exc),
+            }
         cols_int = int(cols)
         rows_int = int(rows)
         if cols_int <= 0 or rows_int <= 0:
             raise ValueError("cols y rows deben ser > 0.")
 
-        resolved_cmd = self._resolve_command(cli_profile, command)
+        if is_unsupported_terminal_platform():
+            return {**unsupported_platform_response(), "pane_id": norm_pane}
 
         if not self.is_available():
             return {
@@ -586,17 +672,48 @@ class PosixPtyHostConnector:
                     "message": f"Directorio de trabajo inexistente: {resolved_cwd}",
                 }
 
-        if not self._which_executable(resolved_cmd[0], resolved_cwd):
+        profile_label = cli_profile if isinstance(cli_profile, str) else repr(cli_profile)
+        if command is not None:
+            resolved_cmd = self._parse_command(command)
+            binary_ok = self._which_executable(resolved_cmd[0], resolved_cwd) is not None
+            display_name = profile_label
+        else:
+            argv, resolution, spec = self.catalog_service.build_launch(cli_profile)
+            if spec is None:
+                known = self.catalog_service.catalog().ids()
+                return {
+                    "success": False,
+                    "degraded": False,
+                    "code": "CLI_PROFILE_UNKNOWN",
+                    "pane_id": norm_pane,
+                    "cli_profile": profile_label,
+                    "known_profiles": known,
+                    "message": f"Perfil de CLI desconocido: {profile_label}. Permitidos: {known}.",
+                }
+            display_name = spec.display_name
+            binary_ok = argv is not None
+            resolved_cmd = argv if argv is not None else [spec.binary]
+
+        if not binary_ok:
+            hint = self.catalog_service.install_hint(cli_profile) if isinstance(cli_profile, str) else {
+                "install_available": False, "install_command": None,
+            }
+            suffix = (
+                " Puede instalarlo desde el panel lateral de terminales."
+                if hint.get("install_available")
+                else " Configure la ruta del binario o instálelo manualmente."
+            )
             return {
                 "success": False,
-                "degraded": True,
+                "degraded": False,
                 "code": "CLI_BINARY_NOT_FOUND",
                 "pane_id": norm_pane,
-                "cli_profile": cli_profile,
+                "cli_profile": profile_label,
                 "missing_binary": resolved_cmd[0],
-                "message": f"Ejecutable CLI '{resolved_cmd[0]}' no encontrado en PATH.",
+                "message": f"No se encontró el ejecutable de {display_name} ('{resolved_cmd[0]}').{suffix}",
                 "manual_command": DEFAULT_MANUAL_COMMAND,
                 "mcp_config": _default_mcp_config(),
+                **hint,
             }
 
         stale_session: Optional[_PtySession] = None
@@ -614,6 +731,20 @@ class PosixPtyHostConnector:
                         "message": f"El panel {norm_pane} ya tiene una sesión viva (PID {existing.pid}).",
                     }
                 stale_session = self._sessions.pop(norm_pane, None)
+            alive_others = sum(
+                1 for pane_key, other in self._sessions.items() if pane_key != norm_pane and other.is_alive()
+            )
+
+        if alive_others >= self.max_panes:
+            return self._pane_limit_response(norm_pane, "max_panes", f"Máximo de {self.max_panes} paneles activos alcanzado.")
+        if alive_others >= 1:
+            available_mb = self._memory_probe()
+            if available_mb < self.min_available_mb:
+                return self._pane_limit_response(
+                    norm_pane,
+                    "low_memory",
+                    f"Memoria disponible insuficiente ({available_mb:.0f} MB < {self.min_available_mb} MB) para abrir otro panel.",
+                )
 
         if stale_session is not None:
             self._shutdown_session(stale_session)

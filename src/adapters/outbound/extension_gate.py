@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.p2p.crypto import NodeCryptoManager, verify_connector_manifest
+from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_platform_response
 from src.storage.validators import validate_safe_id
 
 
@@ -522,6 +523,8 @@ class NullAgentTerminalConnector:
         return []
 
     def _degraded_response(self) -> Dict[str, Any]:
+        if is_unsupported_terminal_platform():
+            return unsupported_platform_response()
         return {
             "success": False,
             "degraded": True,

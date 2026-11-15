@@ -7,6 +7,8 @@ ROOT_DIR = os.path.dirname(os.path.abspath(SPEC)) if 'SPEC' in locals() else os.
 datas = [
     (os.path.join(ROOT_DIR, 'frontend', 'dist'), 'frontend/dist'),
     (os.path.join(ROOT_DIR, 'src', 'ui'), 'src/ui'),
+    # Catalogo versionado de CLIs de agente (lo carga src.adapters.terminal.cli_catalog en runtime).
+    (os.path.join(ROOT_DIR, 'src', 'adapters', 'terminal', 'cli_catalog.json'), 'src/adapters/terminal'),
     (os.path.join(ROOT_DIR, 'mcp2p.ico'), '.'),
     (os.path.join(ROOT_DIR, 'mcp2p.png'), '.'),
 ]
@@ -17,7 +19,9 @@ hiddenimports = [
     'src.mcp.transport_options', 'src.storage', 'src.storage.db', 'src.storage.okf_adapter',
     'src.storage.github_sync', 'src.storage.code_scanner', 'src.p2p', 'src.p2p.network',
     'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
-    'src.mcp', 'src.mcp.server', 'src.mcp.tools'
+    'src.mcp', 'src.mcp.server', 'src.mcp.tools',
+    'src.adapters.terminal', 'src.adapters.terminal.cli_catalog', 'src.adapters.terminal.pty_host',
+    'src.runtime.terminal_platform'
 ]
 # 'av' is collected explicitly even though nothing in this project imports it
 # directly: it is a MANDATORY transitive dependency of aiortc (av<20.0.0,>=14.0.0

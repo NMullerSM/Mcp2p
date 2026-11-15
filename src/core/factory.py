@@ -60,8 +60,9 @@ class ApplicationFactory:
     def create_terminal_host(
         gate: Optional[Any] = None,
         *,
-        max_panes: int = 4,
+        max_panes: Optional[int] = None,
         use_pty_host: bool = True,
+        settings: Optional[Any] = None,
         failure_threshold: int = 3,
         cooldown_s: float = 30.0,
     ) -> Any:
@@ -69,9 +70,23 @@ class ApplicationFactory:
         Compone el `AgentTerminalPort` (`SafeTerminalHostSupervisor` envolviendo
         `PosixPtyHostConnector` cuando está disponible y `NullAgentTerminalConnector`
         como respaldo degradado).
+
+        `settings` (`ExtensionRegistryRepositoryPort`) aporta las rutas de binario por CLI y el
+        maximo de paneles persistido (1..6, por defecto 4); `max_panes` explicito tiene prioridad.
         """
         from src.adapters.outbound.extension_gate import NullAgentTerminalConnector
+        from src.adapters.terminal.cli_catalog import CliCatalogService
+        from src.adapters.terminal.pty_host import (
+            DEFAULT_MAX_PANES,
+            clamp_max_panes,
+            load_configured_max_panes,
+        )
         from src.adapters.terminal.supervisor import SafeTerminalHostSupervisor
+
+        if max_panes is None:
+            resolved_max_panes = load_configured_max_panes(settings, DEFAULT_MAX_PANES)
+        else:
+            resolved_max_panes = clamp_max_panes(max_panes, DEFAULT_MAX_PANES)
 
         fallback = NullAgentTerminalConnector(gate=gate)
         primary: Any = fallback
@@ -80,7 +95,10 @@ class ApplicationFactory:
                 from src.adapters.terminal.pty_host import PosixPtyHostConnector
 
                 if PosixPtyHostConnector.is_available():
-                    primary = PosixPtyHostConnector(max_panes=max_panes)
+                    primary = PosixPtyHostConnector(
+                        max_panes=resolved_max_panes,
+                        catalog_service=CliCatalogService(settings),
+                    )
             except Exception as exc:
                 logger.warning(
                     "No se pudo inicializar PosixPtyHostConnector; usando fallback degradado: %s",
@@ -96,7 +114,7 @@ class ApplicationFactory:
         )
 
     @classmethod
-    def _build_default_extension_bundle(cls) -> tuple[Any, Any, Any]:
+    def _build_default_extension_bundle(cls, extension_repo: Optional[Any] = None) -> tuple[Any, Any, Any]:
         from src.adapters.outbound.extension_gate import (
             ExtensionSecurityGate,
             OutboundRestConnector,
@@ -104,7 +122,7 @@ class ApplicationFactory:
 
         gate = ExtensionSecurityGate()
         rest = OutboundRestConnector(gate=gate)
-        terminal = cls.create_terminal_host(gate=gate)
+        terminal = cls.create_terminal_host(gate=gate, settings=extension_repo)
         return gate, rest, terminal
 
     @staticmethod
@@ -219,7 +237,7 @@ class ApplicationFactory:
             if resolved_crypto is None:
                 resolved_crypto = cls._build_default_crypto(key_path=key_path)
             if resolved_gate is None or resolved_rest is None or resolved_terminal is None:
-                default_gate, default_rest, default_terminal = cls._build_default_extension_bundle()
+                default_gate, default_rest, default_terminal = cls._build_default_extension_bundle(extension_repo)
                 if resolved_gate is None:
                     resolved_gate = default_gate
                 if resolved_rest is None:

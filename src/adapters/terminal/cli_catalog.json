@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026.11.15",
+  "clis": [
+    {
+      "id": "claude",
+      "display_name": "Claude Code",
+      "icon": "claude",
+      "kind": "agent_cli",
+      "binary": "claude",
+      "binary_aliases": [],
+      "candidate_paths": {
+        "linux": ["~/.local/bin/claude", "~/.config/Claude/claude-code/*/*/claude"],
+        "darwin": ["~/.local/bin/claude", "~/Library/Application Support/Claude/claude-code/*/*/claude"],
+        "win32": ["%USERPROFILE%\\.local\\bin\\claude.exe"]
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "flag",
+        "argv": ["--mcp-config", "{mcp_config_file}"],
+        "verified": true,
+        "note": "Verificado con `claude --help` local: --mcp-config <configs...> y --strict-mcp-config."
+      },
+      "resume": {
+        "argv": ["--continue"],
+        "verified": true,
+        "note": "Verificado con `claude --help` local: -c/--continue y -r/--resume <id>."
+      },
+      "install": {
+        "linux": [
+          {
+            "method": "npm",
+            "command": "npm install -g @anthropic-ai/claude-code@latest",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": "Requiere Node.js 22+ segun la documentacion oficial; no usar sudo."
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://claude.ai/install.sh | bash",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": "Instalador nativo recomendado por el fabricante."
+          }
+        ],
+        "darwin": [
+          {
+            "method": "brew",
+            "command": "brew install --cask claude-code",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          },
+          {
+            "method": "npm",
+            "command": "npm install -g @anthropic-ai/claude-code@latest",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://claude.ai/install.sh | bash",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          }
+        ],
+        "win32": [
+          {
+            "method": "winget",
+            "command": "winget install Anthropic.ClaudeCode",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          },
+          {
+            "method": "npm",
+            "command": "npm install -g @anthropic-ai/claude-code@latest",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          },
+          {
+            "method": "powershell_irm",
+            "command": "irm https://claude.ai/install.ps1 | iex",
+            "verified": true,
+            "source_url": "https://code.claude.com/docs/en/setup",
+            "note": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "gemini",
+      "display_name": "Gemini CLI",
+      "icon": "gemini",
+      "kind": "agent_cli",
+      "binary": "gemini",
+      "binary_aliases": [],
+      "candidate_paths": {
+        "linux": ["~/.local/bin/gemini", "~/.npm-global/bin/gemini"],
+        "darwin": ["~/.local/bin/gemini", "/opt/homebrew/bin/gemini", "/usr/local/bin/gemini"],
+        "win32": ["%APPDATA%\\npm\\gemini.cmd"]
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "config_file",
+        "path": "~/.gemini/settings.json",
+        "verified": false,
+        "note": "No verificado contra el binario ni la documentacion oficial."
+      },
+      "resume": {
+        "argv": ["--resume"],
+        "verified": false,
+        "note": "No verificado: gemini no esta instalado en esta maquina."
+      },
+      "install": {
+        "linux": [
+          {
+            "method": "npm",
+            "command": "npm install -g @google/gemini-cli",
+            "verified": true,
+            "source_url": "https://github.com/google-gemini/gemini-cli",
+            "note": "Node.js 20+ segun https://www.geminicli.com/docs/get-started/installation. Desde 2026-06-18 el acceso gratuito individual paso a Antigravity CLI."
+          },
+          {
+            "method": "brew",
+            "command": "brew install gemini-cli",
+            "verified": true,
+            "source_url": "https://github.com/google-gemini/gemini-cli",
+            "note": ""
+          }
+        ],
+        "darwin": [
+          {
+            "method": "brew",
+            "command": "brew install gemini-cli",
+            "verified": true,
+            "source_url": "https://github.com/google-gemini/gemini-cli",
+            "note": ""
+          },
+          {
+            "method": "npm",
+            "command": "npm install -g @google/gemini-cli",
+            "verified": true,
+            "source_url": "https://github.com/google-gemini/gemini-cli",
+            "note": ""
+          }
+        ],
+        "win32": [
+          {
+            "method": "npm",
+            "command": "npm install -g @google/gemini-cli",
+            "verified": true,
+            "source_url": "https://github.com/google-gemini/gemini-cli",
+            "note": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "icon": "codex",
+      "kind": "agent_cli",
+      "binary": "codex",
+      "binary_aliases": [],
+      "candidate_paths": {
+        "linux": ["~/.local/bin/codex", "~/.npm-global/bin/codex"],
+        "darwin": ["~/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"],
+        "win32": ["%APPDATA%\\npm\\codex.cmd"]
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "subcommand",
+        "argv": ["mcp"],
+        "verified": true,
+        "note": "La documentacion oficial indica `codex mcp` para anadir servidores MCP."
+      },
+      "resume": {
+        "argv": ["resume"],
+        "verified": true,
+        "note": "Documentado: `codex resume` reabre un chat reciente."
+      },
+      "install": {
+        "linux": [
+          {
+            "method": "npm",
+            "command": "npm install -g @openai/codex",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          }
+        ],
+        "darwin": [
+          {
+            "method": "brew",
+            "command": "brew install --cask codex",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          },
+          {
+            "method": "npm",
+            "command": "npm install -g @openai/codex",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          }
+        ],
+        "win32": [
+          {
+            "method": "npm",
+            "command": "npm install -g @openai/codex",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          },
+          {
+            "method": "powershell_irm",
+            "command": "powershell -ExecutionPolicy ByPass -c \"irm https://chatgpt.com/codex/install.ps1 | iex\"",
+            "verified": true,
+            "source_url": "https://github.com/openai/codex",
+            "note": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "opencode",
+      "display_name": "OpenCode",
+      "icon": "opencode",
+      "kind": "agent_cli",
+      "binary": "opencode",
+      "binary_aliases": [],
+      "candidate_paths": {
+        "linux": ["~/.opencode/bin/opencode", "~/.local/bin/opencode"],
+        "darwin": ["~/.opencode/bin/opencode", "~/.local/bin/opencode", "/opt/homebrew/bin/opencode"],
+        "win32": ["%APPDATA%\\npm\\opencode.cmd"]
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "subcommand",
+        "argv": ["mcp", "add"],
+        "verified": true,
+        "note": "Verificado con `opencode mcp --help` local (v1.16.2)."
+      },
+      "resume": {
+        "argv": ["--continue"],
+        "verified": true,
+        "note": "Verificado con `opencode run --help` local: -c/--continue y -s/--session."
+      },
+      "install": {
+        "linux": [
+          {
+            "method": "npm",
+            "command": "npm install -g @opencode/cli",
+            "verified": true,
+            "source_url": "https://opencode.ai/docs/",
+            "note": "La documentacion actual instala la linea v2 (@opencode/cli); el binario v1 (opencode-ai) es distinto."
+          },
+          {
+            "method": "brew",
+            "command": "brew install anomalyco/tap/opencode-v2",
+            "verified": true,
+            "source_url": "https://github.com/anomalyco/opencode",
+            "note": ""
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://opencode.ai/v2/install | bash",
+            "verified": true,
+            "source_url": "https://opencode.ai/docs/",
+            "note": ""
+          }
+        ],
+        "darwin": [
+          {
+            "method": "brew",
+            "command": "brew install anomalyco/tap/opencode-v2",
+            "verified": true,
+            "source_url": "https://github.com/anomalyco/opencode",
+            "note": ""
+          },
+          {
+            "method": "npm",
+            "command": "npm install -g @opencode/cli",
+            "verified": true,
+            "source_url": "https://opencode.ai/docs/",
+            "note": ""
+          },
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://opencode.ai/v2/install | bash",
+            "verified": true,
+            "source_url": "https://opencode.ai/docs/",
+            "note": ""
+          }
+        ],
+        "win32": []
+      }
+    },
+    {
+      "id": "antigravity",
+      "display_name": "Antigravity",
+      "icon": "antigravity",
+      "kind": "agent_cli",
+      "binary": "agy",
+      "binary_aliases": ["antigravity"],
+      "candidate_paths": {
+        "linux": ["~/.local/bin/agy"],
+        "darwin": ["~/.local/bin/agy"],
+        "win32": ["%LOCALAPPDATA%\\agy\\bin\\agy.exe"]
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "subcommand",
+        "argv": ["mcp", "add"],
+        "verified": true,
+        "note": "Verificado con `agy --help` local (1.5.4): subcomando `mcp` (add, remove, list, enable, disable)."
+      },
+      "resume": {
+        "argv": ["--continue"],
+        "verified": true,
+        "note": "Verificado con `agy --help` local: -c/--continue y --conversation <id>."
+      },
+      "install": {
+        "linux": [
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            "verified": true,
+            "source_url": "https://antigravity.google/docs/getting-started?tab=cli",
+            "note": "Unico metodo oficial documentado; el binario queda en ~/.local/bin/agy."
+          }
+        ],
+        "darwin": [
+          {
+            "method": "curl_sh",
+            "command": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            "verified": true,
+            "source_url": "https://antigravity.google/docs/getting-started?tab=cli",
+            "note": ""
+          }
+        ],
+        "win32": [
+          {
+            "method": "powershell_irm",
+            "command": "irm https://antigravity.google/cli/install.ps1 | iex",
+            "verified": true,
+            "source_url": "https://antigravity.google/docs/getting-started?tab=cli",
+            "note": ""
+          }
+        ]
+      }
+    },
+    {
+      "id": "custom_shell",
+      "display_name": "Shell",
+      "icon": "shell",
+      "kind": "shell",
+      "binary": "sh",
+      "binary_aliases": [],
+      "shell_env": "SHELL",
+      "candidate_paths": {
+        "linux": ["/bin/sh"],
+        "darwin": ["/bin/sh"],
+        "win32": []
+      },
+      "launch_flags": [],
+      "mcp": {
+        "method": "none",
+        "verified": true,
+        "note": ""
+      },
+      "resume": {
+        "argv": [],
+        "verified": true,
+        "note": ""
+      },
+      "install": {
+        "linux": [],
+        "darwin": [],
+        "win32": []
+      }
+    }
+  ]
+}

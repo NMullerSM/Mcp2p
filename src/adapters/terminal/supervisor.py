@@ -57,6 +57,21 @@ class SafeTerminalHostSupervisor:
     def fallback(self) -> NullAgentTerminalConnector:
         return self._fallback
 
+    @property
+    def max_panes(self) -> int:
+        """Maximo de paneles configurado en el conector primario (4 si el primario no lo define)."""
+        value = getattr(self._primary, "max_panes", None)
+        try:
+            return int(value) if value else 4
+        except (TypeError, ValueError):
+            return 4
+
+    def set_max_panes(self, value: int) -> int:
+        setter = getattr(self._primary, "set_max_panes", None)
+        if not callable(setter):
+            raise ValueError("El conector de terminales activo no admite cambiar el maximo de paneles.")
+        return int(setter(value))
+
     def _state(self) -> str:
         with self._lock:
             c = self._circuit
@@ -180,6 +195,7 @@ class SafeTerminalHostSupervisor:
             "mode": primary_status.get("mode", "posix_pty") if not degraded else fallback_status.get("mode", "null_degraded"),
             "active_sessions": primary_status.get("active_sessions", 0) if not degraded else 0,
             "max_panes": primary_status.get("max_panes", 4),
+            "hard_max_panes": primary_status.get("hard_max_panes", 6),
             "sessions": primary_status.get("sessions", []) if not degraded else [],
             "circuit_state": {"primary": circuit_state},
             "circuit": {
