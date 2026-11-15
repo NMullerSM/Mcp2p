@@ -19,6 +19,7 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
+from src.core.services.swarm_relay_service import SwarmRelayOrchestrator
 from src.mcp.pane_registry import (
     PaneRegistry,
     PaneSessionRecord,
@@ -94,6 +95,7 @@ class MCPToolsHandler:
         event_bus: Optional[Any] = None,
         owns_kernel: Optional[bool] = None,
         pane_registry: Optional[PaneRegistry] = None,
+        relay_orchestrator: Optional[SwarmRelayOrchestrator] = None,
     ) -> None:
         if kernel is None:
             db = db_manager or DatabaseManager.get_instance()
@@ -109,19 +111,76 @@ class MCPToolsHandler:
         self.db = kernel.db
         self.bus = kernel.bus
         self.pane_registry = pane_registry
+        self._relay_orchestrator = relay_orchestrator
+        self._owned_relay_orchestrator: Optional[SwarmRelayOrchestrator] = None
         self._bound_session_token: Optional[str] = None
         okf = kernel.okf_adapter
         if okf is None:
             okf = OKFAdapter()
             kernel.register_connector(CoreKernel.PORT_OKF, okf)
         self.okf = okf
+        if self._relay_orchestrator is None and getattr(self.kernel, "relay_orchestrator", None) is None:
+            self._get_relay_orchestrator()
+
+    def _get_relay_orchestrator(self) -> SwarmRelayOrchestrator:
+        """Retorna el SwarmRelayOrchestrator inyectado, del kernel o uno propio (lazy)."""
+        if self._relay_orchestrator is not None:
+            if (
+                self.pane_registry is not None
+                and getattr(self._relay_orchestrator, "pane_registry", None) is None
+            ):
+                self._relay_orchestrator.pane_registry = self.pane_registry
+            return self._relay_orchestrator
+
+        kernel_relay = getattr(self.kernel, "relay_orchestrator", None)
+        if kernel_relay is not None:
+            if self._owned_relay_orchestrator is not None:
+                close_owned = getattr(self._owned_relay_orchestrator, "close", None)
+                if callable(close_owned):
+                    try:
+                        close_owned()
+                    except Exception:
+                        pass
+                self._owned_relay_orchestrator = None
+            if (
+                self.pane_registry is not None
+                and getattr(kernel_relay, "pane_registry", None) is None
+            ):
+                kernel_relay.pane_registry = self.pane_registry
+            return kernel_relay
+
+        if self._owned_relay_orchestrator is None:
+            raw_ev = getattr(self.kernel, "event_bus", None)
+            ev_bus = raw_ev if callable(getattr(raw_ev, "subscribe", None)) else None
+            a2a_bus = self.bus if callable(getattr(self.bus, "subscribe", None)) else None
+            self._owned_relay_orchestrator = SwarmRelayOrchestrator(
+                event_bus=ev_bus,
+                bus=a2a_bus,
+                pane_registry=self.pane_registry,
+                terminal_connector=getattr(self.kernel, "terminal_connector", None),
+                crypto=getattr(self.kernel, "crypto", None),
+            )
+        elif (
+            self.pane_registry is not None
+            and getattr(self._owned_relay_orchestrator, "pane_registry", None) is None
+        ):
+            self._owned_relay_orchestrator.pane_registry = self.pane_registry
+        return self._owned_relay_orchestrator
 
     def bind_session_token(self, token: Optional[str]) -> None:
         """Vincula o limpia un token de sesión de panel para llamadas locales del handler (EGM-22)."""
         self._bound_session_token = token
 
     def close(self) -> None:
-        """Cierra el kernel asociado respetando `_owns_kernel` (`close_db=False` si es compartido, EGM-60)."""
+        """Cierra el kernel y el relay propio respetando `_owns_kernel` (`close_db=False` si es compartido, EGM-60)."""
+        if self._owned_relay_orchestrator is not None:
+            close_relay = getattr(self._owned_relay_orchestrator, "close", None)
+            if callable(close_relay):
+                try:
+                    close_relay()
+                except Exception:
+                    pass
+            self._owned_relay_orchestrator = None
         close_fn = getattr(self.kernel, "close", None)
         if callable(close_fn):
             try:
@@ -1525,6 +1584,37 @@ class MCPToolsHandler:
                 "project_uuid": project_uuid,
                 "drift_report": drift_report
             })
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def await_next_assignment(
+        self,
+        project_uuid: Optional[str] = None,
+        node_uuid: Optional[str] = None,
+        session_token: Optional[str] = None,
+        timeout_ms: int = 0,
+    ) -> str:
+        """
+        Espera (o consulta inmediatamente si ``timeout_ms <= 0``) la siguiente asignación
+        de trabajo o evento dialéctico/Kanban para el agente autenticado (EGM-22), usando
+        notificación por ``Condition.wait`` sin busy-wait.
+        """
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(
+            node_uuid,
+            session_token=session_token,
+        )
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+
+        effective_node = resolved_node or getattr(self.kernel, "node_uuid", None) or "*"
+        try:
+            relay = self._get_relay_orchestrator()
+            res = relay.await_next_assignment(
+                effective_node,
+                project_uuid=project_uuid,
+                timeout_ms=int(timeout_ms or 0),
+            )
+            return self._wrap_response(project_uuid, res)
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
 

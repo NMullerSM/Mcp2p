@@ -788,6 +788,35 @@ def create_mcp_server(
         resolved_proj = project_uuid or projectUuid or ""
         return handler.sync_coordination_memory(project_uuid=resolved_proj)
 
+    # 28. Herramienta: Esperar Siguiente Asignación del Enjambre (Push->Pull sin busy-wait)
+    @server.tool()
+    def await_next_assignment(
+        project_uuid: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        node_uuid: Optional[str] = None,
+        nodeUuid: Optional[str] = None,
+        session_token: Optional[str] = None,
+        sessionToken: Optional[str] = None,
+        timeout_ms: Optional[int] = None,
+        timeoutMs: Optional[int] = None,
+    ) -> str:
+        """
+        Espera mediante notificación push->pull (sin polling busy-wait) la siguiente
+        asignación de trabajo o evento dialéctico/Kanban para el agente autenticado (EGM-22).
+        """
+        resolved_proj = project_uuid if project_uuid is not None else projectUuid
+        resolved_node = node_uuid if node_uuid is not None else nodeUuid
+        resolved_token = session_token if session_token is not None else sessionToken
+        resolved_timeout = (
+            timeout_ms if timeout_ms is not None else (timeoutMs if timeoutMs is not None else 0)
+        )
+        return handler.await_next_assignment(
+            project_uuid=resolved_proj,
+            node_uuid=resolved_node,
+            session_token=resolved_token,
+            timeout_ms=resolved_timeout,
+        )
+
     setattr(server, "mcp2p_handler", handler)
     setattr(server, "mcp2p_pane_registry", pane_registry)
     return server
