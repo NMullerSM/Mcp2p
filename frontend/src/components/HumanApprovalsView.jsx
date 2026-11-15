@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X, GitCommit } from 'lucide-react';
 import { SideDrawer } from './SideDrawer';
+import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
 
 export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranch, searchQuery = '' }) {
   const [loading, setLoading] = useState(true);
+  // Gate 0c: si la clave de firma está bloqueada, pide la frase y reintenta la firma una vez.
+  const { withKeyUnlock, unlockDialog } = useSigningKeyGuard(api);
   const [approvals, setApprovals] = useState({
     pending_decisions: [],
     open_disputes: [],
@@ -96,17 +99,19 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
 
     try {
       setActionInProgress(itemId);
-      const res = await api.sign_and_approve_item(
+      const res = await withKeyUnlock(() => api.sign_and_approve_item(
         project.project_uuid,
         itemType,
         itemId,
         decision,
         confirmComment.trim() || defaultNote
-      );
+      ));
       if (res.success) {
         setConfirmRequest(null);
         setInspectedItem(null);
         await loadApprovals();
+      } else if (res.cancelled) {
+        // El humano canceló el desbloqueo de la clave: la confirmación sigue abierta, sin alerta.
       } else {
         alert("Error al procesar firma HITL: " + (res.error || 'Fallo desconocido'));
       }
@@ -1993,6 +1998,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           </div>
         </div>
       )}
+      {unlockDialog}
     </div>
   );
 }

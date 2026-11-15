@@ -7,6 +7,7 @@ import { BranchConsensusView } from './BranchConsensusView';
 import { HumanApprovalsView } from './HumanApprovalsView';
 import { CardDetailModal } from './Modals';
 import { useProjectPulse } from '../hooks/useProjectPulse';
+import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
 
 function extractCardTags(card) {
   const raw = card?.tags || card?.okf_tags || [];
@@ -48,6 +49,8 @@ export function ProjectWorkspace({
   taskTrigger = 0
 }) {
   const [cards, setCards] = useState([]);
+  // Gate 0c: si la clave de firma está bloqueada, pide la frase y reintenta la firma una vez.
+  const { withKeyUnlock, unlockDialog } = useSigningKeyGuard(api);
   const [selectedCard, setSelectedCard] = useState(null);
   const selectedCardRef = useRef(selectedCard);
   selectedCardRef.current = selectedCard;
@@ -204,8 +207,10 @@ export function ProjectWorkspace({
       } else if (targetStatus === 'merged') {
         // Al arrastrar directamente a Hecho/Merged, fusionar y consolidar con sign_and_approve_item
         if (project && api.sign_and_approve_item) {
-          const res = await api.sign_and_approve_item(project.project_uuid, 'pr_merge', cardId, 'APPROVED');
-          if (!res.success) {
+          const res = await withKeyUnlock(
+            () => api.sign_and_approve_item(project.project_uuid, 'pr_merge', cardId, 'APPROVED')
+          );
+          if (!res.success && !res.cancelled) {
             alert("No se pudo fusionar la tarea: " + (res.error || 'Fallo desconocido'));
           }
         } else {
@@ -250,18 +255,19 @@ export function ProjectWorkspace({
     if (!api) return;
     try {
       if (project && api.sign_and_approve_item) {
-        const res = await api.sign_and_approve_item(
+        const res = await withKeyUnlock(() => api.sign_and_approve_item(
           project.project_uuid,
           'pr_merge',
           cardData.card_id,
           'APPROVED',
           'Aprobación directa desde tarjeta Kanban'
-        );
+        ));
         if (res.success) {
           setSelectedCard(null);
           await loadCards();
           return;
         }
+        if (res.cancelled) return;
         alert("No se pudo aprobar y fusionar la tarea: " + (res.error || 'Fallo desconocido'));
         return;
       }
@@ -535,6 +541,8 @@ export function ProjectWorkspace({
           if (onTabChange) onTabChange('approvals');
         }}
       />
+
+      {unlockDialog}
     </div>
   );
 }
