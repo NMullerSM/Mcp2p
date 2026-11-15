@@ -1,0 +1,163 @@
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+  computeGridLayout,
+  pickFreePaneId,
+  renderTerminalText,
+  stripAnsiSequences,
+  describeTerminalError,
+  describeInstallBlock,
+  canOfferInstall,
+  rememberPaneSession,
+  recallPaneSession,
+  resetPaneSessionMemory,
+  MATRIX_PANE_IDS
+} from './terminalModel';
+
+afterEach(() => resetPaneSessionMemory());
+
+describe('computeGridLayout', () => {
+  it.each([
+    [0, 1, 1],
+    [1, 1, 1],
+    [2, 2, 1],
+    [3, 2, 2],
+    [4, 2, 2],
+    [5, 3, 2],
+    [6, 3, 2]
+  ])('con %i terminales abiertas la cuadricula es %i columnas x %i filas', (count, cols, rows) => {
+    const layout = computeGridLayout(count);
+    expect(layout.cols).toBe(cols);
+    expect(layout.rows).toBe(rows);
+    expect(layout.cells).toBe(cols * rows);
+    expect(layout.columns).toBe(`repeat(${cols}, minmax(0, 1fr))`);
+  });
+
+  it('no pasa del tope de 6 paneles', () => {
+    expect(computeGridLayout(99).cells).toBe(6);
+    expect(MATRIX_PANE_IDS).toHaveLength(6);
+  });
+});
+
+describe('pickFreePaneId', () => {
+  it('elige el primer pane libre dentro del maximo', () => {
+    expect(pickFreePaneId([], 4)).toBe('pane_1');
+    expect(pickFreePaneId(['pane_1', 'pane_3'], 4)).toBe('pane_2');
+    expect(pickFreePaneId(['pane_1', 'pane_2', 'pane_3', 'pane_4'], 4)).toBeNull();
+    expect(pickFreePaneId(['pane_1', 'pane_2', 'pane_3', 'pane_4'], 6)).toBe('pane_5');
+  });
+});
+
+describe('texto del terminal', () => {
+  it('quita secuencias ANSI y de conjunto de caracteres', () => {
+    expect(stripAnsiSequences('\x1b[32mok\x1b[0m \x1b(B\x1b]0;titulo\x07fin')).toBe('ok fin');
+  });
+
+  it('aplica retorno de carro y retroceso como una terminal', () => {
+    expect(renderTerminalText('10%\r50%\r100%\nlisto')).toBe('100%\nlisto');
+    expect(renderTerminalText('ls\b \bx')).toBe('lx');
+    expect(renderTerminalText('a\r\nb\r\n')).toBe('a\nb\n');
+  });
+
+  it('no interpreta HTML: lo devuelve como texto', () => {
+    expect(renderTerminalText('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');
+  });
+});
+
+describe('memoria de sesiones', () => {
+  it('solo devuelve la carpeta si la sesion es la misma', () => {
+    rememberPaneSession('pane_1', { sessionId: 's1', cwd: '/tmp/a' });
+    expect(recallPaneSession('pane_1', 's1').cwd).toBe('/tmp/a');
+    expect(recallPaneSession('pane_1', 's2')).toBeNull();
+    expect(recallPaneSession('pane_2', 's1')).toBeNull();
+  });
+});
+
+describe('describeTerminalError', () => {
+  it('CLI_BINARY_NOT_FOUND ofrece instalar si install_available y siempre configurar la ruta', () => {
+    const e = describeTerminalError(
+      { code: 'CLI_BINARY_NOT_FOUND', install_available: true, cli_profile: 'claude', message: 'No se encontro claude' },
+      { cliName: 'Claude Code' }
+    );
+    expect(e.title).toContain('Claude Code');
+    expect(e.actions).toEqual([{ kind: 'install', cliId: 'claude' }, { kind: 'configure_path', cliId: 'claude' }]);
+    expect(e.hint).toContain('instalar');
+  });
+
+  it('CLI_BINARY_NOT_FOUND sin instalacion solo ofrece configurar la ruta y explica lo que falta', () => {
+    const e = describeTerminalError({
+      code: 'CLI_BINARY_NOT_FOUND',
+      install_available: false,
+      install_missing_requirements: ['npm'],
+      cli_profile: 'gemini'
+    });
+    expect(e.actions).toEqual([{ kind: 'configure_path', cliId: 'gemini' }]);
+    expect(e.hint).toContain('npm');
+  });
+
+  it('CLI_PROFILE_UNKNOWN lista los perfiles permitidos', () => {
+    const e = describeTerminalError({ code: 'CLI_PROFILE_UNKNOWN', known_profiles: ['claude', 'codex'] });
+    expect(e.title).toMatch(/Perfil de CLI/);
+    expect(e.hint).toContain('claude, codex');
+  });
+
+  it.each([
+    ['pane_out_of_range', /fuera de rango/i, /pane_6/],
+    ['max_panes', /ya hay 4 terminales/i, /cierra una terminal/i],
+    ['low_memory', /memoria/i, /libera memoria/i]
+  ])('PANE_LIMIT_REACHED (%s) tiene su propio mensaje', (reason, titleRx, hintRx) => {
+    const e = describeTerminalError({ code: 'PANE_LIMIT_REACHED', reason, max_panes: reason === 'pane_out_of_range' ? 6 : 4 });
+    expect(e.title).toMatch(titleRx);
+    expect(e.hint).toMatch(hintRx);
+  });
+
+  it('INVALID_CWD pide una ruta absoluta existente', () => {
+    const e = describeTerminalError({ code: 'INVALID_CWD', message: 'no existe' });
+    expect(e.title).toMatch(/Carpeta de trabajo/);
+    expect(e.hint).toMatch(/ruta absoluta/);
+  });
+
+  it('PREREQUISITE_MISSING dice que falta', () => {
+    const e = describeTerminalError({ code: 'PREREQUISITE_MISSING', missing: ['npm', 'node'] });
+    expect(e.hint).toContain('npm, node');
+  });
+
+  it('TERMINAL_PLATFORM_UNSUPPORTED explica Windows y trae el comando manual', () => {
+    const e = describeTerminalError({ code: 'TERMINAL_PLATFORM_UNSUPPORTED', manual_command: 'mcp2p --mcp-server' });
+    expect(e.title).toMatch(/Windows/);
+    expect(e.manualCommand).toBe('mcp2p --mcp-server');
+    expect(e.actions).toEqual([{ kind: 'show_manual' }]);
+  });
+
+  it.each(['TERMINAL_ADAPTER_DEGRADED', 'PTY_UNAVAILABLE'])('%s no usa el mensaje generico de degradado', (code) => {
+    const e = describeTerminalError({ code });
+    expect(e.title).toMatch(/conector de terminales no está disponible/);
+    expect(e.manualCommand).toContain('mcp2p');
+    expect(e.title.toLowerCase()).not.toContain('degradado');
+  });
+
+  it('un codigo desconocido muestra el mensaje del backend', () => {
+    const e = describeTerminalError({ code: 'ALGO_NUEVO', message: 'hola' });
+    expect(e.code).toBe('ALGO_NUEVO');
+    expect(e.message).toBe('hola');
+  });
+});
+
+describe('reglas de instalacion', () => {
+  const ok = { id: 'claude', installed: false, kind: 'agent_cli', verified: true, install: { available: true, verified: true } };
+
+  it('ofrece instalar solo si el CLI esta verificado y el instalador disponible y verificado', () => {
+    expect(canOfferInstall(ok)).toBe(true);
+    expect(canOfferInstall({ ...ok, verified: false })).toBe(false);
+    expect(canOfferInstall({ ...ok, install: { available: false, verified: true } })).toBe(false);
+    expect(canOfferInstall({ ...ok, install: { available: true, verified: false } })).toBe(false);
+    expect(canOfferInstall({ ...ok, installed: true })).toBe(false);
+    expect(canOfferInstall({ ...ok, kind: 'shell' })).toBe(false);
+  });
+
+  it('explica por que no hay boton', () => {
+    expect(describeInstallBlock({ ...ok, verified: false, source: 'user' })).toMatch(/no está verificado/);
+    expect(describeInstallBlock({ ...ok, install: { available: false, missing_requirements: ['npm'] } })).toMatch(/npm/);
+    expect(describeInstallBlock({ ...ok, install: { available: false } })).toMatch(/instálalo manualmente/);
+    expect(describeInstallBlock(ok)).toBeNull();
+  });
+});
