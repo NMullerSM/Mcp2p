@@ -352,3 +352,134 @@ select:focus {
     gap: 16px;
   }
 }
+
+/* Slider lateral derecho de cada vista (ViewSlider.jsx): pestana delgada pegada al borde
+   derecho, siempre visible, que despliega el panel de herramientas secundarias. La pestana
+   cuelga del borde izquierdo del panel y se desliza con el, asi que sigue accesible abierta.
+   Usa la misma duracion/easing que la barra superior para una animacion coherente. */
+.mcp-view-slider {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  max-width: 96vw;
+  z-index: 110;
+  pointer-events: none;
+  transform: translateX(100%);
+  transition: transform var(--mcp-nav-duration) var(--mcp-nav-ease);
+  will-change: transform;
+}
+
+.mcp-view-slider[data-state="open"] {
+  transform: translateX(0);
+}
+
+.mcp-view-slider-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 108;
+  background-color: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--mcp-nav-duration) var(--mcp-nav-ease);
+}
+
+.mcp-view-slider-backdrop[data-state="open"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mcp-view-slider-tab {
+  position: absolute;
+  top: 50%;
+  left: -20px;
+  width: 20px;
+  height: 76px;
+  margin-top: -38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background-color: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  pointer-events: auto;
+  transition: opacity 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+}
+
+.mcp-view-slider-tab:hover,
+.mcp-view-slider-tab:focus-visible,
+.mcp-view-slider[data-state="open"] .mcp-view-slider-tab {
+  opacity: 1;
+  color: var(--accent-primary);
+  background-color: var(--bg-surface);
+}
+
+.mcp-view-slider-chevron {
+  transition: transform var(--mcp-nav-duration) var(--mcp-nav-ease);
+}
+
+.mcp-view-slider[data-state="open"] .mcp-view-slider-chevron {
+  transform: rotate(180deg);
+}
+
+.mcp-view-slider-panel {
+  pointer-events: auto;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+}
+
+.mcp-view-slider-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.mcp-view-slider-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.mcp-view-slider-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+
+.mcp-view-slider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.mcp-view-slider-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-view-slider,
+  .mcp-view-slider-backdrop,
+  .mcp-view-slider-chevron {
+    transition-duration: 0.01ms;
+  }
+}
