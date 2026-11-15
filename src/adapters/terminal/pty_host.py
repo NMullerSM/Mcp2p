@@ -335,6 +335,8 @@ class PosixPtyHostConnector:
         self._memory_probe = memory_probe or self._default_memory_probe
         self._lock = threading.RLock()
         self._sessions: Dict[str, _PtySession] = {}
+        # Paneles con un spawn en curso (reserva bajo `_lock` entre la comprobacion y el registro, EGM-67).
+        self._spawning: set[str] = set()
 
     @property
     def max_panes(self) -> int:
@@ -718,6 +720,14 @@ class PosixPtyHostConnector:
 
         stale_session: Optional[_PtySession] = None
         with self._lock:
+            if norm_pane in self._spawning:
+                return {
+                    "success": False,
+                    "degraded": False,
+                    "code": "PANE_ALREADY_ACTIVE",
+                    "pane_id": norm_pane,
+                    "message": f"El panel {norm_pane} ya se esta abriendo.",
+                }
             existing = self._sessions.get(norm_pane)
             if existing is not None:
                 if existing.is_alive():
@@ -733,8 +743,40 @@ class PosixPtyHostConnector:
                 stale_session = self._sessions.pop(norm_pane, None)
             alive_others = sum(
                 1 for pane_key, other in self._sessions.items() if pane_key != norm_pane and other.is_alive()
-            )
+            ) + sum(1 for pane_key in self._spawning if pane_key != norm_pane)
+            self._spawning.add(norm_pane)
 
+        try:
+            return self._spawn_reserved(
+                norm_pane=norm_pane, pane_index=pane_index, stale_session=stale_session,
+                alive_others=alive_others, cli_profile=cli_profile, role=role, resolved_cmd=resolved_cmd,
+                resolved_cwd=resolved_cwd, cols_int=cols_int, rows_int=rows_int, env_overrides=env_overrides,
+                hub_url=hub_url, session_token=session_token, node_uuid=node_uuid, use_trampoline=use_trampoline,
+            )
+        finally:
+            with self._lock:
+                self._spawning.discard(norm_pane)
+
+    def _spawn_reserved(
+        self,
+        *,
+        norm_pane: str,
+        pane_index: int,
+        stale_session: Optional[_PtySession],
+        alive_others: int,
+        cli_profile: str,
+        role: str,
+        resolved_cmd: List[str],
+        resolved_cwd: Optional[str],
+        cols_int: int,
+        rows_int: int,
+        env_overrides: Optional[Dict[str, Optional[str]]],
+        hub_url: Optional[str],
+        session_token: Optional[str],
+        node_uuid: Optional[str],
+        use_trampoline: bool,
+    ) -> Dict[str, Any]:
+        """Resto del spawn con el panel ya reservado en `_spawning` (lo libera `spawn_session`)."""
         if alive_others >= self.max_panes:
             return self._pane_limit_response(norm_pane, "max_panes", f"Máximo de {self.max_panes} paneles activos alcanzado.")
         if alive_others >= 1:

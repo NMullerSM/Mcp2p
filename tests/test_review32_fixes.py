@@ -80,3 +80,56 @@ def test_egm66_embedded_hub_rejects_requests_without_pane_token(tmp_path: Path) 
     finally:
         hub.stop()
         kernel.close()
+
+
+# ---------------------------------------------------------------------------
+# EGM-67: spawns concurrentes (cada llamada JS de PyWebView corre en su propio hilo)
+# ---------------------------------------------------------------------------
+
+
+@posix_only
+@pytest.mark.parametrize("panes,max_panes,expected_ok", [([1] * 6, 4, 1), ([1, 2, 3, 4], 2, 2)])
+def test_egm67_concurrent_spawns_never_orphan_processes(monkeypatch: pytest.MonkeyPatch, panes, max_panes,
+                                                        expected_ok) -> None:
+    import subprocess
+    import threading
+    import time
+
+    import psutil
+
+    from src.adapters.terminal import pty_host
+
+    real_popen = subprocess.Popen
+
+    class _SlowPopen(real_popen):  # ensancha la ventana comprobacion->registro como un sistema cargado
+        def __init__(self, *a, **k):
+            time.sleep(0.05)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(pty_host.subprocess, "Popen", _SlowPopen)
+    host = pty_host.PosixPtyHostConnector(max_panes=max_panes, min_available_mb=0)
+    barrier = threading.Barrier(len(panes))
+    results: list = []
+
+    def _go(p: int) -> None:
+        barrier.wait()
+        results.append(host.spawn_session(p, cli_profile="custom_shell", command=["sleep", "30"], use_trampoline=False))
+
+    threads = [threading.Thread(target=_go, args=(p,)) for p in panes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    try:
+        ok = [r for r in results if r.get("success")]
+        assert len(ok) == expected_ok, [r.get("code") for r in results]
+        assert {r.get("code") for r in results if not r.get("success")} <= {"PANE_ALREADY_ACTIVE", "PANE_LIMIT_REACHED"}
+        assert len(host.list_sessions()) == expected_ok
+    finally:
+        host.close()
+    time.sleep(0.2)
+    leftovers = [c for c in psutil.Process().children(recursive=True)
+                 if c.status() != psutil.STATUS_ZOMBIE and "sleep" in " ".join(c.cmdline())]
+    for c in leftovers:
+        c.kill()
+    assert leftovers == [], "procesos huerfanos fuera del registro del host"
