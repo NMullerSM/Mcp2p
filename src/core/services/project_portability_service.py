@@ -532,6 +532,10 @@ class ProjectPortabilityService:
                 secrets_in_pkg = [p for p in declared if p.startswith("secrets/")]
                 if not include_secrets:
                     self._scrub_staged_secrets(staged_db)
+                else:
+                    # Las rutas de binarios por CLI nunca viajan, tampoco con --include-secrets (EGM-68):
+                    # un paquete ajeno no puede apuntar el perfil `claude` a un ejecutable suyo.
+                    self._scrub_machine_settings(staged_db)
                 identity_notes: List[str] = []
 
                 existing_ids: Set[str] = set()
@@ -876,6 +880,16 @@ class ProjectPortabilityService:
         finally:
             conn.close()
         return changes
+
+    @staticmethod
+    def _scrub_machine_settings(staged_db: Path) -> None:
+        conn = _open_untrusted_db(staged_db)
+        try:
+            with conn:
+                if _table_exists(conn, "main", "extension_settings"):
+                    conn.execute("DELETE FROM extension_settings WHERE namespace = 'terminal_cli';")
+        finally:
+            conn.close()
 
     def _scrub_staged_secrets(self, staged_db: Path) -> None:
         conn = _open_untrusted_db(staged_db)

@@ -133,3 +133,57 @@ def test_egm67_concurrent_spawns_never_orphan_processes(monkeypatch: pytest.Monk
     for c in leftovers:
         c.kill()
     assert leftovers == [], "procesos huerfanos fuera del registro del host"
+
+
+# ---------------------------------------------------------------------------
+# EGM-68: un paquete hostil no cuela rutas de binario de CLI aunque se importe con --include-secrets
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("include_secrets", [False, True])
+def test_egm68_import_never_keeps_cli_binary_paths(tmp_path: Path, include_secrets: bool) -> None:
+    import hashlib
+    import json
+    import sqlite3
+    import zipfile
+
+    from src.core.services.project_portability_service import ProjectPortabilityService
+    from src.storage.db import DatabaseManager
+
+    src_db = tmp_path / "src.db"
+    db = DatabaseManager(db_path=str(src_db))
+    db.create_project(name="P", base_path=str(tmp_path / "ws" / "p"), init_git=False)
+    db.close()
+    svc = ProjectPortabilityService()
+    pkg = tmp_path / "pkg.zip"
+    svc.export_projects(src_db, pkg, workspace_root=tmp_path / "ws")
+
+    # Reempaquetar con la base manipulada (sha256/tamano coherentes con el manifiesto)
+    hostile = tmp_path / "hostile.zip"
+    with zipfile.ZipFile(pkg) as zin:
+        manifest = json.loads(zin.read("manifest.json"))
+        staged = tmp_path / "staged.db"
+        staged.write_bytes(zin.read("db/mcp2p_local.db"))
+        conn = sqlite3.connect(staged)
+        conn.execute("INSERT OR REPLACE INTO extension_settings(namespace,key,value) "
+                     "VALUES('terminal_cli','binary_path.claude','/tmp/evil.sh')")
+        conn.commit()
+        conn.close()
+        data = staged.read_bytes()
+        for f in manifest["files"]:
+            if f["path"] == "db/mcp2p_local.db":
+                f["sha256"], f["size"] = hashlib.sha256(data).hexdigest(), len(data)
+        with zipfile.ZipFile(hostile, "w") as zout:
+            zout.writestr("db/mcp2p_local.db", data)
+            for name in zin.namelist():
+                if name not in ("manifest.json", "db/mcp2p_local.db"):
+                    zout.writestr(zin.getinfo(name), zin.read(name))
+            zout.writestr("manifest.json", json.dumps(manifest))
+
+    dest_db = tmp_path / "dest.db"
+    svc.import_projects(hostile, dest_db, tmp_path / "dest_ws", include_secrets=include_secrets,
+                        identity_dir=tmp_path / "ident")
+    conn = sqlite3.connect(dest_db)
+    rows = conn.execute("SELECT key, value FROM extension_settings WHERE namespace='terminal_cli'").fetchall()
+    conn.close()
+    assert rows == []
