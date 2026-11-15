@@ -1,17 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   Check,
   Copy,
+  Download,
   Info,
   Pause,
   Play,
   RefreshCw,
+  Settings2,
   Square,
   X
 } from 'lucide-react';
 import { CliLogo } from './CliLogo';
 import {
+  canOfferInstall,
+  describeInstallBlock,
   DEFAULT_MANUAL_COMMAND,
   DEFAULT_MCP_CONFIG,
   HARD_MAX_PANES,
@@ -233,7 +237,7 @@ export function TerminalNotice({ notice, onDismiss, onAction, copiedKey, onCopy,
               onClick={() => onAction(action)}
               style={btnBase}
             >
-              {action.kind === 'install' ? 'Ir a instalar' : 'Configurar ruta'}
+              {action.kind === 'install' ? 'Revisar instalación' : 'Configurar ruta'}
             </button>
           ))}
         </div>
@@ -242,10 +246,195 @@ export function TerminalNotice({ notice, onDismiss, onAction, copiedKey, onCopy,
   );
 }
 
-function CliRow({ cli, platformSupported, launching, anyLaunching, onLaunch }) {
+function InstallConfirmation({ cliId, plan, busy, onConfirm, onCancel }) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  const needsAck = Boolean(plan.downloadsScript);
+  const canConfirm = !busy && (!needsAck || acknowledged);
+  return (
+    <div
+      data-testid={`install-confirm-${cliId}`}
+      role="group"
+      aria-label={`Confirmar la instalación de ${plan.displayName}`}
+      style={{
+        border: '1px solid rgba(245, 158, 11, 0.45)',
+        borderRadius: 'var(--radius-md)',
+        backgroundColor: 'rgba(245, 158, 11, 0.07)',
+        padding: '10px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px'
+      }}
+    >
+      <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+        Instalar {plan.displayName}
+      </div>
+      <p style={{ ...mutedText, margin: 0 }}>
+        Se ejecutará exactamente este comando, dentro de una terminal visible:
+      </p>
+      <pre
+        data-testid="install-command"
+        style={{
+          margin: 0,
+          padding: '6px 8px',
+          borderRadius: 'var(--radius-sm)',
+          backgroundColor: 'var(--bg-app)',
+          border: '1px solid var(--border-subtle)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '11px',
+          color: 'var(--text-primary)',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+          userSelect: 'text'
+        }}
+      >
+        {plan.command}
+      </pre>
+      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+        {plan.method && <span data-testid="install-method" style={chip}>método: {plan.method}</span>}
+        {plan.platform && <span style={chip}>{plan.platform}</span>}
+        {plan.requires.map((req) => (
+          <span key={req} data-testid="install-requires" style={chip}>requiere {req}</span>
+        ))}
+      </div>
+      {needsAck && (
+        <div
+          data-testid="install-script-warning"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            padding: '7px 9px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            backgroundColor: 'rgba(239, 68, 68, 0.08)',
+            fontSize: '11.5px',
+            color: 'var(--text-primary)',
+            lineHeight: 1.45
+          }}
+        >
+          <span style={{ fontWeight: 700, color: 'var(--accent-danger)' }}>
+            Este instalador descarga un script de Internet y lo ejecuta en tu shell.
+          </span>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              data-testid="install-script-ack"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              style={{ marginTop: '2px' }}
+            />
+            <span>Revisé el comando y la fuente, y acepto ejecutar un script descargado.</span>
+          </label>
+        </div>
+      )}
+      {plan.warning && (
+        <p data-testid="install-warning" style={{ ...mutedText, margin: 0, color: 'var(--accent-warning)' }}>{plan.warning}</p>
+      )}
+      {plan.sourceUrl && (
+        <span data-testid="install-source" style={{ ...mutedText, fontFamily: 'var(--font-mono)', fontSize: '10.5px', wordBreak: 'break-all' }}>
+          Fuente: {plan.sourceUrl}
+        </span>
+      )}
+      {plan.note && <span style={mutedText}>{plan.note}</span>}
+      <span style={mutedText}>La confirmación vence a los {Math.round(plan.expiresInS)} s y sirve una sola vez.</span>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+        <button type="button" data-testid="install-cancel-btn" onClick={onCancel} style={btnBase}>
+          Cancelar
+        </button>
+        <button
+          type="button"
+          data-testid="install-confirm-btn"
+          disabled={!canConfirm}
+          onClick={onConfirm}
+          style={{ ...btnPrimary, opacity: canConfirm ? 1 : 0.5, cursor: canConfirm ? 'pointer' : 'not-allowed' }}
+        >
+          {busy ? 'Instalando...' : 'Confirmar e instalar'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BinaryPathEditor({ cli, onSetCliPath }) {
+  const [value, setValue] = useState(cli.configured_path || '');
+  const [saving, setSaving] = useState(false);
+  const save = async (next) => {
+    setSaving(true);
+    try {
+      await onSetCliPath(cli.id, next);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div data-testid={`cli-path-editor-${cli.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+        <span>Ruta del binario de {cli.display_name}</span>
+        <input
+          type="text"
+          data-testid={`cli-path-input-${cli.id}`}
+          spellCheck={false}
+          autoComplete="off"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="/ruta/absoluta/al/ejecutable"
+          style={{ ...fieldStyle, width: '100%', boxSizing: 'border-box' }}
+        />
+      </label>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          data-testid={`cli-path-save-${cli.id}`}
+          disabled={saving}
+          onClick={() => save(value.trim())}
+          style={btnBase}
+        >
+          {value.trim() ? 'Guardar ruta' : 'Quitar ruta'}
+        </button>
+        {cli.configured_path && (
+          <button
+            type="button"
+            data-testid={`cli-path-clear-${cli.id}`}
+            disabled={saving}
+            onClick={() => { setValue(''); void save(''); }}
+            style={btnBase}
+          >
+            Quitar ruta configurada
+          </button>
+        )}
+      </div>
+      <span style={mutedText}>El backend valida que sea un archivo ejecutable. Vacío borra la ruta y vuelve a buscar en el PATH.</span>
+    </div>
+  );
+}
+
+function CliRow({
+  cli,
+  platformSupported,
+  launching,
+  anyLaunching,
+  onLaunch,
+  installPlan,
+  installBusy,
+  onPrepareInstall,
+  onConfirmInstall,
+  onCancelInstall,
+  onSetCliPath,
+  pathEditRequest
+}) {
   const installed = Boolean(cli.installed);
   const launchable = cli.launchable !== false && installed;
   const unverified = cli.verified === false || cli.source === 'user';
+  const offerInstall = canOfferInstall(cli);
+  const installBlock = describeInstallBlock(cli);
+  const [showPath, setShowPath] = useState(false);
+  const requestedNonce = pathEditRequest?.cliId === cli.id ? pathEditRequest.nonce : 0;
+  useEffect(() => {
+    if (requestedNonce) setShowPath(true);
+  }, [requestedNonce]);
+  const planHere = installPlan && installPlan.cliId === cli.id ? installPlan : null;
+  const pathInvalid = cli.configured_path && cli.configured_path_valid === false;
+
   return (
     <li
       data-testid={`cli-row-${cli.id}`}
@@ -261,7 +450,7 @@ function CliRow({ cli, platformSupported, launching, anyLaunching, onLaunch }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
           <CliLogo cliId={cli.id} icon={cli.icon} name={cli.display_name} size={16} muted={false} />
           <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)' }}>{cli.display_name}</span>
           <span
@@ -279,24 +468,40 @@ function CliRow({ cli, platformSupported, launching, anyLaunching, onLaunch }) {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          data-testid={`cli-open-${cli.id}`}
-          disabled={!launchable || !platformSupported || anyLaunching}
-          onClick={() => onLaunch(cli.id)}
-          style={{
-            ...btnPrimary,
-            opacity: !launchable || !platformSupported || anyLaunching ? 0.5 : 1,
-            cursor: !launchable || !platformSupported ? 'not-allowed' : (anyLaunching ? 'wait' : 'pointer')
-          }}
-        >
-          <Play size={11} />
-          <span>{launching ? 'Abriendo...' : 'Abrir'}</span>
-        </button>
+        <div style={{ display: 'inline-flex', gap: '6px', flexShrink: 0 }}>
+          {offerInstall && (
+            <button
+              type="button"
+              data-testid={`cli-install-${cli.id}`}
+              disabled={installBusy || Boolean(planHere)}
+              onClick={() => onPrepareInstall(cli.id)}
+              style={{ ...btnBase, opacity: installBusy || planHere ? 0.5 : 1 }}
+            >
+              <Download size={11} />
+              <span>{installBusy ? 'Preparando...' : 'Instalar'}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid={`cli-open-${cli.id}`}
+            disabled={!launchable || !platformSupported || anyLaunching}
+            onClick={() => onLaunch(cli.id)}
+            style={{
+              ...btnPrimary,
+              opacity: !launchable || !platformSupported || anyLaunching ? 0.5 : 1,
+              cursor: !launchable || !platformSupported ? 'not-allowed' : (anyLaunching ? 'wait' : 'pointer')
+            }}
+          >
+            <Play size={11} />
+            <span>{launching ? 'Abriendo...' : 'Abrir'}</span>
+          </button>
+        </div>
       </div>
+
       {installed && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
           {cli.version && <span data-testid={`cli-version-${cli.id}`} style={chip}>{cli.version}</span>}
+          {cli.resolution_source && <span data-testid={`cli-source-${cli.id}`} style={chip}>{cli.resolution_source}</span>}
           <span
             data-testid={`cli-path-${cli.id}`}
             title={cli.resolved_path || ''}
@@ -306,6 +511,44 @@ function CliRow({ cli, platformSupported, launching, anyLaunching, onLaunch }) {
           </span>
         </div>
       )}
+
+      {!installed && !offerInstall && installBlock && (
+        <p data-testid={`cli-install-block-${cli.id}`} style={{ ...mutedText, margin: 0 }}>
+          No se ofrece instalar: {installBlock}
+        </p>
+      )}
+
+      {pathInvalid && (
+        <p data-testid={`cli-path-invalid-${cli.id}`} style={{ ...mutedText, margin: 0, color: 'var(--accent-warning)' }}>
+          La ruta configurada ({cli.configured_path}) ya no es válida.
+        </p>
+      )}
+
+      {planHere && (
+        <InstallConfirmation
+          cliId={cli.id}
+          plan={planHere}
+          busy={installBusy}
+          onConfirm={onConfirmInstall}
+          onCancel={onCancelInstall}
+        />
+      )}
+
+      {cli.kind !== 'shell' && (
+        <div>
+          <button
+            type="button"
+            data-testid={`cli-path-toggle-${cli.id}`}
+            aria-expanded={showPath}
+            onClick={() => setShowPath((prev) => !prev)}
+            style={{ ...btnBase, padding: '3px 8px', fontSize: '11px', backgroundColor: 'transparent' }}
+          >
+            <Settings2 size={11} />
+            <span>{showPath ? 'Ocultar ruta del binario' : 'Ruta del binario'}</span>
+          </button>
+        </div>
+      )}
+      {showPath && cli.kind !== 'shell' && <BinaryPathEditor cli={cli} onSetCliPath={onSetCliPath} />}
     </li>
   );
 }
@@ -439,7 +682,14 @@ export function TerminalSliderControls({
   onPausePane,
   onClosePane,
   onResizePane,
-  onSetMaxPanes
+  onSetMaxPanes,
+  installPlan,
+  installBusyCliId,
+  onPrepareInstall,
+  onConfirmInstall,
+  onCancelInstall,
+  onSetCliPath,
+  pathEditRequest
 }) {
   const [showManual, setShowManual] = useState(false);
 
@@ -601,6 +851,13 @@ export function TerminalSliderControls({
               launching={launchingCliId === cli.id}
               anyLaunching={Boolean(launchingCliId)}
               onLaunch={onLaunch}
+              installPlan={installPlan}
+              installBusy={installBusyCliId === cli.id}
+              onPrepareInstall={onPrepareInstall}
+              onConfirmInstall={onConfirmInstall}
+              onCancelInstall={onCancelInstall}
+              onSetCliPath={onSetCliPath}
+              pathEditRequest={pathEditRequest}
             />
           ))}
         </ul>
