@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Search, Columns, X, Tag, Filter, BookOpen, GitBranch, ShieldCheck, Plus, LayoutGrid, CheckCircle2 } from 'lucide-react';
+import { Search, X, Tag, Filter, Plus } from 'lucide-react';
 import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
@@ -8,42 +8,12 @@ import { HumanApprovalsView } from './HumanApprovalsView';
 import { CardDetailModal } from './Modals';
 import { useProjectPulse } from '../hooks/useProjectPulse';
 
-const ULTRAWIDE_BREAKPOINT = 1440;
-
 function extractCardTags(card) {
   const raw = card?.tags || card?.okf_tags || [];
   if (Array.isArray(raw)) return raw.map(t => String(t).trim()).filter(Boolean);
   if (typeof raw === 'string') return raw.split(',').map(t => t.trim()).filter(Boolean);
   return [];
 }
-
-const SPLIT_TABS_BY_CONTEXT = {
-  kanban: [
-    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
-    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-    { id: 'approvals', label: 'HITL', icon: ShieldCheck }
-  ],
-  changes: [
-    { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
-    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
-    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
-  ],
-  approvals: [
-    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
-    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
-  ],
-  okf: [
-    { id: 'okf_audit', label: 'Auditoría & Carpetas', icon: CheckCircle2 },
-    { id: 'changes', label: 'Control de Cambios', icon: GitBranch },
-    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
-  ],
-  collaborators: [
-    { id: 'okf', label: 'Gobernanza OKF', icon: BookOpen },
-    { id: 'approvals', label: 'Aprobaciones HITL', icon: ShieldCheck },
-    { id: 'kanban', label: 'Tablero Kanban', icon: LayoutGrid }
-  ]
-};
 
 const SEARCH_META_BY_TAB = {
   kanban: {
@@ -85,7 +55,7 @@ export function ProjectWorkspace({
   const [targetBranch, setTargetBranch] = useState('');
   const [gitPulseTrigger, setGitPulseTrigger] = useState(0);
 
-  // Barra modular por pestaña y Panel Split contextual
+  // Barra modular por pestaña
   const normalizedTab = activeTab === 'branches' ? 'changes' : activeTab;
   const [tabSearches, setTabSearches] = useState({});
   const searchQuery = tabSearches[normalizedTab] || '';
@@ -96,20 +66,6 @@ export function ProjectWorkspace({
   const [selectedTag, setSelectedTag] = useState('all');
   const [nodeStatusFilter, setNodeStatusFilter] = useState('all');
   const [tagsIndex, setTagsIndex] = useState({});
-  const [isUltrawide, setIsUltrawide] = useState(() => window.innerWidth > ULTRAWIDE_BREAKPOINT);
-  const [isSplitView, setIsSplitView] = useState(false);
-  const [splitSecondaryTab, setSplitSecondaryTab] = useState('okf');
-
-  useEffect(() => {
-    const handleResize = () => setIsUltrawide(window.innerWidth > ULTRAWIDE_BREAKPOINT);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    const options = SPLIT_TABS_BY_CONTEXT[normalizedTab] || SPLIT_TABS_BY_CONTEXT.kanban;
-    setSplitSecondaryTab(options[0].id);
-  }, [normalizedTab]);
 
   const loadCards = useCallback(async () => {
     if (!api || !project) return;
@@ -234,7 +190,6 @@ export function ProjectWorkspace({
   );
 
   const searchMeta = SEARCH_META_BY_TAB[normalizedTab] || SEARCH_META_BY_TAB.kanban;
-  const contextualSplitTabs = SPLIT_TABS_BY_CONTEXT[normalizedTab] || SPLIT_TABS_BY_CONTEXT.kanban;
 
   const handleCardMove = async (cardId, targetStatus) => {
     if (!api) return;
@@ -340,9 +295,7 @@ export function ProjectWorkspace({
 
   const handleNavigateToBranch = (branchName) => {
     setTargetBranch(branchName);
-    if (isSplitView) {
-      setSplitSecondaryTab('changes');
-    } else if (onTabChange) {
+    if (onTabChange) {
       onTabChange('changes');
     }
   };
@@ -392,52 +345,6 @@ export function ProjectWorkspace({
       );
     }
     return <CollaboratorsView project={project} api={api} searchQuery={searchQuery} />;
-  };
-
-  const renderSecondaryView = (tabKey) => {
-    if (tabKey === 'kanban') {
-      return (
-        <KanbanBoard
-          cards={filteredCards}
-          onCardMove={handleCardMove}
-          onSelectCard={(card) => setSelectedCard(card)}
-        />
-      );
-    }
-    if (tabKey === 'changes' || tabKey === 'branches') {
-      return (
-        <BranchConsensusView
-          project={project}
-          api={api}
-          initialBranch={targetBranch}
-          onOpenCard={handleOpenCardById}
-          onNavigateToHitl={() => (isSplitView ? setSplitSecondaryTab('approvals') : onTabChange?.('approvals'))}
-          gitPulseTrigger={gitPulseTrigger}
-        />
-      );
-    }
-    if (tabKey === 'approvals') {
-      return (
-        <HumanApprovalsView
-          project={project}
-          api={api}
-          onOpenCard={handleOpenCardById}
-          onNavigateToBranch={handleNavigateToBranch}
-        />
-      );
-    }
-    if (tabKey === 'okf_audit') {
-      return (
-        <OKFGovernanceView
-          project={project}
-          api={api}
-          externalTagFilter={selectedTag}
-          initialSubTab="audit"
-          hideTopTagFilter
-        />
-      );
-    }
-    return <OKFGovernanceView project={project} api={api} externalTagFilter={selectedTag} />;
   };
 
   return (
@@ -603,144 +510,14 @@ export function ProjectWorkspace({
               <span>Nueva Tarea</span>
             </button>
           )}
-
-          {/* Botón Toggle Vista Dual (Split) Contextual */}
-          <button
-            type="button"
-            data-testid="toggle-split-view"
-            aria-pressed={isSplitView}
-            onClick={() => setIsSplitView(prev => !prev)}
-            title={`Abrir panel Split contextual para ${normalizedTab}`}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              height: '26px',
-              padding: '0 10px',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              borderRadius: 'var(--radius-sm)',
-              border: isSplitView
-                ? '1px solid var(--accent-primary)'
-                : '1px solid var(--border-subtle)',
-              backgroundColor: isSplitView
-                ? 'rgba(var(--accent-primary-rgb), 0.16)'
-                : 'var(--bg-subtle)',
-              color: isSplitView ? 'var(--accent-primary)' : 'var(--text-primary)',
-              cursor: 'pointer',
-              flexShrink: 0,
-              transition: 'var(--transition)'
-            }}
-          >
-            <Columns size={13} />
-            <span>Vista Dual (Split)</span>
-            {isUltrawide && !isSplitView && (
-              <span
-                data-testid="split-suggested-badge"
-                style={{
-                  fontSize: '9.5px',
-                  fontFamily: 'var(--font-mono)',
-                  padding: '1px 5px',
-                  borderRadius: 'var(--radius-full)',
-                  backgroundColor: 'rgba(var(--accent-primary-rgb), 0.18)',
-                  color: 'var(--accent-primary)'
-                }}
-              >
-                Sugerido
-              </span>
-            )}
-          </button>
         </div>
       </div>
 
-      {/* Main Workspace View Content */}
+      {/* Main Workspace View Content (el patrón de Vista Dual/Split fue retirado: el
+          contenido secundario de cada vista ahora vive en su propio drawer lateral,
+          ver HumanApprovalsView, BranchConsensusView, KanbanBoard y CollaboratorsView) */}
       <div style={{ flex: 1, overflow: 'hidden', padding: '14px 18px', minHeight: 0 }}>
-        {isSplitView ? (
-          <div className="mcp-split-layout" data-testid="workspace-split-container">
-            <div className="mcp-split-pane">
-              {renderPrimaryView()}
-            </div>
-
-            <div
-              className="mcp-split-pane"
-              data-testid="workspace-split-contextual-panel"
-              style={{
-                backgroundColor: 'var(--bg-surface)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-lg)',
-                padding: '12px'
-              }}
-            >
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '6px',
-                marginBottom: '10px',
-                paddingBottom: '8px',
-                borderBottom: '1px solid var(--border-subtle)',
-                flexShrink: 0
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                  {contextualSplitTabs.map(pane => {
-                    const Icon = pane.icon;
-                    const active = splitSecondaryTab === pane.id;
-                    return (
-                      <button
-                        key={pane.id}
-                        type="button"
-                        data-testid={`split-pane-tab-${pane.id}`}
-                        onClick={() => setSplitSecondaryTab(pane.id)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '5px',
-                          padding: '4px 10px',
-                          fontSize: '11.5px',
-                          fontWeight: active ? 600 : 500,
-                          borderRadius: 'var(--radius-sm)',
-                          border: active ? '1px solid var(--accent-primary)' : '1px solid var(--border-subtle)',
-                          backgroundColor: active ? 'rgba(var(--accent-primary-rgb), 0.14)' : 'var(--bg-subtle)',
-                          color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        <Icon size={12} />
-                        <span>{pane.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <button
-                  type="button"
-                  aria-label="Cerrar panel split"
-                  title="Cerrar Split"
-                  onClick={() => setIsSplitView(false)}
-                  style={{
-                    width: '24px',
-                    height: '24px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid var(--border-subtle)',
-                    backgroundColor: 'transparent',
-                    color: 'var(--text-muted)',
-                    cursor: 'pointer',
-                    flexShrink: 0
-                  }}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-                {renderSecondaryView(splitSecondaryTab)}
-              </div>
-            </div>
-          </div>
-        ) : (
-          renderPrimaryView()
-        )}
+        {renderPrimaryView()}
       </div>
 
       {/* Modal de Detalle de Tarjeta & Criterios de Aceptación (HITL) */}

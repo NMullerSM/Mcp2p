@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, CheckCircle2, GitBranch, User, CheckSquare, Save } from 'lucide-react';
+import { SideDrawer } from './SideDrawer';
 
 export function ModalOverlay({ isOpen, onClose, title, maxWidth = '500px', children }) {
   useEffect(() => {
@@ -597,7 +598,12 @@ export function CardDetailModal({ isOpen, card, api, project, onClose, onSave, o
   const isMerged = status === 'merged' || status === 'consolidated';
 
   return (
-    <ModalOverlay isOpen={isOpen} onClose={onClose} title={`Detalles de Tarea — ${card.card_id}`} maxWidth="560px">
+    <SideDrawer
+      isOpen={isOpen}
+      onClose={onClose}
+      title={`Detalles de Tarea — ${card.card_id}`}
+      data-testid="card-detail-drawer"
+    >
       <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         {/* Metadatos superiores */}
         <div style={{
@@ -906,6 +912,6 @@ export function CardDetailModal({ isOpen, card, api, project, onClose, onSave, o
           </div>
         </div>
       </form>
-    </ModalOverlay>
+    </SideDrawer>
   );
 }

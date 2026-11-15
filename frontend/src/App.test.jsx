@@ -320,7 +320,7 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     expect(await screen.findByText('Unirse vía P2P')).toBeTruthy();
   });
 
-  it('aplica Ley de Hick (máx 2 tags + N), filtra por búsqueda/tag y activa Vista Dual (Split) con OKF Freshness', async () => {
+  it('aplica Ley de Hick (máx 2 tags + N), filtra por búsqueda/tag y navega a Gobernanza OKF con Freshness', async () => {
     await renderReadyApp(makeWorkspaceApiOverrides());
 
     const openBtns = await screen.findAllByText('Abrir Espacio');
@@ -335,14 +335,15 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     expect(screen.queryByTestId('kanban-card-CARD-1')).toBeNull();
     expect(screen.getByTestId('kanban-card-CARD-2')).toBeTruthy();
 
-    // Limpiar filtro y activar Vista Dual (Split)
+    // Limpiar filtro y navegar directamente a Gobernanza OKF (el patrón de Vista Dual
+    // / Split fue retirado: el contenido secundario de cada vista ahora vive en un
+    // drawer lateral propio por vista, no en un panel dividido permanente)
     fireEvent.change(screen.getByTestId('workspace-tag-filter'), { target: { value: 'all' } });
     expect(screen.getByTestId('kanban-card-CARD-1')).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId('toggle-split-view'));
-    expect(await screen.findByTestId('workspace-split-container')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('tab-okf'));
 
-    // En el panel derecho de Split View se ve OKFGovernanceView con Freshness y Ed25519
+    // En Gobernanza OKF se ve Freshness y Ed25519
     expect(await screen.findByText(/FRESH · 95%/)).toBeTruthy();
     expect(screen.getByTestId('ed25519-verified-badge')).toBeTruthy();
     expect(screen.getByTestId('okf-active-folders-summary').textContent).toContain('docs/okf/adr (1)');

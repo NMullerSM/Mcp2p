@@ -17,8 +17,10 @@ import {
   X,
   Info,
   CheckSquare,
-  Scale
+  Scale,
+  PanelRight
 } from 'lucide-react';
+import { SideDrawer } from './SideDrawer';
 
 const PALETTE = [
   '#63b0f4', // Azul claro
@@ -55,6 +57,10 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
   const [newBranchName, setNewBranchName] = useState('');
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState(false);
   const [remoteUrlInput, setRemoteUrlInput] = useState('');
+
+  // Drawer lateral derecho: acciones secundarias (Más acciones / Sync P2P) y la barra
+  // de estado del remoto Git & auto-publicación, fuera de la vista principal.
+  const [isSecondaryDrawerOpen, setIsSecondaryDrawerOpen] = useState(false);
 
   const loadData = async () => {
     if (!api || !project) return;
@@ -671,8 +677,29 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               </button>
             </div>
 
-            {/* Operaciones Git (Fetch, Pull, Merge, Push) */}
+            {/* Operaciones Git (Fetch, Pull, Merge, Push) + acceso al drawer secundario */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                data-testid="branch-open-secondary-drawer"
+                onClick={() => setIsSecondaryDrawerOpen(true)}
+                title="Más acciones, remoto Git y publicación"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  padding: '6px 10px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-subtle)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer'
+                }}
+              >
+                <PanelRight size={13} /> Más acciones & Remoto
+              </button>
               <button
                 onClick={handleFetch}
                 disabled={actionLoading}
@@ -774,36 +801,6 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               )}
             </div>
 
-            {/* Acción secundaria poco comprendida por el usuario: se saca de la fila
-                primaria de botones y se guarda en una revelación discreta, igual que
-                las "3 Vías Dialécticas" en HumanApprovalsView. */}
-            <details style={{ fontSize: '11px', color: 'var(--text-muted)', width: '100%' }}>
-              <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontWeight: 600 }}>
-                Más acciones
-              </summary>
-              <div style={{ marginTop: '6px' }}>
-                <button
-                  onClick={handleSyncThreeTiers}
-                  disabled={actionLoading}
-                  title="Sincroniza el enjambre P2P en memoria, metadatos y git"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    padding: '6px 14px',
-                    fontSize: '12px',
-                    fontWeight: 600,
-                    borderRadius: 'var(--radius-sm)',
-                    border: '1px solid rgba(var(--accent-primary-rgb), 0.4)',
-                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
-                    color: 'var(--accent-primary)',
-                    cursor: actionLoading ? 'wait' : 'pointer'
-                  }}
-                >
-                  <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Sincronizar P2P (3 Niveles)
-                </button>
-              </div>
-            </details>
           </div>
 
           {/* Aviso de commits sin enviar: cuando se comitea una card/ruling, MCP2P intenta
@@ -832,6 +829,42 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               </span>
             </div>
           )}
+
+          <SideDrawer
+            isOpen={isSecondaryDrawerOpen}
+            onClose={() => setIsSecondaryDrawerOpen(false)}
+            title="Más acciones & Remoto Git"
+            subtitle="Contenido secundario de Control de Cambios"
+            data-testid="branch-secondary-drawer"
+          >
+          {/* Acción secundaria poco comprendida por el usuario: se saca de la fila
+              primaria de botones y se guarda en el drawer, igual que las "3 Vías
+              Dialécticas" en HumanApprovalsView. */}
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Más acciones
+            </div>
+            <button
+              onClick={handleSyncThreeTiers}
+              disabled={actionLoading}
+              title="Sincroniza el enjambre P2P en memoria, metadatos y git"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid rgba(var(--accent-primary-rgb), 0.4)',
+                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                color: 'var(--accent-primary)',
+                cursor: actionLoading ? 'wait' : 'pointer'
+              }}
+            >
+              <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Sincronizar P2P (3 Niveles)
+            </button>
+          </div>
 
           {/* Barra de Estado Remoto & Auto-Publicación */}
           <div style={{
@@ -959,6 +992,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               )}
             </div>
           </div>
+          </SideDrawer>
 
           {/* Grafo de Commits SVG Nativo */}
           <div style={{

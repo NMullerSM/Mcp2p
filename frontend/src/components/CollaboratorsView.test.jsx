@@ -180,6 +180,8 @@ describe('CollaboratorsView - pegar código de solicitud (ingesta manual, nivel 
 
   async function renderAndFill(api, code) {
     render(<CollaboratorsView project={PROJECT} api={api} />);
+    // Ingesta manual vive en el drawer secundario (EGM UI: reemplazo de Vista Dual/Split).
+    fireEvent.click(await screen.findByTestId('collab-open-secondary-drawer'));
     const input = await screen.findByLabelText('Código de solicitud de unión');
     fireEvent.change(input, { target: { value: code } });
     return input;

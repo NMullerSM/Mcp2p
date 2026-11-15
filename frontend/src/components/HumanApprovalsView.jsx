@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X } from 'lucide-react';
+import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X, GitCommit } from 'lucide-react';
+import { SideDrawer } from './SideDrawer';
 
 export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranch, searchQuery = '' }) {
   const [loading, setLoading] = useState(true);
@@ -14,6 +15,10 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
 
   // Modal de Inspección Profunda (Lectura de Mayéutica, Propuestas A/B/C, PRs y Decisiones)
   const [inspectedItem, setInspectedItem] = useState(null); // { type: 'decision' | 'jury_vote' | 'pr_merge', data: {...} }
+
+  // Drawer lateral derecho: detalle granular de Git/GitHub (commits asociados) de la
+  // entrega inspeccionada, fuera del cuerpo principal del inspector (aprobar/rechazar).
+  const [isPrDetailsDrawerOpen, setIsPrDetailsDrawerOpen] = useState(false);
 
   // Modal de Doble Factor de Confirmación Consciente (HITL 2FA Cognitivo)
   const [confirmRequest, setConfirmRequest] = useState(null);
@@ -1501,22 +1506,26 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
 
                   {inspectedItem.data.commits && inspectedItem.data.commits.length > 0 && (
                     <div>
-                      <h4 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>
-                        Commits Recientes Asociados ({inspectedItem.data.commits.length})
-                      </h4>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {inspectedItem.data.commits.map(cm => (
-                          <div key={cm.hash} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', fontSize: '11.5px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)' }}>
-                                {cm.short_hash || cm.hash?.slice(0, 7)}
-                              </span>
-                              <span style={{ color: 'var(--text-primary)' }}>{cm.message}</span>
-                            </div>
-                            <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{cm.author}</span>
-                          </div>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        data-testid="pr-open-details-drawer"
+                        onClick={() => setIsPrDetailsDrawerOpen(true)}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          padding: '7px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-subtle)',
+                          backgroundColor: 'var(--bg-subtle)',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <GitCommit size={13} /> Ver Commits Asociados ({inspectedItem.data.commits.length})
+                      </button>
                     </div>
                   )}
 
@@ -1805,6 +1814,29 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
           </div>
         </div>
       )}
+
+      {/* Drawer lateral derecho: detalle granular Git/GitHub (commits) de la entrega
+          inspeccionada en el modal pr_merge — contenido secundario fuera del flujo
+          principal de aprobar/rechazar. */}
+      <SideDrawer
+        isOpen={Boolean(inspectedItem && inspectedItem.type === 'pr_merge' && isPrDetailsDrawerOpen)}
+        onClose={() => setIsPrDetailsDrawerOpen(false)}
+        title={`Commits Asociados — ${inspectedItem?.data?.card_id || ''}`}
+        subtitle="Detalle granular de Git/GitHub"
+        data-testid="pr-details-drawer"
+      >
+        {(inspectedItem?.data?.commits || []).map(cm => (
+          <div key={cm.hash} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', fontSize: '11.5px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)' }}>
+                {cm.short_hash || cm.hash?.slice(0, 7)}
+              </span>
+              <span style={{ color: 'var(--text-primary)' }}>{cm.message}</span>
+            </div>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{cm.author}</span>
+          </div>
+        ))}
+      </SideDrawer>
 
       {/* =====================================================================
           MODAL DE DOBLE FACTOR DE CONFIRMACIÓN CONSCIENTE (2FA COGNITIVO HITL)

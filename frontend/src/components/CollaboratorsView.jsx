@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock, ClipboardPaste } from 'lucide-react';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock, ClipboardPaste, PanelRight } from 'lucide-react';
+import { SideDrawer } from './SideDrawer';
 
 /**
  * Formatea el tiempo restante de un bloqueo de solicitud de unión (`locked_until`,
@@ -35,6 +36,9 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
   const [requestCodeInput, setRequestCodeInput] = useState('');
   const [ingesting, setIngesting] = useState(false);
   const [ingestMessage, setIngestMessage] = useState(null); // { type: 'success' | 'error', text }
+  // Drawer lateral derecho: contenido secundario (invitar, ingesta manual, pasarela MCP),
+  // dejando la lista de colaboradores humanos como vista principal despejada.
+  const [isSecondaryDrawerOpen, setIsSecondaryDrawerOpen] = useState(false);
 
   const loadData = async (isInitial = false) => {
     if (!api || !project) return;
@@ -178,6 +182,39 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
         </div>
       ) : (
         <>
+      {/* Barra de acceso al Drawer Secundario: invitar, ingesta manual y pasarela MCP
+          dejan de vivir permanentemente en la vista principal (antes era un split fijo)
+          y pasan a un drawer lateral derecho que se abre a demanda. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          data-testid="collab-open-secondary-drawer"
+          onClick={() => setIsSecondaryDrawerOpen(true)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '7px 14px',
+            fontSize: '12px',
+            fontWeight: 600,
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--bg-card)',
+            color: 'var(--text-primary)',
+            cursor: 'pointer'
+          }}
+        >
+          <PanelRight size={14} /> Invitar & Pasarela MCP
+        </button>
+      </div>
+
+      <SideDrawer
+        isOpen={isSecondaryDrawerOpen}
+        onClose={() => setIsSecondaryDrawerOpen(false)}
+        title="Invitar colaboradores & Pasarela MCP"
+        subtitle="Contenido secundario de Colaboradores P2P"
+        data-testid="collaborators-secondary-drawer"
+      >
       {/* 1. SECCIÓN INVITACIÓN P2P */}
       <div style={{
         backgroundColor: 'var(--bg-card)',
@@ -332,6 +369,155 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
           </button>
         </div>
       </form>
+
+      {/* 3. SECCIÓN PASARELA MCP & AGENTES CONECTADOS (secundaria, dentro del drawer) */}
+      <div style={{
+        backgroundColor: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-lg)',
+        padding: '18px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '14px',
+        boxShadow: 'var(--shadow-sm)'
+      }}>
+        {/* Encabezado MCP */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Cpu size={17} color="var(--accent-primary)" />
+            <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
+              Pasarela MCP (Model Context Protocol) & Agentes Conectados
+            </h4>
+          </div>
+
+          {/* Identificador MCP */}
+          {mcpInfo && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                color: 'var(--accent-success)',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                fontWeight: 600
+              }}>
+                <Radio size={11} /> {mcpInfo.server_name} ({mcpInfo.active_node_uuid})
+              </span>
+              <span style={{
+                fontSize: '10px',
+                fontFamily: 'var(--font-mono)',
+                backgroundColor: 'var(--bg-subtle)',
+                color: 'var(--text-muted)',
+                padding: '2px 6px',
+                borderRadius: '4px'
+              }}>
+                {mcpInfo.tools_count} Tools Expuestas
+              </span>
+            </div>
+          )}
+        </div>
+
+        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
+          El servidor MCP local permite a los agentes de IA interactuar con el tablero Kanban, reclamar tareas con leases atómicos y emitir turnos RFC sin consumir tokens.
+        </p>
+
+        {/* Lista de Agentes Conectados */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            Agentes Conectados al Enjambre ({filteredAgents.length})
+          </div>
+
+          {filteredAgents.length === 0 ? (
+            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+              {normalizedQuery ? 'Ningún agente coincide con la búsqueda.' : 'Iniciando pasarela MCP... Ningún agente conectado aún.'}
+            </div>
+          ) : (
+            filteredAgents.map((ag) => (
+              <div
+                key={ag.node_uuid}
+                style={{
+                  backgroundColor: 'var(--bg-surface)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--accent-primary)',
+                    flexShrink: 0
+                  }}>
+                    <Bot size={17} />
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 600 }}>
+                        {ag.developer_name || ag.agent_id}
+                      </span>
+                      <span style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '10px',
+                        backgroundColor: 'var(--bg-subtle)',
+                        color: 'var(--accent-primary)',
+                        padding: '1px 6px',
+                        borderRadius: '3px'
+                      }}>
+                        {ag.agent_id}
+                      </span>
+                      <span style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        backgroundColor: ag.node_kind === 'human' ? 'var(--badge-lease)' : 'rgba(var(--accent-indigo-rgb), 0.12)',
+                        color: ag.node_kind === 'human' ? 'var(--badge-lease-text)' : 'var(--accent-indigo)',
+                        padding: '1px 6px',
+                        borderRadius: '3px'
+                      }}>
+                        {ag.node_kind === 'human' ? 'HUMANO' : 'AGENTE'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
+                      Nodo: {ag.node_uuid} • SLA de Revisión: {ag.reviewer_sla_hours}h
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
+                    color: 'var(--accent-success)'
+                  }}>
+                    <Radio size={10} /> En Línea
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      </SideDrawer>
 
       {/* 2. SECCIÓN COLABORADORES HUMANOS */}
       <div style={{
@@ -582,153 +768,6 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
         </div>
       </div>
 
-      {/* 3. SECCIÓN PASARELA MCP & AGENTES CONECTADOS */}
-      <div style={{
-        backgroundColor: 'var(--bg-card)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-lg)',
-        padding: '18px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        boxShadow: 'var(--shadow-sm)'
-      }}>
-        {/* Encabezado MCP */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Cpu size={17} color="var(--accent-primary)" />
-            <h4 style={{ fontSize: '15px', fontWeight: 600, margin: 0 }}>
-              Pasarela MCP (Model Context Protocol) & Agentes Conectados
-            </h4>
-          </div>
-
-          {/* Identificador MCP */}
-          {mcpInfo && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                fontSize: '11px',
-                fontFamily: 'var(--font-mono)',
-                backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
-                color: 'var(--accent-success)',
-                padding: '2px 8px',
-                borderRadius: '10px',
-                fontWeight: 600
-              }}>
-                <Radio size={11} /> {mcpInfo.server_name} ({mcpInfo.active_node_uuid})
-              </span>
-              <span style={{
-                fontSize: '10px',
-                fontFamily: 'var(--font-mono)',
-                backgroundColor: 'var(--bg-subtle)',
-                color: 'var(--text-muted)',
-                padding: '2px 6px',
-                borderRadius: '4px'
-              }}>
-                {mcpInfo.tools_count} Tools Expuestas
-              </span>
-            </div>
-          )}
-        </div>
-
-        <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.45 }}>
-          El servidor MCP local permite a los agentes de IA interactuar con el tablero Kanban, reclamar tareas con leases atómicos y emitir turnos RFC sin consumir tokens.
-        </p>
-
-        {/* Lista de Agentes Conectados */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Agentes Conectados al Enjambre ({filteredAgents.length})
-          </div>
-
-          {filteredAgents.length === 0 ? (
-            <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
-              {normalizedQuery ? 'Ningún agente coincide con la búsqueda.' : 'Iniciando pasarela MCP... Ningún agente conectado aún.'}
-            </div>
-          ) : (
-            filteredAgents.map((ag) => (
-              <div
-                key={ag.node_uuid}
-                style={{
-                  backgroundColor: 'var(--bg-surface)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '12px 16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: '12px'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--accent-primary)',
-                    flexShrink: 0
-                  }}>
-                    <Bot size={17} />
-                  </div>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: 600 }}>
-                        {ag.developer_name || ag.agent_id}
-                      </span>
-                      <span style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '10px',
-                        backgroundColor: 'var(--bg-subtle)',
-                        color: 'var(--accent-primary)',
-                        padding: '1px 6px',
-                        borderRadius: '3px'
-                      }}>
-                        {ag.agent_id}
-                      </span>
-                      <span style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        backgroundColor: ag.node_kind === 'human' ? 'var(--badge-lease)' : 'rgba(var(--accent-indigo-rgb), 0.12)',
-                        color: ag.node_kind === 'human' ? 'var(--badge-lease-text)' : 'var(--accent-indigo)',
-                        padding: '1px 6px',
-                        borderRadius: '3px'
-                      }}>
-                        {ag.node_kind === 'human' ? 'HUMANO' : 'AGENTE'}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
-                      Nodo: {ag.node_uuid} • SLA de Revisión: {ag.reviewer_sla_hours}h
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    padding: '2px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'rgba(var(--accent-primary-rgb), 0.12)',
-                    color: 'var(--accent-success)'
-                  }}>
-                    <Radio size={10} /> En Línea
-                  </span>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
         </>
       )}
     </div>
