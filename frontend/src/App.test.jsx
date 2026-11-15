@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, fireEvent, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, fireEvent, screen, waitFor, cleanup, within } from '@testing-library/react';
 import React from 'react';
 import App from './App';
 
@@ -301,7 +301,10 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     expect(screen.getByTestId('active-project-name').textContent).toBe('Proyecto Alpha');
     expect(await screen.findByTestId('workspace-toolbar')).toBeTruthy();
 
-    // Botón Nueva Tarea solo vive dentro de Kanban y desaparece al cambiar a Gobernanza OKF
+    // Nueva Tarea ya no esta en la barra: vive en el slider lateral derecho de Kanban
+    // (se abre con la pestana del borde) y desaparece al cambiar a Gobernanza OKF
+    expect(within(screen.getByTestId('workspace-toolbar')).queryByTestId('kanban-new-task-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('view-slider-tab'));
     expect(screen.getByTestId('kanban-new-task-btn')).toBeTruthy();
     fireEvent.click(screen.getByTestId('tab-okf'));
     await waitFor(() => expect(screen.queryByTestId('kanban-new-task-btn')).toBeNull());
@@ -330,7 +333,9 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     // Ley de Hick: CARD-1 tiene 3 tags ['hexagonal', 'backend', 'okf'], solo 2 visibles + '+1'
     expect(screen.getByTestId('card-extra-tags-CARD-1').textContent).toBe('+1');
 
-    // Filtrar por Tag OKF
+    // Filtrar por Tag OKF (el filtro vive en el slider lateral de Kanban)
+    expect(within(screen.getByTestId('workspace-toolbar')).queryByTestId('workspace-tag-filter')).toBeNull();
+    fireEvent.click(screen.getByTestId('view-slider-tab'));
     fireEvent.change(screen.getByTestId('workspace-tag-filter'), { target: { value: 'seguridad' } });
     expect(screen.queryByTestId('kanban-card-CARD-1')).toBeNull();
     expect(screen.getByTestId('kanban-card-CARD-2')).toBeTruthy();
@@ -340,6 +345,7 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     // drawer lateral propio por vista, no en un panel dividido permanente)
     fireEvent.change(screen.getByTestId('workspace-tag-filter'), { target: { value: 'all' } });
     expect(screen.getByTestId('kanban-card-CARD-1')).toBeTruthy();
+    fireEvent.keyDown(document, { key: 'Escape' });
 
     fireEvent.click(screen.getByTestId('tab-okf'));
 
@@ -351,5 +357,38 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
     // Filtrar ADRs por tag YAML dentro de OKFGovernanceView
     fireEvent.change(screen.getByTestId('okf-tag-filter'), { target: { value: 'seguridad' } });
     expect(screen.queryByTestId('adr-card-ADR-001')).toBeNull();
+  });
+
+  it('todas las vistas tienen la pestana del slider lateral y ninguna conserva el boton de apertura antiguo', async () => {
+    await renderReadyApp(makeWorkspaceApiOverrides());
+    fireEvent.click((await screen.findAllByText('Abrir Espacio'))[0]);
+    await screen.findByTestId('kanban-card-CARD-1');
+
+    const OLD_OPEN_BUTTONS = [
+      'collab-open-secondary-drawer',
+      'branch-open-secondary-drawer',
+      'pr-open-details-drawer'
+    ];
+    const SLIDER_TITLE_BY_TAB = {
+      kanban: 'Herramientas del Tablero',
+      changes: 'Más acciones & Remoto Git',
+      approvals: 'Detalle de GitHub & Historial',
+      collaborators: 'Invitar colaboradores & Pasarela MCP',
+      okf: 'Gobernanza OKF: filtros y salud',
+      terminals: 'Terminales'
+    };
+
+    for (const [tab, title] of Object.entries(SLIDER_TITLE_BY_TAB)) {
+      fireEvent.click(screen.getByTestId(`tab-${tab}`));
+      const sliderTab = await screen.findByTestId('view-slider-tab');
+      await waitFor(() => expect(screen.getByTestId('view-slider-panel').getAttribute('aria-label')).toBe(title));
+      expect(sliderTab.getAttribute('aria-expanded')).toBe('false');
+      for (const id of OLD_OPEN_BUTTONS) expect(screen.queryByTestId(id)).toBeNull();
+      // la pestana abre el panel de la vista y Esc lo cierra
+      fireEvent.click(sliderTab);
+      expect(sliderTab.getAttribute('aria-expanded')).toBe('true');
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(sliderTab.getAttribute('aria-expanded')).toBe('false');
+    }
   });
 });
