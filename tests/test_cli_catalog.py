@@ -432,3 +432,4 @@ def test_catalog_json_is_packaged_by_pyinstaller_spec_and_build_script() -> None
     assert (root / "src" / "adapters" / "terminal" / "cli_catalog.json").is_file()
     assert "cli_catalog.json" in (root / "Mcp2p.spec").read_text(encoding="utf-8")
     assert "cli_catalog.json" in (root / "build_desktop.py").read_text(encoding="utf-8")
+    assert "cli_catalog.json" in (root / "pyproject.toml").read_text(encoding="utf-8")

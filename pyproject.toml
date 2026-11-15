@@ -53,6 +53,10 @@ mcp2p = "src.app.main:main"
 where = ["."]
 include = ["src*"]
 
+[tool.setuptools.package-data]
+# Catalogo versionado de CLIs de agente (src/adapters/terminal/cli_catalog.py lo lee en runtime).
+"src.adapters.terminal" = ["cli_catalog.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
