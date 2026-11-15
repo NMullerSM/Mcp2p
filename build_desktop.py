@@ -105,6 +105,7 @@ def build():
         "--hidden-import=src.adapters.terminal.cli_install",
         "--hidden-import=src.adapters.terminal.pty_host",
         "--hidden-import=src.runtime.terminal_platform",
+        "--hidden-import=src.core.services.project_portability_service",
         entry_point,
     ]
 

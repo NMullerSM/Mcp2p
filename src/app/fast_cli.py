@@ -152,6 +152,55 @@ def _handle_a2a_send(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str
     return {"success": True, "result": res}
 
 
+def _portability_db_path(args: argparse.Namespace) -> str:
+    from src.storage.db import resolve_db_path
+    return str(resolve_db_path(args.db_path))
+
+
+def _default_identity_key_paths() -> List[str]:
+    base = os.path.join(os.path.expanduser("~"), ".mcp2p")
+    return [os.path.join(base, "node_identity.key"), os.path.join(base, "node_identity.key.enc")]
+
+
+def _handle_projects_export(args: argparse.Namespace) -> Dict[str, Any]:
+    """`mcp2p fast projects export PAQUETE.zip`: copia consistente de la base + repos elegidos."""
+    from src.app.version import __version__
+    from src.core.services.project_portability_service import PortabilityError, ProjectPortabilityService
+    try:
+        result = ProjectPortabilityService().export_projects(
+            _portability_db_path(args),
+            args.archive,
+            workspace_root=args.workspace_root,
+            include_repos=args.include_repos,
+            project_uuids=[args.project] if args.project else None,
+            include_secrets=args.include_secrets,
+            identity_key_paths=_default_identity_key_paths() if args.include_secrets else None,
+            overwrite=args.overwrite,
+            app_version=__version__,
+        )
+    except PortabilityError as exc:
+        return exc.to_dict()
+    if result.get("secrets_warning"):
+        sys.stderr.write(str(result["secrets_warning"]) + "\n")
+    return result
+
+
+def _handle_projects_import(args: argparse.Namespace) -> Dict[str, Any]:
+    """`mcp2p fast projects import PAQUETE.zip --workspace-root NUEVA_RAIZ`: reescribe rutas absolutas."""
+    from src.core.services.project_portability_service import PortabilityError, ProjectPortabilityService
+    try:
+        return ProjectPortabilityService().import_projects(
+            args.archive,
+            _portability_db_path(args),
+            args.workspace_root,
+            merge=args.merge,
+            force=args.force,
+            include_secrets=args.include_secrets,
+        )
+    except PortabilityError as exc:
+        return exc.to_dict()
+
+
 def _handle_status(db: Any, kernel: Any, args: argparse.Namespace) -> Dict[str, Any]:
     projects = db.list_projects()
     return {
@@ -197,8 +246,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Estado rápido del nodo/BD")
     p_status.set_defaults(_handler=_handle_status)
 
-    p_proj = sub.add_parser("projects", help="Listar proyectos")
+    p_proj = sub.add_parser("projects", help="Listar, exportar o importar proyectos")
     p_proj.set_defaults(_handler=lambda db, k, a: {"success": True, "projects": db.list_projects()})
+    pj_sub = p_proj.add_subparsers(dest="projects_action", required=False)
+
+    pj_export = pj_sub.add_parser("export", help="Exportar proyectos a un paquete .zip portable")
+    pj_export.add_argument("archive", type=str, help="Ruta del .zip a crear")
+    pj_export.add_argument("--workspace-root", type=str, default=None,
+                           help="Raiz de workspace de origen (por defecto <carpeta de la base>/workspace)")
+    pj_export.add_argument("--include-repos", action="store_true",
+                           help="Incluir los repositorios de gobernanza/codigo que viven bajo la raiz de workspace")
+    pj_export.add_argument("--include-secrets", action="store_true",
+                           help="Incluir PAT y clave de identidad (EXCLUIDOS por defecto)")
+    pj_export.add_argument("--overwrite", action="store_true", help="Sobrescribir el .zip si ya existe")
+
+    pj_import = pj_sub.add_parser("import", help="Importar un paquete .zip reescribiendo rutas de workspace")
+    pj_import.add_argument("archive", type=str, help="Ruta del .zip a importar")
+    pj_import.add_argument("--workspace-root", type=str, required=True,
+                           help="Nueva raiz de workspace (ruta absoluta) en esta maquina")
+    pj_import.add_argument("--merge", action="store_true",
+                           help="Agregar a una base existente (omite proyectos con el mismo project_uuid)")
+    pj_import.add_argument("--force", action="store_true",
+                           help="Reemplazar la base existente (con copia .bak) o, con --merge, pisar proyectos repetidos")
+    pj_import.add_argument("--include-secrets", action="store_true",
+                           help="Importar tambien PAT y clave de identidad si el paquete los trae")
 
     # kanban
     p_kanban = sub.add_parser("kanban", help="Operaciones Kanban")
@@ -265,6 +336,15 @@ def run_fast_cli(argv: Optional[List[str]] = None) -> int:
     args.db_path = g_args.db_path
     args.project = g_args.project
     args.node = g_args.node
+
+    # Exportar/importar trabajan sobre el archivo de la base (sqlite3 directo): no se abre el kernel,
+    # que crearia la base de destino antes de poder decidir si ya existia.
+    if args.domain == "projects" and getattr(args, "projects_action", None) in ("export", "import"):
+        handler = _handle_projects_export if args.projects_action == "export" else _handle_projects_import
+        try:
+            return _print_json(handler(args))
+        except Exception as exc:
+            return _print_json({"success": False, "code": "PORTABILITY_ERROR", "error": str(exc)})
 
     db, kernel = _open_db_and_kernel(args.db_path)
     try:

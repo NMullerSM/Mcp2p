@@ -21,7 +21,7 @@ hiddenimports = [
     'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
     'src.mcp', 'src.mcp.server', 'src.mcp.tools',
     'src.adapters.terminal', 'src.adapters.terminal.cli_catalog', 'src.adapters.terminal.cli_install', 'src.adapters.terminal.pty_host',
-    'src.runtime.terminal_platform'
+    'src.runtime.terminal_platform', 'src.core.services.project_portability_service'
 ]
 # 'av' is collected explicitly even though nothing in this project imports it
 # directly: it is a MANDATORY transitive dependency of aiortc (av<20.0.0,>=14.0.0
