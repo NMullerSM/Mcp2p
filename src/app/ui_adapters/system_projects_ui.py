@@ -8,13 +8,13 @@ import json
 import logging
 import os
 import platform
-import re
 import sys
 from typing import Any, Dict, Optional, Tuple
 
 from src.app.identity import local_node_uuid
 from src.app.paths import is_system_installed
 from src.app.ui_adapters import _BaseUIAdapter
+from src.core.domain import join as _domain_join  # EGM-57: reglas puras del flujo de unión
 
 logger = logging.getLogger("mcp2p.api_bridge.system")
 
@@ -42,28 +42,15 @@ class SystemProjectsUIAdapter(_BaseUIAdapter):
 
     @staticmethod
     def is_pending_join_stub(proj: Optional[Dict[str, Any]]) -> bool:
-        if not proj:
-            return False
-        return (proj.get("join_status") or "active") != "active"
+        return _domain_join.is_pending_join_stub(proj)
 
     @staticmethod
     def pending_join_refusal(proj: Dict[str, Any], action: str) -> Dict[str, Any]:
-        return {
-            "success": False,
-            "status": "join_pending",
-            "join_status": proj.get("join_status"),
-            "error": (
-                f"No se puede {action}: la unión a '{proj.get('name', proj.get('project_uuid'))}' "
-                "todavía está pendiente de aprobación por el dueño del proyecto."
-            ),
-        }
+        return _domain_join.pending_join_refusal(proj, action)
 
     @staticmethod
     def parse_github_owner_repo(raw_url: str) -> Optional[Tuple[str, str]]:
-        m = re.search(r"github\.com[/:]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", (raw_url or "").strip())
-        if not m:
-            return None
-        return m.group(1), m.group(2)
+        return _domain_join.parse_github_owner_repo(raw_url)
 
     def ensure_active_project(self) -> None:
         for proj in self.db.list_projects():

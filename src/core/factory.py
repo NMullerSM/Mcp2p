@@ -229,6 +229,19 @@ class ApplicationFactory:
             event_bus=resolved_event_bus,
             tribunal_service=tribunal_service,
         )
+        from src.core.services.collaboration_service import ProjectCollaborationService
+
+        collaboration_service = ProjectCollaborationService(
+            collab_repo=collab_repo,
+            project_lookup=project_repo.get_project_by_uuid,
+            okf_port=resolved_okf,
+            git_port=resolved_git_port,
+            repo_host=resolved_git_sync,
+            project_repo=project_repo,
+            crypto=resolved_crypto,
+            workspace_root=lambda: db.db_path.parent / "workspace",
+            reconcile_target=db,
+        )
         view_synthesizer = WorkspaceViewSynthesizer(
             project_repo=project_repo,
             kanban_repo=kanban_repo,
@@ -276,6 +289,7 @@ class ApplicationFactory:
             view_synthesizer=view_synthesizer,
             profile=profile,
             connectors=connectors,
+            collaboration_service=collaboration_service,
         )
 
     @staticmethod

@@ -109,3 +109,80 @@ def test_reject_and_remove_go_through_repository_port(tmp_path):
 def test_collab_ui_adapter_no_longer_runs_git_by_subprocess():
     src = (ROOT / "src" / "app" / "ui_adapters" / "collab_mesh_ui.py").read_text(encoding="utf-8")
     assert not re.search(r"\bsubprocess\b|_subprocess_run\(", src)
+
+
+# ---------------------------------------------------------------------------
+# EGM-57 (resto): flujo de unión en el núcleo y servicio registrado en CoreKernel
+# ---------------------------------------------------------------------------
+
+
+def _kernel_with_identity(tmp_path, name):
+    from src.core.factory import ApplicationFactory
+    from src.p2p.crypto import NodeCryptoManager
+
+    crypto = NodeCryptoManager(key_path=tmp_path / f"{name}.key")
+    return ApplicationFactory.create_kernel(
+        db_path=str(tmp_path / f"{name}.db"), load_default_connectors=False, crypto=crypto
+    )
+
+
+def test_kernel_registers_collaboration_service_and_runs_join_flow_headless(tmp_path, monkeypatch):
+    """Sin GUI: invitar -> unirse (stub) -> ingerir -> aprobar, solo con el servicio del kernel."""
+    monkeypatch.setenv("MCP2P_NODE_UUID", "node_headless")
+    owner = _kernel_with_identity(tmp_path, "owner")
+    joiner = _kernel_with_identity(tmp_path, "joiner")
+    assert isinstance(owner.collaboration_service, ProjectCollaborationService)
+    assert owner.collaboration is owner.collaboration_service
+
+    proj = owner.db.create_project(name="Headless", base_path=str(tmp_path / "ws"), init_git=False)
+    invite = owner.collaboration_service.create_invite(proj)
+    assert invite["success"] is True and invite["payload"]["sender_github"] == ""
+
+    joined = joiner.collaboration_service.join_project(invite["token"])
+    assert joined["status"] == "pending_approval"
+    stub = joiner.db.get_project_by_uuid(proj["project_uuid"])
+    assert stub["join_status"] == "pending_approval"
+    assert Path(stub["base_path"]).parent == joiner.db.db_path.parent / "workspace"
+
+    ingested = owner.collaboration_service.ingest_join_request(joined["request_code"], proj["project_uuid"])
+    assert ingested["status"] == "pending_approval"
+    node = ingested["collaborator"]["node_uuid"]
+    # Sin proyecto activo inyectado, ingerir sin project_uuid falla igual que en la GUI.
+    assert owner.collaboration_service.ingest_join_request(joined["request_code"]) == {
+        "success": False, "error": "No hay un proyecto activo para procesar la solicitud de unión",
+    }
+    assert owner.collaboration_service.approve_collaborator(proj["project_uuid"], node)["success"] is True
+    listed = {c["node_uuid"]: c for c in owner.collaboration_service.list_collaborators(proj["project_uuid"])}
+    assert listed[node]["status"] == "approved" and listed[node]["locked_until"] is None
+
+
+def test_rebind_rejects_unknown_collaborators(tmp_path):
+    svc = _kernel_with_identity(tmp_path, "solo").collaboration_service
+    clone = svc.rebind(live_transport="t")
+    assert clone.live_transport == "t" and svc.live_transport is None
+    import pytest
+
+    with pytest.raises(AttributeError):
+        svc.rebind(no_existe=1)
+
+
+def test_collab_ui_adapter_no_longer_touches_collaboration_persistence_directly():
+    src = (ROOT / "src" / "app" / "ui_adapters" / "collab_mesh_ui.py").read_text(encoding="utf-8")
+    moved = (
+        "add_or_request_collaborator", "record_join_attempt", "get_join_rate_limit_state",
+        "upsert_pending_join_stub", "activate_joined_project", "register_or_update_node",
+        "record_rejection", "get_collaborator", "get_unresolved_or_approved_collaborator_by_pubkey",
+        "get_project_collaborators", "git_clone", "accept_pending_invitations",
+        "create_signed_invite_token", "decode_and_verify_invite_token",
+    )
+    offenders = [m for m in moved if re.search(rf"\.{m}\(", src)]
+    assert offenders == []
+
+
+def test_collaboration_service_does_not_depend_on_app_layer():
+    import ast
+
+    tree = ast.parse((ROOT / "src" / "core" / "services" / "collaboration_service.py").read_text(encoding="utf-8"))
+    mods = [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module]
+    mods += [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+    assert not [m for m in mods if m.startswith("src.app") or m == "subprocess"]

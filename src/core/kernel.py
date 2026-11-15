@@ -80,6 +80,7 @@ class CoreKernel:
         view_synthesizer: WorkspaceViewSynthesizer,
         profile: str = "custom",
         connectors: Optional[Dict[str, Any]] = None,
+        collaboration_service: Optional[Any] = None,
     ) -> None:
         self._lock = threading.RLock()
         self._closed = False
@@ -107,6 +108,9 @@ class CoreKernel:
         self.tribunal = tribunal_service
         self.view_synthesizer = view_synthesizer
         self.views = view_synthesizer
+        # EGM-57: invitación / unión / ingesta / decisiones de colaboradores.
+        self.collaboration_service = collaboration_service
+        self.collaboration = collaboration_service
 
         self._connectors: Dict[str, Any] = {}
         if connectors:
