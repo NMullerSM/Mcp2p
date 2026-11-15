@@ -668,9 +668,13 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 manual_command = instructions["manual_command"]
                 mcp_config = instructions["mcp_config"]
 
+            unsupported = is_unsupported_terminal_platform()
             return {
                 "success": True,
                 "degraded": degraded,
+                "platform_unsupported": unsupported,
+                "code": "TERMINAL_PLATFORM_UNSUPPORTED" if unsupported else "OK",
+                "message": unsupported_platform_response()["message"] if unsupported else "",
                 "connector_status": connector_status,
                 "hub_url": hub_url,
                 "hub_running": hub_running,
