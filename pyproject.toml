@@ -25,6 +25,10 @@ dependencies = [
     "certifi>=2024.0.0",
     "aiortc>=1.9.0",
     "websockets>=12.0",
+    # Métricas y ciclo de vida de procesos PTY (Swarm Terminal Matrix V2 / EGM-63).
+    "psutil>=5.9.0",
+    # Backend PTY nativo en Windows (ConPTY) para Swarm Terminal Matrix.
+    "pywinpty>=2.0.0; sys_platform == 'win32'",
     # Espacio de nombres .NET `System` (system_projects_ui.py, barra de título en Windows); pywebview ya lo arrastra en win32.
     "pythonnet>=3.0; sys_platform == 'win32'"
 ]
@@ -44,6 +48,10 @@ build = [
 
 [project.scripts]
 mcp2p = "src.app.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

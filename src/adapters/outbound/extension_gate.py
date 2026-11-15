@@ -497,11 +497,12 @@ class OutboundRestConnector:
 
 class NullAgentTerminalConnector:
     """
-    Adaptador nulo plug-and-play para el futuro puerto de terminales (`agent_terminal_matrix`)
-    detrás de `ExtensionSecurityGate`. Exige puerta desbloqueada y degrada de forma segura.
+    Adaptador nulo plug-and-play para el puerto de terminales (`agent_terminal_matrix`, EGM-62).
+    Degrada de forma segura y explícita sin lanzar `PermissionError` (`RF-STM-12`), ofreciendo
+    instrucciones de conexión manual CLI mientras no haya backend PTY real instalado.
     """
 
-    def __init__(self, gate: ExtensionSecurityGate, connector_id: str = "agent_terminal_matrix") -> None:
+    def __init__(self, gate: Optional[ExtensionSecurityGate] = None, connector_id: str = "agent_terminal_matrix") -> None:
         self.gate = gate
         self.connector_id = connector_id
 
@@ -512,22 +513,29 @@ class NullAgentTerminalConnector:
     def get_status(self) -> Dict[str, Any]:
         return {
             "connector_id": self.connector_id,
-            "unlocked": self.gate.is_unlocked(self.connector_id),
+            "unlocked": self.gate.is_unlocked(self.connector_id) if self.gate is not None else False,
             "available": False,
             "mode": "null_degraded",
         }
 
     def list_sessions(self) -> List[Dict[str, Any]]:
-        self.gate.require_unlocked(self.connector_id)
         return []
 
     def _degraded_response(self) -> Dict[str, Any]:
-        self.gate.require_unlocked(self.connector_id)
         return {
             "success": False,
             "degraded": True,
-            "code": "TERMINAL_ADAPTER_NOT_INSTALLED",
-            "message": "NullAgentTerminalConnector activo: adaptador de terminales pendiente de hito V2.",
+            "code": "TERMINAL_ADAPTER_DEGRADED",
+            "reason": "TERMINAL_ADAPTER_NOT_INSTALLED",
+            "message": "NullAgentTerminalConnector activo: modo degradado (RF-STM-12). Use conexión manual CLI.",
+            "manual_command": "mcp2p --mcp-server --transport streamable-http --host 127.0.0.1 --port 8765",
+            "mcp_config": {
+                "mcpServers": {
+                    "mcp2p": {
+                        "url": "http://127.0.0.1:8765/mcp"
+                    }
+                }
+            },
         }
 
     def spawn_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
@@ -536,5 +544,14 @@ class NullAgentTerminalConnector:
     def send_input(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return self._degraded_response()
 
+    def resize_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self._degraded_response()
+
+    def pause_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self._degraded_response()
+
     def close_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        return self._degraded_response()
+
+    def terminate_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return self._degraded_response()

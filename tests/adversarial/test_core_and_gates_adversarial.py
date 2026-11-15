@@ -327,8 +327,13 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
 
     terminal = NullAgentTerminalConnector(gate)
     assert terminal.is_available() is False
-    with pytest.raises(PermissionError, match="EXTENSION_GATE_LOCKED"):
-        terminal.spawn_session()
+    # EGM-62 / RF-STM-12: NullAgentTerminalConnector degrada sin lanzar PermissionError
+    pre_unlock_resp = terminal.spawn_session()
+    assert pre_unlock_resp["success"] is False
+    assert pre_unlock_resp["degraded"] is True
+    assert pre_unlock_resp["code"] == "TERMINAL_ADAPTER_DEGRADED"
+    assert pre_unlock_resp.get("manual_command")
+    assert isinstance(pre_unlock_resp.get("mcp_config"), dict)
 
     manifest = SignedConnectorManifest.create_signed(
         crypto_manager=crypto,
@@ -366,7 +371,10 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
     gate.unlock_connector(term_manifest, crypto.public_key_base64, actor_kind="human_ui")
     term_resp = terminal.spawn_session()
     assert term_resp["success"] is False
-    assert term_resp["code"] == "TERMINAL_ADAPTER_NOT_INSTALLED"
+    assert term_resp["degraded"] is True
+    assert term_resp["code"] == "TERMINAL_ADAPTER_DEGRADED"
+    assert term_resp.get("manual_command")
+    assert isinstance(term_resp.get("mcp_config"), dict)
 
 
 def test_outbound_rest_connector_blocks_ssrf_and_unauthorized_domains(tmp_path: Path) -> None:

@@ -6,9 +6,12 @@ delegando en el CoreKernel hexagonal sin SQL crudo.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import subprocess
 import threading
+import types
+import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +39,48 @@ from src.storage.okf_adapter import OKFAdapter
 logger = logging.getLogger("mcp2p.api_bridge")
 
 DEFAULT_SIGNALING_URL = ""
+
+_PUBLIC_FACADE_TARGETS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
+_FACADE_INTERNAL_METHODS: frozenset[str] = frozenset({
+    "as_public_js_api",
+    "set_window",
+    "set_transport",
+    "ensure_local_node_registered",
+})
+
+
+def _make_public_rpc_wrapper(method_name: str, doc: Optional[str]) -> Any:
+    def _rpc(facade_self: Any, *args: Any, **kwargs: Any) -> Any:
+        target = _PUBLIC_FACADE_TARGETS[facade_self]
+        return getattr(target, method_name)(*args, **kwargs)
+
+    _rpc.__name__ = method_name
+    _rpc.__qualname__ = f"PublicJsApiFacade.{method_name}"
+    _rpc.__doc__ = doc
+    return _rpc
+
+
+class PublicJsApiFacade:
+    """Fachada JS de superficie mínima para `window.pywebview.api` (EGM-58).
+
+    Expone únicamente métodos RPC públicos de primer nivel de `ApiBridge`, sin
+    guardar atributos de instancia que apunten a `bridge` ni a objetos internos
+    (`core_kernel`, `db`, `crypto`, `extension_gate`, sub-adaptadores UI), evitando
+    que `inject_pywebview` o `js_bridge_call`/`get_nested_attribute` alcancen
+    miembros privados o `metodo.__self__`.
+    """
+
+    def __init__(self, bridge: "ApiBridge") -> None:
+        _PUBLIC_FACADE_TARGETS[self] = bridge
+        bridge_cls = type(bridge)
+        for name, _ in inspect.getmembers(bridge_cls):
+            if name.startswith("_") or name in _FACADE_INTERNAL_METHODS:
+                continue
+            member = getattr(bridge, name, None)
+            if member is None or not callable(member):
+                continue
+            fn = _make_public_rpc_wrapper(name, getattr(member, "__doc__", None))
+            setattr(self, name, types.MethodType(fn, self))
 
 
 class ApiBridge:
@@ -611,3 +656,7 @@ class ApiBridge:
 
     def run_system_diagnostics(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         return self.extensions_ui.run_system_diagnostics(project_uuid=project_uuid)
+
+    def as_public_js_api(self) -> PublicJsApiFacade:
+        """Retorna una fachada JS plana y segura para `webview.create_window(..., js_api=...)` (EGM-58)."""
+        return PublicJsApiFacade(self)

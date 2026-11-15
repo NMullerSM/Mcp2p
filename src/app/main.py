@@ -17,19 +17,65 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 
+def _sanitize_pyinstaller_env() -> None:
+    """Limpia variables heredadas del bootloader PyInstaller antes de `os.execvp` (EGM-59)."""
+    for key in [k for k in os.environ if k.startswith("_PYI_")]:
+        os.environ.pop(key, None)
+
+    env_meipass = os.environ.pop("_MEIPASS", None)
+    sys_meipass = getattr(sys, "_MEIPASS", None)
+
+    if "LD_LIBRARY_PATH_ORIG" in os.environ:
+        orig_ld = os.environ.pop("LD_LIBRARY_PATH_ORIG")
+        if orig_ld:
+            os.environ["LD_LIBRARY_PATH"] = orig_ld
+        else:
+            os.environ.pop("LD_LIBRARY_PATH", None)
+        return
+
+    meipass_dirs = [str(p) for p in (env_meipass, sys_meipass) if p]
+    if meipass_dirs and "LD_LIBRARY_PATH" in os.environ:
+        meipass_norm = {os.path.normpath(p) for p in meipass_dirs}
+        raw_parts = os.environ["LD_LIBRARY_PATH"].split(os.pathsep)
+        if any(entry and os.path.normpath(entry) in meipass_norm for entry in raw_parts):
+            filtered = [
+                entry for entry in raw_parts
+                if entry and os.path.normpath(entry) not in meipass_norm
+            ]
+            if filtered:
+                os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(filtered)
+            else:
+                os.environ.pop("LD_LIBRARY_PATH", None)
+
+
 def _dispatch_pty_exec(argv: List[str]) -> int:
-    """Trampolín POSIX (EGM-24): asigna terminal controladora (TIOCSCTTY) y reemplaza el proceso."""
+    """Trampolín POSIX (EGM-24/EGM-59): asigna terminal controladora (TIOCSCTTY) y reemplaza el proceso."""
+    if sys.platform == "win32":
+        if sys.stderr is not None:
+            sys.stderr.write("[mcp2p --pty-exec] No soportado en win32 (use ConPTY/winpty).\n")
+        return 2
+
     cmd = argv[1:] if argv and argv[0] == "--" else argv
     if not cmd:
-        sys.stderr.write("[mcp2p --pty-exec] Comando objetivo requerido.\n")
+        if sys.stderr is not None:
+            sys.stderr.write("[mcp2p --pty-exec] Comando objetivo requerido.\n")
         return 2
-    if sys.platform != "win32":
-        import fcntl
-        import termios
+
+    import fcntl
+    import termios
+
+    # En entornos interactivos con TTY en stdin, TIOCSCTTY debe fallar cerrado (EGM-59).
+    if os.isatty(0):
         try:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-        except OSError:
-            pass
+        except OSError as exc:
+            if sys.stderr is not None:
+                sys.stderr.write(
+                    f"[mcp2p --pty-exec] Error asignando terminal controladora (TIOCSCTTY): {exc}\n"
+                )
+            return 1
+
+    _sanitize_pyinstaller_env()
     os.execvp(cmd[0], cmd)
     return 0
 
@@ -230,7 +276,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     window = webview.create_window(
         title="MCP²P — Agent Consensus & Governance",
         url=target_url,
-        js_api=api,
+        js_api=api.as_public_js_api(),
         width=1280,
         height=840,
         min_size=(960, 600),

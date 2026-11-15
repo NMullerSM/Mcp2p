@@ -33,14 +33,29 @@ SERVER_VERSION = MCP_API_VERSION
 
 
 
-def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -> MCPServer:
+def create_mcp_server(
+    db_path: Optional[str] = None,
+    transport: str = "stdio",
+    *,
+    kernel: Optional[Any] = None,
+    handler: Optional[MCPToolsHandler] = None,
+    bus: Optional[Any] = None,
+    event_bus: Optional[Any] = None,
+    pane_registry: Optional[Any] = None,
+) -> MCPServer:
     """Crea e inicializa el servidor MCP con todas las herramientas registradas."""
-    if db_path:
-        os.environ["MCP2P_DB_PATH"] = str(db_path)
-        db = DatabaseManager.get_instance(str(db_path))
+    if handler is not None:
+        resolved_handler = handler
+    elif kernel is not None:
+        resolved_handler = MCPToolsHandler(kernel=kernel, owns_kernel=False)
     else:
-        db = DatabaseManager.get_instance()
-    handler = MCPToolsHandler(db_manager=db)
+        if db_path:
+            os.environ["MCP2P_DB_PATH"] = str(db_path)
+            db = DatabaseManager.get_instance(str(db_path))
+        else:
+            db = DatabaseManager.get_instance()
+        resolved_handler = MCPToolsHandler(db_manager=db, bus=bus, event_bus=event_bus)
+    handler = resolved_handler
 
     server = MCPServer("mcp2p-server", version=SERVER_VERSION)
 
@@ -753,6 +768,8 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
         resolved_proj = project_uuid or projectUuid or ""
         return handler.sync_coordination_memory(project_uuid=resolved_proj)
 
+    setattr(server, "mcp2p_handler", handler)
+    setattr(server, "mcp2p_pane_registry", pane_registry)
     return server
 
 
@@ -779,7 +796,7 @@ def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tup
         raise
     bound_port = sock.getsockname()[1]
     app = server.streamable_http_app(host=bind_host)
-    config = uvicorn.Config(app, log_level=server.settings.log_level.lower())
+    config = uvicorn.Config(app, log_level=server.settings.log_level.lower(), log_config=None)
     url_host = f"[{bind_host}]" if family == socket.AF_INET6 else bind_host
     return uvicorn.Server(config), sock, f"http://{url_host}:{bound_port}/mcp"
 
@@ -805,7 +822,8 @@ def run_mcp_server(
 
     uv_server, sock, url = build_streamable_http_server(server, bind_host, bind_port)
     # stdout no es canal JSON-RPC en HTTP, pero se anuncia por stderr para no mezclar con logs de la app.
-    print(f"MCP2P streamable-http escuchando en {url}", file=sys.stderr, flush=True)
+    if sys.stderr is not None:
+        print(f"MCP2P streamable-http escuchando en {url}", file=sys.stderr, flush=True)
     try:
         anyio.run(lambda: uv_server.serve(sockets=[sock]))
     finally:

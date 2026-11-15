@@ -84,10 +84,21 @@ class MCPToolsHandler:
         self,
         db_manager: Optional[DatabaseManager] = None,
         kernel: Optional[CoreKernel] = None,
+        *,
+        bus: Optional[A2ABus] = None,
+        event_bus: Optional[Any] = None,
+        owns_kernel: Optional[bool] = None,
     ) -> None:
         if kernel is None:
             db = db_manager or DatabaseManager.get_instance()
-            kernel = ApplicationFactory.create_mcp_kernel(db_manager=db)
+            kernel = ApplicationFactory.create_mcp_kernel(
+                db_manager=db,
+                bus=bus,
+                event_bus=event_bus,
+            )
+            self._owns_kernel = True if owns_kernel is None else bool(owns_kernel)
+        else:
+            self._owns_kernel = False if owns_kernel is None else bool(owns_kernel)
         self.kernel = kernel
         self.db = kernel.db
         self.bus = kernel.bus
@@ -96,6 +107,15 @@ class MCPToolsHandler:
             okf = OKFAdapter()
             kernel.register_connector(CoreKernel.PORT_OKF, okf)
         self.okf = okf
+
+    def close(self) -> None:
+        """Cierra el kernel asociado respetando `_owns_kernel` (`close_db=False` si es compartido, EGM-60)."""
+        close_fn = getattr(self.kernel, "close", None)
+        if callable(close_fn):
+            try:
+                close_fn(close_db=self._owns_kernel)
+            except TypeError:
+                close_fn()
 
     def _agent(self, node_uuid: Optional[str] = None) -> ActorContext:
         """Actor no humano del canal MCP (identidad autodeclarada por el agente, EGM-22)."""
@@ -1411,7 +1431,7 @@ class MCPToolsHandler:
             handler_tools = [
                 m for m in dir(self)
                 if not m.startswith("_") and callable(getattr(self, m))
-                and m not in ("bus", "db", "okf", "kernel")
+                and m not in ("bus", "db", "okf", "kernel", "close")
             ]
             count = len(handler_tools)
         else:
