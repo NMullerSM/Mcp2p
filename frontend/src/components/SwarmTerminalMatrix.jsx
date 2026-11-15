@@ -1,354 +1,216 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ViewSliderContent } from './ViewSlider';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { ExternalLink, X } from 'lucide-react';
+import { ViewSliderContent, useViewSlider } from './ViewSlider';
+import { EmptyTerminalSlot, TerminalPane } from './terminals/TerminalPane';
+import { TerminalSliderControls } from './terminals/TerminalSliderControls';
 import {
-  Terminal,
-  Play,
-  Pause,
-  Square,
-  RefreshCw,
-  Send,
-  Copy,
-  Check,
-  AlertTriangle,
-  ExternalLink,
-  X,
-  Focus
-} from 'lucide-react';
+  DEFAULT_MAX_PANES,
+  DEFAULT_PTY_SIZE,
+  HARD_MAX_PANES,
+  MATRIX_PANE_IDS,
+  computeGridLayout,
+  describeTerminalError,
+  forgetPaneSession,
+  paneNumber,
+  pickFreePaneId,
+  recallPaneSession,
+  rememberPaneSession
+} from './terminals/terminalModel';
 
-export const MATRIX_PANE_IDS = ['pane_1', 'pane_2', 'pane_3', 'pane_4'];
-
-export const CLI_PROFILE_OPTIONS = [
-  { value: 'claude', label: 'Claude Code (claude)' },
-  { value: 'gemini', label: 'Gemini CLI (gemini)' },
-  { value: 'codex', label: 'Codex CLI (codex)' },
-  { value: 'opencode', label: 'OpenCode (opencode)' },
-  { value: 'custom_shell', label: 'Shell Local (custom_shell)' }
-];
-
-export const ROLE_OPTIONS = [
-  { value: 'implementer', label: 'Implementer' },
-  { value: 'reviewer', label: 'Reviewer' },
-  { value: 'auditor', label: 'Auditor' },
-  { value: 'coordinator', label: 'Coordinator' }
-];
-
-export const LAYOUT_OPTIONS = [
-  { id: '1x1', label: '1x1', count: 1, columns: '1fr' },
-  { id: '2x1', label: '2x1', count: 2, columns: 'repeat(2, minmax(0, 1fr))' },
-  { id: '2x2', label: '2x2', count: 4, columns: 'repeat(2, minmax(0, 1fr))' }
-];
-
-const SIZE_PRESETS = [
-  { label: '80x24', cols: 80, rows: 24 },
-  { label: '100x28', cols: 100, rows: 28 },
-  { label: '120x36', cols: 120, rows: 36 }
-];
-
-const DEFAULT_MANUAL_COMMAND =
-  'mcp2p --mcp-server --transport streamable-http --host 127.0.0.1 --port 8765';
-
-const DEFAULT_MCP_CONFIG = {
-  mcpServers: {
-    mcp2p: {
-      url: 'http://127.0.0.1:8765/mcp'
-    }
-  }
-};
+// Compatibilidad: estos nombres se exportaban desde este modulo antes de partirlo.
+export { MATRIX_PANE_IDS, ROLE_OPTIONS, stripAnsiSequences } from './terminals/terminalModel';
 
 const POLL_INTERVAL_MS = 350;
 const MAX_OUTPUT_CHARS = 150000;
-const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
-const URL_SPLIT_REGEX = /(https?:\/\/[^\s<>"'`)\]]+)/g;
 
-function createInitialPaneState(paneId, index) {
+function createInitialPaneState(paneId) {
   return {
     paneId,
-    label: `Pane ${index + 1}`,
+    open: false,
+    kind: 'cli',
     cliProfile: 'claude',
     role: 'implementer',
-    cols: 100,
-    rows: 28,
+    cwd: null,
+    cols: DEFAULT_PTY_SIZE.cols,
+    rows: DEFAULT_PTY_SIZE.rows,
     alive: false,
     paused: false,
     pid: null,
     rssMb: 0,
     nodeUuid: '',
     sessionId: '',
+    registryStatus: '',
     exitCode: null,
-    output: '',
-    busy: false,
-    error: null,
-    degradedInfo: null
+    output: ''
   };
 }
 
 function createInitialPanesMap() {
   const map = {};
-  MATRIX_PANE_IDS.forEach((paneId, idx) => {
-    map[paneId] = createInitialPaneState(paneId, idx);
+  MATRIX_PANE_IDS.forEach((paneId) => {
+    map[paneId] = createInitialPaneState(paneId);
   });
   return map;
 }
 
-export function stripAnsiSequences(text) {
-  if (!text) return '';
-  return String(text).replace(ANSI_ESCAPE_REGEX, '');
-}
+const INITIAL_CATALOG = {
+  loaded: false,
+  loading: false,
+  error: null,
+  clis: [],
+  maxPanes: DEFAULT_MAX_PANES,
+  hardMaxPanes: HARD_MAX_PANES,
+  platformSupported: true,
+  platform: null,
+  warnings: [],
+  version: null
+};
 
-function splitUrlTrailingPunctuation(rawUrl) {
-  let clean = rawUrl;
-  let trailing = '';
-  while (clean.length > 0 && /[.,;:!?]/.test(clean[clean.length - 1])) {
-    trailing = clean[clean.length - 1] + trailing;
-    clean = clean.slice(0, -1);
-  }
-  return { clean, trailing };
-}
-
-function renderOutputWithSafeLinks(text, onRequestOpenUrl) {
-  const cleaned = stripAnsiSequences(text);
-  if (!cleaned) return null;
-  const parts = cleaned.split(URL_SPLIT_REGEX);
-  return parts.map((part, idx) => {
-    if (!part) return null;
-    if (/^https?:\/\//i.test(part)) {
-      const { clean, trailing } = splitUrlTrailingPunctuation(part);
-      if (!clean) return part;
-      return (
-        <React.Fragment key={`url-${idx}`}>
-          <button
-            type="button"
-            data-testid="tty-detected-url"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRequestOpenUrl(clean);
-            }}
-            title={`Abrir enlace externo con confirmación: ${clean}`}
-            style={{
-              display: 'inline',
-              border: 'none',
-              background: 'transparent',
-              padding: 0,
-              margin: 0,
-              font: 'inherit',
-              color: 'var(--accent-primary)',
-              textDecoration: 'underline',
-              cursor: 'pointer'
-            }}
-          >
-            {clean}
-          </button>
-          {trailing}
-        </React.Fragment>
-      );
-    }
-    return <React.Fragment key={`txt-${idx}`}>{part}</React.Fragment>;
-  });
-}
-
-function getPaneStatusMeta(pane) {
-  if (pane.degradedInfo) {
-    return {
-      label: 'Degradado',
-      color: 'var(--accent-warning)',
-      bg: 'rgba(245, 158, 11, 0.14)',
-      border: 'rgba(245, 158, 11, 0.35)'
-    };
-  }
-  if (pane.alive && pane.paused) {
-    return {
-      label: 'Pausado',
-      color: 'var(--accent-warning)',
-      bg: 'rgba(245, 158, 11, 0.14)',
-      border: 'rgba(245, 158, 11, 0.35)'
-    };
-  }
-  if (pane.alive) {
-    return {
-      label: 'Activo',
-      color: 'var(--accent-success)',
-      bg: 'rgba(var(--accent-primary-rgb), 0.14)',
-      border: 'rgba(var(--accent-primary-rgb), 0.35)'
-    };
-  }
-  return {
-    label: 'Libre',
-    color: 'var(--text-muted)',
-    bg: 'var(--bg-subtle)',
-    border: 'var(--border-subtle)'
-  };
-}
-
-function DegradedManualCard({
-  testId,
-  title,
-  message,
-  code,
-  manualCommand,
-  mcpConfig,
-  copiedKey,
-  onCopy
-}) {
-  const cmdText = manualCommand || DEFAULT_MANUAL_COMMAND;
-  const configText = JSON.stringify(mcpConfig || DEFAULT_MCP_CONFIG, null, 2);
-  const cmdKey = `${testId}-cmd`;
-  const cfgKey = `${testId}-cfg`;
-
+function ExternalUrlConfirmDialog({ url, onCancel, onConfirm }) {
+  if (!url) return null;
   return (
     <div
-      data-testid={testId}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Confirmar apertura de URL externa"
+      data-testid="external-url-confirm-modal"
       style={{
-        backgroundColor: 'rgba(245, 158, 11, 0.08)',
-        border: '1px solid rgba(245, 158, 11, 0.38)',
-        borderRadius: 'var(--radius-md)',
-        padding: '10px 12px',
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.58)',
         display: 'flex',
-        flexDirection: 'column',
-        gap: '8px'
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '16px',
+        zIndex: 120
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-warning)' }}>
-          <AlertTriangle size={14} />
-          <span>{title || 'Modo Degradado (RF-STM-12)'}</span>
+      <div
+        style={{
+          width: '100%',
+          maxWidth: '460px',
+          backgroundColor: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: 'var(--shadow-lg)',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            <ExternalLink size={15} color="var(--accent-warning)" />
+            <span>Confirmar enlace externo desde terminal</span>
+          </div>
+          <button
+            type="button"
+            aria-label="Cerrar diálogo"
+            onClick={onCancel}
+            style={{ border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', display: 'inline-flex' }}
+          >
+            <X size={15} />
+          </button>
         </div>
-        {code && (
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '10.5px',
-            padding: '1px 6px',
-            borderRadius: 'var(--radius-sm)',
-            backgroundColor: 'rgba(245, 158, 11, 0.16)',
-            color: 'var(--accent-warning)'
-          }}>
-            {code}
-          </span>
-        )}
-      </div>
 
-      {message && (
-        <p style={{ margin: 0, fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-          {message}
+        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+          Esta URL apareció en la salida de un terminal. Confirma explícitamente el dominio antes de abrirla para evitar aperturas involuntarias o phishing:
         </p>
-      )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-            Comando CLI Manual
-          </span>
+        <pre
+          style={{
+            margin: 0,
+            padding: '8px 10px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: 'var(--bg-app)',
+            border: '1px solid var(--border-subtle)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '11.5px',
+            color: 'var(--accent-primary)',
+            wordBreak: 'break-all',
+            whiteSpace: 'pre-wrap',
+            userSelect: 'text'
+          }}
+        >
+          {url}
+        </pre>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
           <button
             type="button"
-            data-testid={`${testId}-copy-cmd`}
-            onClick={() => onCopy(cmdKey, cmdText)}
+            data-testid="external-url-cancel-btn"
+            onClick={onCancel}
             style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              padding: '2px 7px',
-              fontSize: '10.5px',
+              padding: '6px 12px',
+              fontSize: '12px',
               fontWeight: 600,
-              borderRadius: 'var(--radius-sm)',
+              borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-surface)',
-              color: copiedKey === cmdKey ? 'var(--accent-success)' : 'var(--text-primary)',
+              backgroundColor: 'var(--bg-subtle)',
+              color: 'var(--text-primary)',
               cursor: 'pointer'
             }}
           >
-            {copiedKey === cmdKey ? <Check size={11} /> : <Copy size={11} />}
-            <span>{copiedKey === cmdKey ? 'Copiado' : 'Copiar comando'}</span>
+            Cancelar
           </button>
-        </div>
-        <pre style={{
-          margin: 0,
-          padding: '6px 8px',
-          borderRadius: 'var(--radius-sm)',
-          backgroundColor: 'var(--bg-app)',
-          border: '1px solid var(--border-subtle)',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '11px',
-          color: 'var(--text-primary)',
-          overflowX: 'auto',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          userSelect: 'text'
-        }}>
-          {cmdText}
-        </pre>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-            Configuración JSON (mcpServers)
-          </span>
           <button
             type="button"
-            data-testid={`${testId}-copy-config`}
-            onClick={() => onCopy(cfgKey, configText)}
+            data-testid="external-url-confirm-btn"
+            onClick={onConfirm}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: '4px',
-              padding: '2px 7px',
-              fontSize: '10.5px',
-              fontWeight: 600,
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-surface)',
-              color: copiedKey === cfgKey ? 'var(--accent-success)' : 'var(--text-primary)',
+              gap: '5px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 700,
+              borderRadius: 'var(--radius-md)',
+              border: 'none',
+              backgroundColor: 'var(--accent-primary)',
+              color: '#ffffff',
               cursor: 'pointer'
             }}
           >
-            {copiedKey === cfgKey ? <Check size={11} /> : <Copy size={11} />}
-            <span>{copiedKey === cfgKey ? 'Copiado' : 'Copiar JSON'}</span>
+            <ExternalLink size={13} />
+            <span>Abrir enlace</span>
           </button>
         </div>
-        <pre style={{
-          margin: 0,
-          padding: '6px 8px',
-          borderRadius: 'var(--radius-sm)',
-          backgroundColor: 'var(--bg-app)',
-          border: '1px solid var(--border-subtle)',
-          fontFamily: 'var(--font-mono)',
-          fontSize: '10.5px',
-          color: 'var(--text-primary)',
-          overflowX: 'auto',
-          userSelect: 'text'
-        }}>
-          {configText}
-        </pre>
       </div>
     </div>
   );
 }
 
 export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
-  const [layout, setLayout] = useState('2x2');
+  const { close: closeSlider, open: openSlider, isOpen: sliderOpen } = useViewSlider();
   const [panes, setPanes] = useState(() => createInitialPanesMap());
-  const [inputs, setInputs] = useState({
-    pane_1: '',
-    pane_2: '',
-    pane_3: '',
-    pane_4: ''
-  });
   const [focusedPaneId, setFocusedPaneId] = useState('pane_1');
+  const [focusRequest, setFocusRequest] = useState({ paneId: null, nonce: 0 });
   const [matrixStatus, setMatrixStatus] = useState({
     degraded: false,
+    platformUnsupported: false,
     hubUrl: null,
     hubRunning: false,
     manualCommand: null,
     mcpConfig: null,
     loading: false
   });
-  const [showManualInstructions, setShowManualInstructions] = useState(false);
+  const [catalog, setCatalog] = useState(INITIAL_CATALOG);
+  const [notice, setNotice] = useState(null);
+  const [cwdInput, setCwdInput] = useState('');
+  const [roleInput, setRoleInput] = useState('implementer');
+  const [launchingCliId, setLaunchingCliId] = useState(null);
   const [copiedKey, setCopiedKey] = useState(null);
   const [pendingExternalUrl, setPendingExternalUrl] = useState(null);
 
   const mountedRef = useRef(true);
-  const nextSeqRef = useRef({ pane_1: 0, pane_2: 0, pane_3: 0, pane_4: 0 });
-  const pollingInFlightRef = useRef({ pane_1: false, pane_2: false, pane_3: false, pane_4: false });
-  const inputRefs = useRef({});
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
+  const nextSeqRef = useRef({});
+  const pollingInFlightRef = useRef({});
+  const launchingRef = useRef(false);
   const terminalRefs = useRef({});
 
   useEffect(() => {
@@ -356,6 +218,20 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     return () => {
       mountedRef.current = false;
     };
+  }, []);
+
+  const catalogById = useMemo(() => {
+    const map = {};
+    catalog.clis.forEach((cli) => {
+      map[cli.id] = cli;
+    });
+    return map;
+  }, [catalog.clis]);
+
+  const maxPanes = catalog.maxPanes || DEFAULT_MAX_PANES;
+
+  const showNotice = useCallback((res, context = {}) => {
+    setNotice(describeTerminalError(res, { maxPanes: catalogRef.current.maxPanes, ...context }));
   }, []);
 
   const handleCopy = useCallback(async (key, text) => {
@@ -376,6 +252,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     }
   }, []);
 
+  // ---- Estado del enjambre y catálogo -------------------------------------------------
+
   const refreshMatrixStatus = useCallback(async () => {
     if (!api?.pty_get_matrix_status) return;
     setMatrixStatus((prev) => ({ ...prev, loading: true }));
@@ -383,9 +261,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
       const res = await api.pty_get_matrix_status();
       if (!mountedRef.current || !res) return;
 
-      const isDegraded = Boolean(res.degraded);
       setMatrixStatus({
-        degraded: isDegraded,
+        degraded: Boolean(res.degraded),
+        platformUnsupported: Boolean(res.platform_unsupported) || res.code === 'TERMINAL_PLATFORM_UNSUPPORTED',
         hubUrl: res.hub_url || null,
         hubRunning: Boolean(res.hub_running),
         manualCommand: res.manual_command || null,
@@ -408,33 +286,34 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
           const s = sessionMap[paneId];
           const r = registryMap[paneId];
           const cur = prev[paneId];
-          if (s) {
+          if (s && s.alive) {
+            // Una sesión viva siempre se muestra (p. ej. al volver a esta pestaña).
+            const remembered = cur.open ? null : recallPaneSession(paneId, s.session_id);
+            const base = cur.open ? cur : { ...createInitialPaneState(paneId), open: true };
             next[paneId] = {
-              ...cur,
-              cliProfile: s.cli_profile || r?.cli_profile || cur.cliProfile,
-              role: s.role || r?.role || cur.role,
-              cols: s.cols || cur.cols,
-              rows: s.rows || cur.rows,
-              alive: Boolean(s.alive),
+              ...base,
+              kind: remembered?.kind || base.kind,
+              cwd: base.cwd ?? remembered?.cwd ?? null,
+              cliProfile: s.cli_profile || r?.cli_profile || base.cliProfile,
+              role: s.role || r?.role || base.role,
+              cols: s.cols || base.cols,
+              rows: s.rows || base.rows,
+              alive: true,
               paused: Boolean(s.paused),
-              pid: s.pid ?? r?.pid ?? cur.pid,
-              rssMb: typeof s.rss_mb === 'number' ? s.rss_mb : cur.rssMb,
-              nodeUuid: s.node_uuid || r?.node_uuid || cur.nodeUuid,
-              sessionId: s.session_id || cur.sessionId,
-              degradedInfo: s.alive ? null : cur.degradedInfo
+              pid: s.pid ?? r?.pid ?? base.pid,
+              rssMb: typeof s.rss_mb === 'number' ? s.rss_mb : base.rssMb,
+              nodeUuid: s.node_uuid || r?.node_uuid || base.nodeUuid,
+              sessionId: s.session_id || base.sessionId,
+              registryStatus: r?.status || base.registryStatus
             };
-          } else if (cur.alive) {
-            next[paneId] = {
-              ...cur,
-              alive: false,
-              paused: false,
-              rssMb: 0
-            };
-          } else if (r) {
+          } else if (cur.open && cur.alive) {
+            next[paneId] = { ...cur, alive: false, paused: false, rssMb: 0 };
+          } else if (cur.open && r) {
             next[paneId] = {
               ...cur,
               nodeUuid: r.node_uuid || cur.nodeUuid,
-              pid: r.pid ?? cur.pid
+              pid: r.pid ?? cur.pid,
+              registryStatus: r.status || cur.registryStatus
             };
           }
         });
@@ -447,9 +326,52 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     }
   }, [api]);
 
+  const refreshCatalog = useCallback(async () => {
+    if (!api?.pty_list_cli_catalog) {
+      setCatalog((prev) => ({ ...prev, loaded: true, loading: false }));
+      return;
+    }
+    setCatalog((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await api.pty_list_cli_catalog();
+      if (!mountedRef.current) return;
+      if (!res || res.success === false) {
+        setCatalog((prev) => ({
+          ...prev,
+          loaded: true,
+          loading: false,
+          error: res?.message || 'No se pudo leer el catálogo de CLIs.'
+        }));
+        return;
+      }
+      setCatalog({
+        loaded: true,
+        loading: false,
+        error: null,
+        clis: Array.isArray(res.clis) ? res.clis : [],
+        maxPanes: Number.isInteger(res.max_panes) ? res.max_panes : DEFAULT_MAX_PANES,
+        hardMaxPanes: Number.isInteger(res.hard_max_panes) ? res.hard_max_panes : HARD_MAX_PANES,
+        platformSupported: res.terminal_platform_supported !== false,
+        platform: res.platform || null,
+        warnings: Array.isArray(res.warnings) ? res.warnings : [],
+        version: res.catalog_version || null
+      });
+    } catch (err) {
+      if (mountedRef.current) {
+        setCatalog((prev) => ({ ...prev, loaded: true, loading: false, error: err?.message || String(err) }));
+      }
+    }
+  }, [api]);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refreshMatrixStatus(), refreshCatalog()]);
+  }, [refreshMatrixStatus, refreshCatalog]);
+
   useEffect(() => {
-    refreshMatrixStatus();
-  }, [refreshMatrixStatus, project?.project_uuid]);
+    void refreshAll();
+  }, [refreshAll, project?.project_uuid]);
+
+  // ---- Sondeo de la salida ------------------------------------------------------------
 
   const pollPaneOnce = useCallback(async (paneId) => {
     if (!api?.pty_poll_output || pollingInFlightRef.current[paneId]) return;
@@ -463,9 +385,13 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
         nextSeqRef.current[paneId] = res.next_seq;
       }
 
+      const before = panesRef.current[paneId];
+      const stillAlive = Boolean(res.alive);
+      const installJustEnded = Boolean(before?.alive && !stillAlive && before.kind === 'install');
+
       setPanes((prev) => {
         const cur = prev[paneId];
-        if (!cur) return prev;
+        if (!cur || !cur.open) return prev;
         let nextOutput = cur.output;
         if (res.truncated) {
           nextOutput += '\n[...salida anterior truncada del buffer...]\n';
@@ -476,7 +402,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
             nextOutput = nextOutput.slice(-MAX_OUTPUT_CHARS);
           }
         }
-        const stillAlive = Boolean(res.alive);
         return {
           ...prev,
           [paneId]: {
@@ -485,31 +410,25 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
             alive: stillAlive,
             paused: Boolean(res.paused),
             rssMb: stillAlive ? (typeof res.rss_mb === 'number' ? res.rss_mb : cur.rssMb) : 0,
-            exitCode: res.exit_code !== undefined ? res.exit_code : cur.exitCode,
-            degradedInfo: res.degraded
-              ? {
-                  code: res.code || 'TERMINAL_ADAPTER_DEGRADED',
-                  message: res.message || res.error || 'Modo degradado activo',
-                  manualCommand: res.manual_command,
-                  mcpConfig: res.mcp_config
-                }
-              : cur.degradedInfo
+            exitCode: res.exit_code !== undefined ? res.exit_code : cur.exitCode
           }
         };
       });
 
-      const el = terminalRefs.current[paneId];
-      if (el && res.text) {
-        el.scrollTop = el.scrollHeight;
+      if (res.degraded && res.code) {
+        setNotice((prev) => (prev?.code === res.code ? prev : describeTerminalError(res)));
+      }
+      if (installJustEnded) {
+        void refreshCatalog();
       }
     } catch {
       // No romper el ciclo de polling por un fallo transitorio
     } finally {
       pollingInFlightRef.current[paneId] = false;
     }
-  }, [api]);
+  }, [api, refreshCatalog]);
 
-  const alivePaneIdsKey = MATRIX_PANE_IDS.filter((id) => panes[id].alive).join(',');
+  const alivePaneIdsKey = MATRIX_PANE_IDS.filter((id) => panes[id].open && panes[id].alive).join(',');
 
   useEffect(() => {
     if (!alivePaneIdsKey || !api?.pty_poll_output) return undefined;
@@ -529,112 +448,118 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     return () => clearInterval(timer);
   }, [alivePaneIdsKey, api, pollPaneOnce]);
 
-  const handleSpawnPane = async (paneId) => {
-    if (!api?.pty_spawn_pane) return;
-    const pane = panes[paneId];
-    if (!pane || pane.busy) return;
+  // ---- Foco ---------------------------------------------------------------------------
 
+  const openPaneIds = MATRIX_PANE_IDS.filter((id) => panes[id].open);
+  const openPaneIdsKey = openPaneIds.join(',');
+
+  useEffect(() => {
+    // Si el panel enfocado se cierra, el foco pasa al primero abierto.
+    if (!openPaneIds.length || openPaneIds.includes(focusedPaneId)) return;
+    setFocusedPaneId(openPaneIds[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPaneIdsKey, focusedPaneId]);
+
+  const requestTerminalFocus = useCallback((paneId) => {
+    setFocusedPaneId(paneId);
+    setFocusRequest((prev) => ({ paneId, nonce: prev.nonce + 1 }));
+  }, []);
+
+  const handleClickPane = useCallback((paneId) => {
+    setFocusedPaneId(paneId);
+    terminalRefs.current[paneId]?.focus();
+  }, []);
+
+  const registerTerminalRef = useCallback((paneId, el) => {
+    terminalRefs.current[paneId] = el;
+  }, []);
+
+  // Seleccionar una terminal en el slider la enfoca y deja el teclado listo para escribir.
+  const handleFocusFromSlider = useCallback((paneId) => {
+    requestTerminalFocus(paneId);
+    closeSlider();
+  }, [requestTerminalFocus, closeSlider]);
+
+  // ---- Acciones sobre terminales ------------------------------------------------------
+
+  const markPaneOpened = useCallback((paneId, patch) => {
     nextSeqRef.current[paneId] = 0;
     setPanes((prev) => ({
       ...prev,
-      [paneId]: {
-        ...prev[paneId],
-        busy: true,
-        error: null,
-        degradedInfo: null,
-        exitCode: null,
-        output: ''
-      }
+      [paneId]: { ...createInitialPaneState(paneId), open: true, alive: true, ...patch }
     }));
+    rememberPaneSession(paneId, { sessionId: patch.sessionId, cwd: patch.cwd ?? null, kind: patch.kind || 'cli' });
+  }, []);
 
+  const handleLaunchCli = useCallback(async (cliId) => {
+    if (!api?.pty_spawn_pane || launchingRef.current) return;
+    const cli = catalogRef.current.clis.find((c) => c.id === cliId);
+    const context = { cliId, cliName: cli?.display_name };
+    const currentOpen = MATRIX_PANE_IDS.filter((id) => panesRef.current[id].open);
+    const paneId = pickFreePaneId(currentOpen, catalogRef.current.maxPanes);
+    if (!paneId) {
+      showNotice({ code: 'PANE_LIMIT_REACHED', reason: 'max_panes', max_panes: catalogRef.current.maxPanes }, context);
+      return;
+    }
+
+    launchingRef.current = true;
+    setLaunchingCliId(cliId);
     try {
+      const cwd = cwdInput.trim() || null;
       const res = await api.pty_spawn_pane(
         paneId,
-        pane.cliProfile,
-        pane.role,
+        cliId,
+        roleInput,
         null,
-        pane.cols,
-        pane.rows,
-        true
+        DEFAULT_PTY_SIZE.cols,
+        DEFAULT_PTY_SIZE.rows,
+        true,
+        cwd
       );
       if (!mountedRef.current) return;
 
       if (res?.hub_url) {
-        setMatrixStatus((prev) => ({
-          ...prev,
-          hubUrl: res.hub_url,
-          hubRunning: true
-        }));
+        setMatrixStatus((prev) => ({ ...prev, hubUrl: res.hub_url, hubRunning: true }));
       }
 
-      if (res?.degraded || !res?.success) {
-        const degraded = Boolean(res?.degraded);
-        setPanes((prev) => ({
-          ...prev,
-          [paneId]: {
-            ...prev[paneId],
-            busy: false,
-            alive: false,
-            paused: false,
-            pid: null,
-            rssMb: 0,
-            error: !degraded ? (res?.message || res?.error || 'No se pudo iniciar la sesión') : null,
-            degradedInfo: degraded
-              ? {
-                  code: res?.code || 'TERMINAL_ADAPTER_DEGRADED',
-                  message: res?.message || res?.error || 'Adaptador PTY no disponible. Usa conexión manual.',
-                  manualCommand: res?.manual_command || DEFAULT_MANUAL_COMMAND,
-                  mcpConfig: res?.mcp_config || DEFAULT_MCP_CONFIG
-                }
-              : null
-          }
-        }));
-        if (degraded && res?.code !== 'CLI_BINARY_NOT_FOUND') {
-          setMatrixStatus((prev) => ({
-            ...prev,
-            degraded: true,
-            manualCommand: res?.manual_command || prev.manualCommand || DEFAULT_MANUAL_COMMAND,
-            mcpConfig: res?.mcp_config || prev.mcpConfig || DEFAULT_MCP_CONFIG
-          }));
-        }
+      if (!res?.success) {
+        showNotice(res || { code: 'PTY_SPAWN_FAILED', message: 'No se pudo iniciar la sesión.' }, context);
         return;
       }
 
       const sess = res.session || {};
       const paneMeta = res.pane || {};
-      setPanes((prev) => ({
-        ...prev,
-        [paneId]: {
-          ...prev[paneId],
-          busy: false,
-          alive: true,
-          paused: Boolean(sess.paused),
-          pid: res.pid ?? sess.pid ?? paneMeta.pid ?? null,
-          rssMb: typeof sess.rss_mb === 'number' ? sess.rss_mb : 0,
-          nodeUuid: res.node_uuid || paneMeta.node_uuid || sess.node_uuid || '',
-          sessionId: sess.session_id || '',
-          error: null,
-          degradedInfo: null
-        }
-      }));
-      setFocusedPaneId(paneId);
+      const openedId = res.pane_id || paneId;
+      markPaneOpened(openedId, {
+        kind: 'cli',
+        cliProfile: cliId,
+        role: roleInput,
+        cwd: res.cwd ?? cwd,
+        cols: sess.cols || DEFAULT_PTY_SIZE.cols,
+        rows: sess.rows || DEFAULT_PTY_SIZE.rows,
+        paused: Boolean(sess.paused),
+        pid: res.pid ?? sess.pid ?? paneMeta.pid ?? null,
+        rssMb: typeof sess.rss_mb === 'number' ? sess.rss_mb : 0,
+        nodeUuid: res.node_uuid || paneMeta.node_uuid || sess.node_uuid || '',
+        sessionId: sess.session_id || '',
+        registryStatus: paneMeta.status || ''
+      });
+      setNotice(null);
+      requestTerminalFocus(openedId);
+      closeSlider();
     } catch (err) {
-      if (!mountedRef.current) return;
-      setPanes((prev) => ({
-        ...prev,
-        [paneId]: {
-          ...prev[paneId],
-          busy: false,
-          alive: false,
-          error: err?.message || String(err)
-        }
-      }));
+      if (mountedRef.current) {
+        showNotice({ code: 'PTY_SPAWN_FAILED', message: err?.message || String(err) }, context);
+      }
+    } finally {
+      launchingRef.current = false;
+      if (mountedRef.current) setLaunchingCliId(null);
     }
-  };
+  }, [api, cwdInput, roleInput, showNotice, markPaneOpened, requestTerminalFocus, closeSlider]);
 
-  const handlePausePane = async (paneId) => {
+  const handlePausePane = useCallback(async (paneId) => {
     if (!api?.pty_pause_pane) return;
-    const pane = panes[paneId];
+    const pane = panesRef.current[paneId];
     if (!pane || !pane.alive) return;
     const targetPaused = !pane.paused;
     try {
@@ -643,29 +568,18 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
       if (res?.success) {
         setPanes((prev) => ({
           ...prev,
-          [paneId]: {
-            ...prev[paneId],
-            paused: typeof res.paused === 'boolean' ? res.paused : targetPaused
-          }
+          [paneId]: { ...prev[paneId], paused: typeof res.paused === 'boolean' ? res.paused : targetPaused }
         }));
       } else if (res?.message || res?.error) {
-        setPanes((prev) => ({
-          ...prev,
-          [paneId]: { ...prev[paneId], error: res.message || res.error }
-        }));
+        showNotice({ ...res, code: res.code || 'PTY_PAUSE_FAILED' });
       }
     } catch (err) {
-      if (mountedRef.current) {
-        setPanes((prev) => ({
-          ...prev,
-          [paneId]: { ...prev[paneId], error: err?.message || String(err) }
-        }));
-      }
+      if (mountedRef.current) showNotice({ code: 'PTY_PAUSE_FAILED', message: err?.message || String(err) });
     }
-  };
+  }, [api, showNotice]);
 
-  const handleClosePane = async (paneId) => {
-    const pane = panes[paneId];
+  const handleClosePane = useCallback(async (paneId) => {
+    const pane = panesRef.current[paneId];
     if (!pane) return;
     try {
       if (api?.pty_close_pane && (pane.alive || pane.sessionId)) {
@@ -676,29 +590,13 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     }
     if (!mountedRef.current) return;
     nextSeqRef.current[paneId] = 0;
-    setPanes((prev) => ({
-      ...prev,
-      [paneId]: {
-        ...prev[paneId],
-        alive: false,
-        paused: false,
-        pid: null,
-        rssMb: 0,
-        nodeUuid: '',
-        sessionId: '',
-        exitCode: null,
-        error: null,
-        degradedInfo: null
-      }
-    }));
-  };
+    forgetPaneSession(paneId);
+    setPanes((prev) => ({ ...prev, [paneId]: createInitialPaneState(paneId) }));
+  }, [api]);
 
-  const handleResizePane = async (paneId, cols, rows) => {
-    setPanes((prev) => ({
-      ...prev,
-      [paneId]: { ...prev[paneId], cols, rows }
-    }));
-    const pane = panes[paneId];
+  const handleResizePane = useCallback(async (paneId, cols, rows) => {
+    setPanes((prev) => ({ ...prev, [paneId]: { ...prev[paneId], cols, rows } }));
+    const pane = panesRef.current[paneId];
     if (pane?.alive && api?.pty_resize_pane) {
       try {
         await api.pty_resize_pane(paneId, cols, rows);
@@ -706,329 +604,149 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
         // Ignorar fallo transitorio de redimensionado
       }
     }
-  };
+  }, [api]);
 
-  const sendPaneInput = async (paneId, payload) => {
+  const sendPaneInput = useCallback(async (paneId, payload) => {
     if (!api?.pty_write_input || !payload) return;
     try {
       const res = await api.pty_write_input(paneId, payload, true);
       if (mountedRef.current && res && res.success === false && (res.message || res.error)) {
-        setPanes((prev) => ({
-          ...prev,
-          [paneId]: { ...prev[paneId], error: res.message || res.error }
-        }));
+        showNotice({ ...res, code: res.code || 'PTY_WRITE_FAILED' });
       }
     } catch (err) {
-      if (mountedRef.current) {
-        setPanes((prev) => ({
+      if (mountedRef.current) showNotice({ code: 'PTY_WRITE_FAILED', message: err?.message || String(err) });
+    }
+  }, [api, showNotice]);
+
+  const handleSetMaxPanes = useCallback(async (value) => {
+    if (!api?.pty_set_max_panes) return;
+    try {
+      const res = await api.pty_set_max_panes(value);
+      if (!mountedRef.current) return;
+      if (res?.success) {
+        setCatalog((prev) => ({
           ...prev,
-          [paneId]: { ...prev[paneId], error: err?.message || String(err) }
+          maxPanes: Number.isInteger(res.max_panes) ? res.max_panes : value,
+          hardMaxPanes: Number.isInteger(res.hard_max_panes) ? res.hard_max_panes : prev.hardMaxPanes
         }));
+      } else {
+        showNotice(res || { code: 'INVALID_ARGUMENT', message: 'No se pudo cambiar el máximo de paneles.' });
       }
+    } catch (err) {
+      if (mountedRef.current) showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
     }
-  };
+  }, [api, showNotice]);
 
-  const handleSubmitCommand = async (paneId, e) => {
-    e.preventDefault();
-    const pane = panes[paneId];
-    if (!pane?.alive) return;
-    const raw = inputs[paneId] ?? '';
-    const payload = raw
-      ? (raw.endsWith('\n') || raw.endsWith('\r') ? raw : `${raw}\n`)
-      : '\n';
-    setInputs((prev) => ({ ...prev, [paneId]: '' }));
-    await sendPaneInput(paneId, payload);
-  };
+  // ---- Derivados para pintar ----------------------------------------------------------
 
-  const handleTerminalKeyDown = (paneId, e) => {
-    const pane = panes[paneId];
-    if (!pane?.alive) return;
+  const paneLabels = useMemo(() => {
+    const labels = {};
+    MATRIX_PANE_IDS.forEach((id) => {
+      labels[id] = `Terminal ${paneNumber(id)}`;
+    });
+    return labels;
+  }, []);
 
-    if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'c') {
-      const sel = typeof window !== 'undefined' ? window.getSelection?.()?.toString() : '';
-      if (!sel) {
-        e.preventDefault();
-        void sendPaneInput(paneId, '\x03');
-      }
-      return;
-    }
-
-    let payload = null;
-    if (e.key === 'Enter') payload = '\r';
-    else if (e.key === 'Backspace') payload = '\x7f';
-    else if (e.key === 'Tab') payload = '\t';
-    else if (e.key === 'Escape') payload = '\x1b';
-    else if (e.key === 'ArrowUp') payload = '\x1b[A';
-    else if (e.key === 'ArrowDown') payload = '\x1b[B';
-    else if (e.key === 'ArrowRight') payload = '\x1b[C';
-    else if (e.key === 'ArrowLeft') payload = '\x1b[D';
-    else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      payload = e.key;
-    }
-
-    if (payload !== null) {
-      e.preventDefault();
-      void sendPaneInput(paneId, payload);
-    }
-  };
-
-  const handleFocusPane = (paneId) => {
-    setFocusedPaneId(paneId);
-    const inputEl = inputRefs.current[paneId];
-    const termEl = terminalRefs.current[paneId];
-    if (inputEl && !inputEl.disabled) {
-      inputEl.focus();
-    } else if (termEl) {
-      termEl.focus();
-    }
-  };
-
-  const currentLayout = LAYOUT_OPTIONS.find((opt) => opt.id === layout) || LAYOUT_OPTIONS[2];
-  const visiblePaneIds = MATRIX_PANE_IDS.slice(0, currentLayout.count);
   const normalizedSearch = (searchQuery || '').trim().toLowerCase();
-  const filteredPaneIds = normalizedSearch
-    ? visiblePaneIds.filter((paneId) => {
+  const visibleOpenIds = normalizedSearch
+    ? openPaneIds.filter((paneId) => {
         const p = panes[paneId];
         const haystack = [
           p.paneId,
-          p.label,
+          paneLabels[paneId],
           p.cliProfile,
+          catalogById[p.cliProfile]?.display_name,
           p.role,
+          p.cwd,
           p.nodeUuid,
-          p.output,
-          p.degradedInfo?.code
+          p.output
         ]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
         return haystack.includes(normalizedSearch);
       })
-    : visiblePaneIds;
+    : openPaneIds;
 
-  const isBannerVisible = matrixStatus.degraded || showManualInstructions;
+  const layout = computeGridLayout(visibleOpenIds.length);
+  const emptySlots = Math.max(0, layout.cells - visibleOpenIds.length);
+  const noOpenTerminals = openPaneIds.length === 0;
+  const searchHidesAll = normalizedSearch && openPaneIds.length > 0 && visibleOpenIds.length === 0;
+
+  const statusNotice = useMemo(() => {
+    const extra = { manual_command: matrixStatus.manualCommand, mcp_config: matrixStatus.mcpConfig };
+    if (matrixStatus.platformUnsupported || catalog.platformSupported === false) {
+      return describeTerminalError({ code: 'TERMINAL_PLATFORM_UNSUPPORTED', ...extra });
+    }
+    if (matrixStatus.degraded) {
+      return describeTerminalError({ code: 'TERMINAL_ADAPTER_DEGRADED', ...extra });
+    }
+    return null;
+  }, [matrixStatus, catalog.platformSupported]);
+
+  const activePanes = openPaneIds.map((id) => panes[id]);
 
   return (
     <div
       data-testid="swarm-terminal-matrix"
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
         width: '100%',
-        gap: '12px',
         minHeight: 0,
         overflow: 'hidden'
       }}
     >
-      {/* Slot del slider lateral derecho (pestana en el borde). Registrado y vacio a
-          proposito: los controles de terminales se montan aqui como hijos de
-          <ViewSliderContent> (seccion 4 del plan). */}
+      {/* Todo el control vive en el slider lateral derecho (seccion 4 del plan). */}
       <ViewSliderContent
         title="Terminales"
         subtitle="Controles del enjambre"
         data-testid="terminals-slider"
-      />
-
-      {/* Barra superior de la matriz */}
-      <div
-        data-testid="matrix-header-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '10px',
-          padding: '10px 14px',
-          backgroundColor: 'var(--bg-card)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-sm)',
-          flexShrink: 0
-        }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
-            <Terminal size={15} color="var(--accent-primary)" />
-            <span>Swarm Terminal Matrix</span>
-          </div>
-
-          {/* Selector de layout 1x1 / 2x1 / 2x2 */}
-          <div
-            role="group"
-            aria-label="Layout de matriz"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '3px',
-              padding: '2px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'var(--bg-subtle)',
-              border: '1px solid var(--border-subtle)'
-            }}
-          >
-            {LAYOUT_OPTIONS.map((opt) => {
-              const active = layout === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  data-testid={`layout-btn-${opt.id}`}
-                  aria-pressed={active}
-                  onClick={() => setLayout(opt.id)}
-                  style={{
-                    padding: '4px 9px',
-                    fontSize: '11.5px',
-                    fontWeight: 700,
-                    fontFamily: 'var(--font-mono)',
-                    borderRadius: 'var(--radius-sm)',
-                    border: 'none',
-                    backgroundColor: active ? 'var(--accent-primary)' : 'transparent',
-                    color: active ? '#ffffff' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    transition: 'var(--transition)'
-                  }}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Indicador de estado EmbeddedMcpHub */}
-          <div
-            data-testid="hub-status-badge"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '4px 10px',
-              borderRadius: 'var(--radius-full)',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              fontFamily: 'var(--font-mono)',
-              backgroundColor: matrixStatus.degraded
-                ? 'rgba(245, 158, 11, 0.14)'
-                : matrixStatus.hubRunning
-                  ? 'rgba(var(--accent-primary-rgb), 0.14)'
-                  : 'var(--bg-subtle)',
-              color: matrixStatus.degraded
-                ? 'var(--accent-warning)'
-                : matrixStatus.hubRunning
-                  ? 'var(--accent-success)'
-                  : 'var(--text-secondary)',
-              border: `1px solid ${
-                matrixStatus.degraded
-                  ? 'rgba(245, 158, 11, 0.35)'
-                  : matrixStatus.hubRunning
-                    ? 'rgba(var(--accent-primary-rgb), 0.35)'
-                    : 'var(--border-subtle)'
-              }`
-            }}
-          >
-            <span
-              style={{
-                width: '7px',
-                height: '7px',
-                borderRadius: '50%',
-                backgroundColor: matrixStatus.degraded
-                  ? 'var(--accent-warning)'
-                  : matrixStatus.hubRunning
-                    ? 'var(--accent-success)'
-                    : 'var(--text-muted)'
-              }}
-            />
-            <span>
-              {matrixStatus.degraded
-                ? 'Degradado'
-                : matrixStatus.hubRunning && matrixStatus.hubUrl
-                  ? `Hub Activo: ${matrixStatus.hubUrl}`
-                  : 'Hub en espera'}
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            data-testid="toggle-manual-instructions-btn"
-            aria-pressed={isBannerVisible}
-            onClick={() => setShowManualInstructions((prev) => !prev)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '5px 10px',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: isBannerVisible ? 'rgba(245, 158, 11, 0.12)' : 'var(--bg-subtle)',
-              color: isBannerVisible ? 'var(--accent-warning)' : 'var(--text-secondary)',
-              cursor: 'pointer'
-            }}
-          >
-            <AlertTriangle size={13} />
-            <span>RF-STM-12 Manual</span>
-          </button>
-
-          <button
-            type="button"
-            data-testid="matrix-refresh-btn"
-            onClick={refreshMatrixStatus}
-            disabled={matrixStatus.loading}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '5px',
-              padding: '5px 11px',
-              fontSize: '11.5px',
-              fontWeight: 600,
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              backgroundColor: 'var(--bg-surface)',
-              color: 'var(--text-primary)',
-              cursor: matrixStatus.loading ? 'wait' : 'pointer'
-            }}
-          >
-            <RefreshCw size={13} />
-            <span>Actualizar Estado</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Banner global de alerta RF-STM-12 */}
-      {isBannerVisible && (
-        <DegradedManualCard
-          testId="matrix-degraded-banner"
-          title="Modo Degradado / Conexión Manual CLI (RF-STM-12)"
-          message={
-            matrixStatus.degraded
-              ? 'El backend PTY nativo no está disponible o se encuentra en circuito abierto. Conecta un cliente CLI externo manualmente al servidor MCP:'
-              : 'Instrucciones de conexión manual CLI para agentes externos (RF-STM-12):'
-          }
-          code={matrixStatus.degraded ? 'TERMINAL_ADAPTER_DEGRADED' : 'MANUAL_CLI'}
-          manualCommand={matrixStatus.manualCommand || DEFAULT_MANUAL_COMMAND}
-          mcpConfig={matrixStatus.mcpConfig || DEFAULT_MCP_CONFIG}
+        <TerminalSliderControls
+          status={matrixStatus}
+          statusNotice={statusNotice}
+          catalog={catalog}
+          maxPanes={maxPanes}
+          hardMaxPanes={catalog.hardMaxPanes}
+          activePanes={activePanes}
+          focusedPaneId={focusedPaneId}
+          paneLabels={paneLabels}
+          catalogById={catalogById}
+          notice={notice}
+          onDismissNotice={() => setNotice(null)}
+          cwdValue={cwdInput}
+          onCwdChange={setCwdInput}
+          roleValue={roleInput}
+          onRoleChange={setRoleInput}
+          launchingCliId={launchingCliId}
           copiedKey={copiedKey}
           onCopy={handleCopy}
+          onRefresh={refreshAll}
+          onLaunch={handleLaunchCli}
+          onFocusPane={handleFocusFromSlider}
+          onPausePane={handlePausePane}
+          onClosePane={handleClosePane}
+          onResizePane={handleResizePane}
+          onSetMaxPanes={handleSetMaxPanes}
         />
-      )}
+      </ViewSliderContent>
 
-      {/* Grid de panes */}
       <div
         data-testid="matrix-grid"
+        data-layout={layout.id}
         style={{
           flex: 1,
           minHeight: 0,
           display: 'grid',
-          gridTemplateColumns: currentLayout.columns,
-          gridAutoRows: currentLayout.count <= 2 ? 'minmax(0, 1fr)' : 'minmax(240px, 1fr)',
-          gap: '12px',
-          overflowY: 'auto',
-          paddingRight: '2px'
+          gridTemplateColumns: layout.columns,
+          gridTemplateRows: layout.rowTemplate,
+          gap: '10px'
         }}
       >
-        {filteredPaneIds.length === 0 ? (
+        {searchHidesAll ? (
           <div
             style={{
               gridColumn: '1 / -1',
@@ -1042,577 +760,87 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
               fontSize: '12.5px'
             }}
           >
-            Ningún panel coincide con «{searchQuery}».
+            Ninguna terminal coincide con «{searchQuery}».
           </div>
         ) : (
-          filteredPaneIds.map((paneId) => {
-            const pane = panes[paneId];
-            const statusMeta = getPaneStatusMeta(pane);
-            const isFocused = focusedPaneId === paneId;
-            const currentSizeValue = `${pane.cols}x${pane.rows}`;
-            const hasKnownPreset = SIZE_PRESETS.some((p) => p.label === currentSizeValue);
-
-            return (
-              <section
+          <>
+            {visibleOpenIds.map((paneId) => (
+              <TerminalPane
                 key={paneId}
-                data-testid={`terminal-pane-${paneId}`}
-                aria-label={pane.label}
-                onClick={() => setFocusedPaneId(paneId)}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  minHeight: 0,
-                  backgroundColor: 'var(--bg-card)',
-                  border: `1px solid ${isFocused ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
-                  borderRadius: 'var(--radius-lg)',
-                  boxShadow: 'var(--shadow-sm)',
-                  overflow: 'hidden'
-                }}
-              >
-                {/* Cabecera del pane */}
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '7px',
-                    padding: '9px 11px',
-                    backgroundColor: 'var(--bg-surface)',
-                    borderBottom: '1px solid var(--border-subtle)',
-                    flexShrink: 0
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {pane.label}
-                      </span>
-                      <span
-                        data-testid={`pane-status-${paneId}`}
-                        style={{
-                          padding: '1px 8px',
-                          borderRadius: 'var(--radius-full)',
-                          fontSize: '10.5px',
-                          fontWeight: 700,
-                          backgroundColor: statusMeta.bg,
-                          color: statusMeta.color,
-                          border: `1px solid ${statusMeta.border}`
-                        }}
-                      >
-                        {statusMeta.label}
-                      </span>
-                      {pane.pid && (
-                        <span
-                          data-testid={`pane-pid-${paneId}`}
-                          style={{
-                            padding: '1px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            backgroundColor: 'var(--bg-subtle)',
-                            color: 'var(--text-secondary)',
-                            border: '1px solid var(--border-subtle)'
-                          }}
-                        >
-                          PID {pane.pid}
-                        </span>
-                      )}
-                      {(pane.alive || pane.rssMb > 0) && (
-                        <span
-                          data-testid={`pane-rss-${paneId}`}
-                          style={{
-                            padding: '1px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            backgroundColor: 'var(--bg-subtle)',
-                            color: 'var(--text-secondary)',
-                            border: '1px solid var(--border-subtle)'
-                          }}
-                        >
-                          {Number(pane.rssMb || 0).toFixed(1)} MB
-                        </span>
-                      )}
-                      {pane.nodeUuid && (
-                        <span
-                          data-testid={`pane-node-${paneId}`}
-                          title={pane.nodeUuid}
-                          style={{
-                            padding: '1px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '10px',
-                            backgroundColor: 'rgba(var(--accent-indigo-rgb), 0.14)',
-                            color: 'var(--accent-indigo)',
-                            border: '1px solid rgba(var(--accent-indigo-rgb), 0.28)'
-                          }}
-                        >
-                          {pane.nodeUuid.slice(0, 12)}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Botones de acción del pane */}
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                      {!pane.alive ? (
-                        <button
-                          type="button"
-                          data-testid={`pane-start-btn-${paneId}`}
-                          disabled={pane.busy}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handleSpawnPane(paneId);
-                          }}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '4px 9px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            borderRadius: 'var(--radius-sm)',
-                            border: 'none',
-                            backgroundColor: 'var(--accent-primary)',
-                            color: '#ffffff',
-                            cursor: pane.busy ? 'wait' : 'pointer'
-                          }}
-                        >
-                          <Play size={11} />
-                          <span>{pane.busy ? 'Iniciando...' : 'Iniciar'}</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          data-testid={`pane-pause-btn-${paneId}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void handlePausePane(paneId);
-                          }}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '4px 9px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border-subtle)',
-                            backgroundColor: 'var(--bg-subtle)',
-                            color: 'var(--text-primary)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {pane.paused ? <Play size={11} /> : <Pause size={11} />}
-                          <span>{pane.paused ? 'Reanudar' : 'Pausar'}</span>
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        data-testid={`pane-close-btn-${paneId}`}
-                        disabled={!pane.alive && !pane.degradedInfo && !pane.output && pane.exitCode === null}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleClosePane(paneId);
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          padding: '4px 8px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border-subtle)',
-                          backgroundColor: 'var(--bg-subtle)',
-                          color: pane.alive ? 'var(--accent-danger)' : 'var(--text-secondary)',
-                          cursor: !pane.alive && !pane.degradedInfo && !pane.output && pane.exitCode === null ? 'not-allowed' : 'pointer',
-                          opacity: !pane.alive && !pane.degradedInfo && !pane.output && pane.exitCode === null ? 0.5 : 1
-                        }}
-                      >
-                        <Square size={10} />
-                        <span>Cerrar</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        data-testid={`pane-focus-btn-${paneId}`}
-                        title="Enfocar terminal"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleFocusPane(paneId);
-                        }}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '3px',
-                          padding: '4px 7px',
-                          fontSize: '11px',
-                          fontWeight: 600,
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border-subtle)',
-                          backgroundColor: isFocused ? 'rgba(var(--accent-primary-rgb), 0.12)' : 'transparent',
-                          color: isFocused ? 'var(--accent-primary)' : 'var(--text-muted)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        <Focus size={11} />
-                        <span>Foco</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Selectores de perfil CLI, rol y tamaño rápido */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                    <select
-                      aria-label={`Perfil CLI ${pane.label}`}
-                      data-testid={`cli-profile-${paneId}`}
-                      className="mcp-combobox"
-                      disabled={pane.alive}
-                      value={pane.cliProfile}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPanes((prev) => ({
-                          ...prev,
-                          [paneId]: { ...prev[paneId], cliProfile: val }
-                        }));
-                      }}
-                      style={{ height: '25px', fontSize: '11px', flex: '1 1 130px' }}
-                    >
-                      {CLI_PROFILE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-
-                    <select
-                      aria-label={`Rol ${pane.label}`}
-                      data-testid={`role-select-${paneId}`}
-                      className="mcp-combobox"
-                      disabled={pane.alive}
-                      value={pane.role}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setPanes((prev) => ({
-                          ...prev,
-                          [paneId]: { ...prev[paneId], role: val }
-                        }));
-                      }}
-                      style={{ height: '25px', fontSize: '11px', flex: '1 1 110px' }}
-                    >
-                      {ROLE_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                      ))}
-                    </select>
-
-                    <select
-                      aria-label={`Tamaño PTY ${pane.label}`}
-                      data-testid={`size-select-${paneId}`}
-                      className="mcp-combobox"
-                      value={currentSizeValue}
-                      onChange={(e) => {
-                        const [c, r] = e.target.value.split('x').map((n) => parseInt(n, 10));
-                        if (c > 0 && r > 0) {
-                          void handleResizePane(paneId, c, r);
-                        }
-                      }}
-                      style={{ height: '25px', fontSize: '11px', maxWidth: '92px' }}
-                    >
-                      {!hasKnownPreset && <option value={currentSizeValue}>{currentSizeValue}</option>}
-                      {SIZE_PRESETS.map((preset) => (
-                        <option key={preset.label} value={preset.label}>{preset.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Cuerpo del pane: tarjeta degradada RF-STM-12 o consola PTY */}
-                <div
-                  style={{
-                    flex: 1,
-                    minHeight: 0,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    padding: '8px 10px',
-                    gap: '8px',
-                    overflow: 'hidden'
-                  }}
-                >
-                  {pane.error && (
-                    <div
-                      role="alert"
-                      style={{
-                        padding: '6px 9px',
-                        borderRadius: 'var(--radius-sm)',
-                        backgroundColor: 'rgba(239, 68, 68, 0.12)',
-                        border: '1px solid rgba(239, 68, 68, 0.35)',
-                        color: 'var(--accent-danger)',
-                        fontSize: '11.5px'
-                      }}
-                    >
-                      {pane.error}
-                    </div>
-                  )}
-
-                  {pane.degradedInfo && (
-                    <div style={{ overflowY: 'auto' }}>
-                      <DegradedManualCard
-                        testId={`pane-degraded-card-${paneId}`}
-                        title={`RF-STM-12 · ${pane.label} en Modo Degradado`}
-                        message={pane.degradedInfo.message}
-                        code={pane.degradedInfo.code}
-                        manualCommand={pane.degradedInfo.manualCommand}
-                        mcpConfig={pane.degradedInfo.mcpConfig}
-                        copiedKey={copiedKey}
-                        onCopy={handleCopy}
-                      />
-                    </div>
-                  )}
-
-                  <pre
-                    ref={(el) => { terminalRefs.current[paneId] = el; }}
-                    data-testid={`pane-output-${paneId}`}
-                    tabIndex={0}
-                    onKeyDown={(e) => handleTerminalKeyDown(paneId, e)}
-                    style={{
-                      flex: 1,
-                      minHeight: '110px',
-                      margin: 0,
-                      padding: '8px 10px',
-                      borderRadius: 'var(--radius-md)',
-                      backgroundColor: 'var(--bg-app)',
-                      border: '1px solid var(--border-subtle)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '11.5px',
-                      lineHeight: 1.45,
-                      color: 'var(--text-primary)',
-                      overflowY: 'auto',
-                      overflowX: 'auto',
-                      whiteSpace: 'pre-wrap',
-                      wordBreak: 'break-word',
-                      outline: 'none',
-                      userSelect: 'text'
-                    }}
-                  >
-                    {pane.output
-                      ? renderOutputWithSafeLinks(pane.output, setPendingExternalUrl)
-                      : (
-                        <span style={{ color: 'var(--text-muted)' }}>
-                          {pane.alive
-                            ? 'Sesión PTY activa. Esperando salida...'
-                            : 'Panel libre. Selecciona perfil CLI/rol y pulsa Iniciar.'}
-                        </span>
-                      )}
-                  </pre>
-
-                  {/* Barra de entrada rápida */}
-                  <form
-                    onSubmit={(e) => void handleSubmitCommand(paneId, e)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      flexShrink: 0
-                    }}
-                  >
-                    <input
-                      ref={(el) => { inputRefs.current[paneId] = el; }}
-                      type="text"
-                      data-testid={`pane-input-${paneId}`}
-                      aria-label={`Entrada de comandos ${pane.label}`}
-                      disabled={!pane.alive}
-                      value={inputs[paneId] || ''}
-                      onChange={(e) => setInputs((prev) => ({ ...prev, [paneId]: e.target.value }))}
-                      placeholder={pane.alive ? 'Escribe comando o prompt y pulsa Enter...' : 'Inicia el panel para enviar entrada'}
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        height: '28px',
-                        padding: '0 9px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-subtle)',
-                        backgroundColor: 'var(--bg-surface)',
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '11.5px',
-                        outline: 'none'
-                      }}
-                    />
-
-                    <button
-                      type="submit"
-                      data-testid={`pane-send-${paneId}`}
-                      disabled={!pane.alive}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        height: '28px',
-                        padding: '0 10px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: 'none',
-                        backgroundColor: pane.alive ? 'var(--accent-primary)' : 'var(--bg-subtle)',
-                        color: pane.alive ? '#ffffff' : 'var(--text-muted)',
-                        fontSize: '11px',
-                        fontWeight: 700,
-                        cursor: pane.alive ? 'pointer' : 'not-allowed'
-                      }}
-                    >
-                      <Send size={11} />
-                      <span>Enviar</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      data-testid={`pane-ctrlc-${paneId}`}
-                      disabled={!pane.alive}
-                      title="Enviar interrupción Ctrl+C (\x03)"
-                      onClick={() => void sendPaneInput(paneId, '\x03')}
-                      style={{
-                        height: '28px',
-                        padding: '0 8px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-subtle)',
-                        backgroundColor: 'var(--bg-subtle)',
-                        color: pane.alive ? 'var(--accent-danger)' : 'var(--text-muted)',
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '10.5px',
-                        fontWeight: 700,
-                        cursor: pane.alive ? 'pointer' : 'not-allowed'
-                      }}
-                    >
-                      Ctrl+C
-                    </button>
-                  </form>
-                </div>
-              </section>
-            );
-          })
+                pane={panes[paneId]}
+                label={paneLabels[paneId]}
+                cli={catalogById[panes[paneId].cliProfile]}
+                isFocused={focusedPaneId === paneId}
+                focusToken={focusRequest.paneId === paneId ? focusRequest.nonce : 0}
+                onFocus={handleClickPane}
+                onInput={sendPaneInput}
+                onRequestOpenUrl={setPendingExternalUrl}
+                registerTerminalRef={registerTerminalRef}
+              />
+            ))}
+            {Array.from({ length: emptySlots }, (_, i) => (
+              <EmptyTerminalSlot key={`empty-${i}`} index={i} showHint={noOpenTerminals && i === 0} />
+            ))}
+          </>
         )}
       </div>
 
-      {/* Modal inline de confirmación explícita para URLs detectadas en salida TTY */}
-      {pendingExternalUrl && (
+      {/* Aviso discreto cuando el slider esta cerrado; el detalle completo vive en el slider. */}
+      {notice && !sliderOpen && (
         <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Confirmar apertura de URL externa"
-          data-testid="external-url-confirm-modal"
+          role="status"
+          data-testid="matrix-notice"
+          data-code={notice.code}
           style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.58)',
+            position: 'absolute',
+            left: '50%',
+            bottom: '12px',
+            transform: 'translateX(-50%)',
+            maxWidth: 'min(560px, 92%)',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            padding: '16px',
-            zIndex: 120
+            gap: '10px',
+            padding: '6px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--bg-surface)',
+            boxShadow: 'var(--shadow-md)',
+            fontSize: '11.5px',
+            color: 'var(--text-primary)'
           }}
         >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: '460px',
-              backgroundColor: 'var(--bg-surface)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-lg)',
-              boxShadow: 'var(--shadow-lg)',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px'
-            }}
+          <span>{notice.title}</span>
+          <button
+            type="button"
+            data-testid="matrix-notice-open"
+            onClick={() => openSlider()}
+            style={{ border: 'none', background: 'transparent', color: 'var(--accent-primary)', fontWeight: 700, cursor: 'pointer', fontSize: '11.5px', padding: 0 }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '13.5px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                <ExternalLink size={15} color="var(--accent-warning)" />
-                <span>Confirmar enlace externo desde terminal</span>
-              </div>
-              <button
-                type="button"
-                aria-label="Cerrar diálogo"
-                onClick={() => setPendingExternalUrl(null)}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  display: 'inline-flex'
-                }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-
-            <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-              Esta URL apareció en la salida TTY de un panel. Confirma explícitamente el dominio antes de abrirla para evitar aperturas involuntarias o phishing:
-            </p>
-
-            <pre
-              style={{
-                margin: 0,
-                padding: '8px 10px',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: 'var(--bg-app)',
-                border: '1px solid var(--border-subtle)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '11.5px',
-                color: 'var(--accent-primary)',
-                wordBreak: 'break-all',
-                whiteSpace: 'pre-wrap',
-                userSelect: 'text'
-              }}
-            >
-              {pendingExternalUrl}
-            </pre>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-              <button
-                type="button"
-                data-testid="external-url-cancel-btn"
-                onClick={() => setPendingExternalUrl(null)}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  color: 'var(--text-primary)',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                data-testid="external-url-confirm-btn"
-                onClick={() => {
-                  const target = pendingExternalUrl;
-                  setPendingExternalUrl(null);
-                  if (typeof window !== 'undefined' && typeof window.open === 'function') {
-                    window.open(target, '_blank', 'noopener,noreferrer');
-                  }
-                }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  backgroundColor: 'var(--accent-primary)',
-                  color: '#ffffff',
-                  cursor: 'pointer'
-                }}
-              >
-                <ExternalLink size={13} />
-                <span>Abrir enlace</span>
-              </button>
-            </div>
-          </div>
+            Ver detalle
+          </button>
+          <button
+            type="button"
+            aria-label="Descartar aviso"
+            data-testid="matrix-notice-dismiss"
+            onClick={() => setNotice(null)}
+            style={{ border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', display: 'inline-flex', padding: 0 }}
+          >
+            <X size={13} />
+          </button>
         </div>
       )}
+
+      <ExternalUrlConfirmDialog
+        url={pendingExternalUrl}
+        onCancel={() => setPendingExternalUrl(null)}
+        onConfirm={() => {
+          const target = pendingExternalUrl;
+          setPendingExternalUrl(null);
+          if (typeof window !== 'undefined' && typeof window.open === 'function') {
+            window.open(target, '_blank', 'noopener,noreferrer');
+          }
+        }}
+      />
     </div>
   );
 }
