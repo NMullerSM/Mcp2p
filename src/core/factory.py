@@ -57,16 +57,54 @@ class ApplicationFactory:
         return NodeCryptoManager(key_path=key_path)
 
     @staticmethod
-    def _build_default_extension_bundle() -> tuple[Any, Any, Any]:
+    def create_terminal_host(
+        gate: Optional[Any] = None,
+        *,
+        max_panes: int = 4,
+        use_pty_host: bool = True,
+        failure_threshold: int = 3,
+        cooldown_s: float = 30.0,
+    ) -> Any:
+        """
+        Compone el `AgentTerminalPort` (`SafeTerminalHostSupervisor` envolviendo
+        `PosixPtyHostConnector` cuando está disponible y `NullAgentTerminalConnector`
+        como respaldo degradado).
+        """
+        from src.adapters.outbound.extension_gate import NullAgentTerminalConnector
+        from src.adapters.terminal.supervisor import SafeTerminalHostSupervisor
+
+        fallback = NullAgentTerminalConnector(gate=gate)
+        primary: Any = fallback
+        if use_pty_host:
+            try:
+                from src.adapters.terminal.pty_host import PosixPtyHostConnector
+
+                if PosixPtyHostConnector.is_available():
+                    primary = PosixPtyHostConnector(max_panes=max_panes)
+            except Exception as exc:
+                logger.warning(
+                    "No se pudo inicializar PosixPtyHostConnector; usando fallback degradado: %s",
+                    exc,
+                )
+                primary = fallback
+
+        return SafeTerminalHostSupervisor(
+            primary,
+            fallback,
+            failure_threshold=failure_threshold,
+            cooldown_s=cooldown_s,
+        )
+
+    @classmethod
+    def _build_default_extension_bundle(cls) -> tuple[Any, Any, Any]:
         from src.adapters.outbound.extension_gate import (
             ExtensionSecurityGate,
-            NullAgentTerminalConnector,
             OutboundRestConnector,
         )
 
         gate = ExtensionSecurityGate()
         rest = OutboundRestConnector(gate=gate)
-        terminal = NullAgentTerminalConnector(gate=gate)
+        terminal = cls.create_terminal_host(gate=gate)
         return gate, rest, terminal
 
     @staticmethod
