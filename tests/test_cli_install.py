@@ -215,8 +215,11 @@ def test_prepare_and_install_reject_unknown_or_injected_cli_ids(make_bridge: Any
 def test_install_without_or_with_bad_token_never_runs(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node"})
     prep = b.pty_prepare_install("claude")
-    for bad in (None, "", "x", prep["confirmation_token"][:-1] + "A", 123, [prep["confirmation_token"]],
-                prep["confirmation_token"] + "\n"):
+    tok = prep["confirmation_token"]
+    # Mutacion determinista del ultimo caracter: con `tok[:-1] + "A"` el token "malo" era el valido
+    # cuando terminaba en "A" (1/64), el test fallaba y llegaba a lanzar el `npm install -g` real.
+    one_off = tok[:-1] + ("B" if tok[-1] == "A" else "A")
+    for bad in (None, "", "x", one_off, 123, [tok], tok + "\n"):
         res = b.pty_install_cli("claude", bad)
         assert res["success"] is False and res["code"] == "INSTALL_TOKEN_INVALID", bad
     assert b.pty_get_matrix_status()["sessions"] == []
