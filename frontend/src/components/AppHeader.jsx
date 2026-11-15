@@ -157,22 +157,23 @@ export function AppHeader({
               aria-label="Volver al Hub de Proyectos"
               title="Volver al Hub de Proyectos"
               onClick={() => onBackToProjects && onBackToProjects()}
+              className="mcp-back-to-hub-btn"
               style={{
-                width: '30px',
-                height: '30px',
+                width: '28px',
+                height: '28px',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border-subtle)',
-                backgroundColor: 'var(--bg-subtle)',
-                color: 'var(--text-primary)',
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
                 cursor: 'pointer',
                 transition: 'var(--transition)',
                 flexShrink: 0
               }}
             >
-              <ArrowLeft size={15} />
+              <ArrowLeft size={16} />
             </button>
             <span
               data-testid="active-project-name"
