@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { ViewSliderContent } from './ViewSlider';
 import {
   BookOpen,
   Cpu,
@@ -328,8 +329,16 @@ export function OKFGovernanceView({
           })}
         </div>
 
-        {/* Filtro Tag YAML + Recargar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      </div>
+
+      {/* Slider lateral derecho (pestana en el borde): filtro por tag, refresco, salud
+          (freshness/firmas) y carpetas OKF activas. En pantalla queda solo el visor. */}
+      <ViewSliderContent
+        title="Gobernanza OKF: filtros y salud"
+        subtitle="Tags, freshness y carpetas"
+        data-testid="okf-slider"
+      >
+        <section style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           {!hideTopTagFilter && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
               <Tag size={13} color="var(--text-muted)" />
@@ -339,7 +348,7 @@ export function OKFGovernanceView({
                 className="mcp-combobox"
                 value={selectedTag}
                 onChange={(e) => setSelectedTag(e.target.value)}
-                style={{ height: '30px', fontSize: '12px', maxWidth: '185px' }}
+                style={{ height: '30px', fontSize: '12px', maxWidth: '240px' }}
               >
                 <option value="all">Todos los Tags YAML</option>
                 {availableTags.map(t => (
@@ -367,20 +376,18 @@ export function OKFGovernanceView({
           >
             <RefreshCw size={13} />
           </button>
-        </div>
-      </div>
-
+        </section>
       {/* Resumen Sutil y Armónico (sin colores estridentes amarillos/rojos) */}
       {(freshnessSummary || folders.length > 0) && (
         <div
           data-testid="okf-summary-strip"
           style={{
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
+            justifyContent: 'flex-start',
+            flexDirection: 'column',
+            alignItems: 'stretch',
             gap: '10px',
-            padding: '10px 16px',
+            padding: '10px 14px',
             borderRadius: 'var(--radius-lg)',
             backgroundColor: 'var(--bg-card)',
             border: '1px solid var(--border-subtle)',
@@ -432,7 +439,7 @@ export function OKFGovernanceView({
               <span style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '11.5px' }}>
                 Carpetas ({folders.length}):
               </span>
-              {folders.slice(0, 3).map(f => (
+              {folders.map(f => (
                 <span
                   key={f.path}
                   title={f.description || f.category}
@@ -449,15 +456,11 @@ export function OKFGovernanceView({
                   {f.path} ({f.file_count ?? 0})
                 </span>
               ))}
-              {folders.length > 3 && (
-                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
-                  +{folders.length - 3}
-                </span>
-              )}
             </div>
           )}
         </div>
       )}
+      </ViewSliderContent>
 
       {/* Contenido Principal */}
       <div style={{ flex: 1, overflowY: 'auto', paddingRight: '4px', minHeight: 0, scrollbarGutter: 'stable' }}>
