@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X,
   Copy,
@@ -50,6 +50,15 @@ export function SettingsDrawer({
   onNavigateWorkspaceTab
 }) {
   const [activeTab, setActiveTab] = useState(initialTab);
+  const contentBodyRef = useRef(null);
+
+  // Resetear el scroll del contenedor de contenido cada vez que cambia la pestaña activa
+  // (Ajuste UI: evita que una pestaña nueva herede la posición de scroll de la anterior)
+  useEffect(() => {
+    if (contentBodyRef.current) {
+      contentBodyRef.current.scrollTop = 0;
+    }
+  }, [activeTab]);
   const [inviteUrl, setInviteUrl] = useState('');
   const [mcpConfig, setMcpConfig] = useState('');
   const [agentPrompt, setAgentPrompt] = useState('');
@@ -685,11 +694,11 @@ export function SettingsDrawer({
           gap: '2px'
         }}>
           {[
+            { id: 'github', label: 'GitHub Auth', icon: Github },
+            { id: 'p2p', label: 'Enlace P2P', icon: Share2 },
             { id: 'okf_viewer', label: 'Visor OKF', icon: FolderTree },
             { id: 'okf_lab', label: 'Laboratorio OKF & Puertos', icon: FlaskConical },
-            { id: 'p2p', label: 'Enlace P2P', icon: Share2 },
             { id: 'mcp', label: 'Agentes MCP', icon: Terminal },
-            { id: 'github', label: 'GitHub Auth', icon: Github },
             { id: 'manual', label: 'Atajos & Manual', icon: BookOpen }
           ].map(tab => {
             const Icon = tab.icon;
@@ -722,7 +731,7 @@ export function SettingsDrawer({
         </div>
 
         {/* Content Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
+        <div ref={contentBodyRef} style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
 
           {/* TAB 0: Visor OKF en Crudo */}
           {activeTab === 'okf_viewer' && (
