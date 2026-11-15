@@ -657,6 +657,51 @@ class ApiBridge:
     def run_system_diagnostics(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         return self.extensions_ui.run_system_diagnostics(project_uuid=project_uuid)
 
+    # ==========================
+    # Swarm Terminal Matrix (PTY + EmbeddedMcpHub)
+    # ==========================
+
+    def pty_get_matrix_status(self) -> Dict[str, Any]:
+        return self.extensions_ui.pty_get_matrix_status()
+
+    def pty_spawn_pane(
+        self,
+        pane_id: Any,
+        cli_profile: str = "claude",
+        role: str = "implementer",
+        command: Optional[Any] = None,
+        cols: int = 100,
+        rows: int = 28,
+        start_hub: bool = True,
+    ) -> Dict[str, Any]:
+        return self.extensions_ui.pty_spawn_pane(
+            pane_id=pane_id,
+            cli_profile=cli_profile,
+            role=role,
+            command=command,
+            cols=cols,
+            rows=rows,
+            start_hub=start_hub,
+        )
+
+    def pty_write_input(self, pane_id: Any, data: str, is_human: bool = True) -> Dict[str, Any]:
+        return self.extensions_ui.pty_write_input(pane_id=pane_id, data=data, is_human=is_human)
+
+    def pty_resize_pane(self, pane_id: Any, cols: int, rows: int) -> Dict[str, Any]:
+        return self.extensions_ui.pty_resize_pane(pane_id=pane_id, cols=cols, rows=rows)
+
+    def pty_poll_output(self, pane_id: Any, since_seq: int = 0) -> Dict[str, Any]:
+        return self.extensions_ui.pty_poll_output(pane_id=pane_id, since_seq=since_seq)
+
+    def pty_pause_pane(self, pane_id: Any, paused: bool = True) -> Dict[str, Any]:
+        return self.extensions_ui.pty_pause_pane(pane_id=pane_id, paused=paused)
+
+    def pty_close_pane(self, pane_id: Any) -> Dict[str, Any]:
+        return self.extensions_ui.pty_close_pane(pane_id=pane_id)
+
+    def _close_terminal_matrix(self) -> None:
+        self.extensions_ui.close_terminal_matrix()
+
     def as_public_js_api(self) -> PublicJsApiFacade:
         """Retorna una fachada JS plana y segura para `webview.create_window(..., js_api=...)` (EGM-58)."""
         return PublicJsApiFacade(self)

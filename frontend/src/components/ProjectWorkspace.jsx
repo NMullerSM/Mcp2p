@@ -5,6 +5,7 @@ import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
 import { BranchConsensusView } from './BranchConsensusView';
 import { HumanApprovalsView } from './HumanApprovalsView';
+import { SwarmTerminalMatrix } from './SwarmTerminalMatrix';
 import { CardDetailModal } from './Modals';
 import { useProjectPulse } from '../hooks/useProjectPulse';
 import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
@@ -36,6 +37,10 @@ const SEARCH_META_BY_TAB = {
   collaborators: {
     placeholder: 'Buscar en Colaboradores (nombre, @usuario, nodo, rol)...',
     ariaLabel: 'Buscar en Colaboradores'
+  },
+  terminals: {
+    placeholder: 'Buscar en Swarm Matrix (panel, perfil CLI, rol, salida)...',
+    ariaLabel: 'Buscar en Swarm Matrix'
   }
 };
 
@@ -349,6 +354,9 @@ export function ProjectWorkspace({
           externalSearchQuery={searchQuery}
         />
       );
+    }
+    if (normalizedTab === 'terminals') {
+      return <SwarmTerminalMatrix api={api} project={project} searchQuery={searchQuery} />;
     }
     return <CollaboratorsView project={project} api={api} searchQuery={searchQuery} />;
   };

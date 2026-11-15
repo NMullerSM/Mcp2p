@@ -6,6 +6,7 @@ Multi-Seed P2P, Puerta con Llave (ExtensionSecurityGate) y Diagnóstico del Sist
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,18 +16,41 @@ from src.adapters.outbound.extension_gate import (
     OutboundRestConnector,
     SignedConnectorManifest,
 )
+from src.adapters.terminal.pty_host import DEFAULT_MANUAL_COMMAND, normalize_pane_id
 from src.app.ui_adapters import _BaseUIAdapter
+from src.core.kernel import CoreKernel
+from src.mcp.pane_registry import EmbeddedMcpHub, PaneRegistry
 from src.p2p.mesh_adapter import MultiPeerMeshConnector
 
 logger = logging.getLogger("mcp2p.api_bridge.extensions_lab")
 
 
+def _default_mcp_config(hub_url: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "mcpServers": {
+            "mcp2p": {
+                "url": hub_url or "http://127.0.0.1:8765/mcp",
+            }
+        }
+    }
+
+
+def _strip_secret_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = dict(payload)
+    cleaned.pop("session_token", None)
+    return cleaned
+
+
 class ExtensionsLabUIAdapter(_BaseUIAdapter):
-    """Expone las 16 capacidades nuevas del Laboratorio OKF, P2P Seeds y Puerta con Llave."""
+    """Expone las capacidades del Laboratorio OKF, P2P Seeds, Puerta con Llave y Swarm Terminal Matrix."""
 
     def __init__(self, bridge: Any) -> None:
         super().__init__(bridge)
         self._rest_connectors: Dict[str, OutboundRestConnector] = {}
+        self._terminal_lock = threading.RLock()
+        self._pane_registry: Optional[PaneRegistry] = None
+        self._embedded_hub: Optional[EmbeddedMcpHub] = None
+        self._null_terminal_connector: Optional[NullAgentTerminalConnector] = None
 
     def _get_gate(self) -> ExtensionSecurityGate:
         gate = self.extension_gate
@@ -488,3 +512,389 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             "checks": checks,
             "summary": {"passed": passed, "failed": failed},
         }
+
+    # ==========================
+    # Swarm Terminal Matrix (PTY + EmbeddedMcpHub + PaneRegistry)
+    # ==========================
+
+    def _get_terminal_connector(self) -> Any:
+        kernel = self.core_kernel
+        if kernel is not None:
+            conn = getattr(kernel, "terminal_connector", None)
+            if conn is None and callable(getattr(kernel, "get_connector", None)):
+                conn = kernel.get_connector(CoreKernel.PORT_AGENT_TERMINAL)
+            if conn is not None:
+                return conn
+        with self._terminal_lock:
+            if self._null_terminal_connector is None:
+                self._null_terminal_connector = NullAgentTerminalConnector(self._get_gate())
+            return self._null_terminal_connector
+
+    def _get_pane_registry(self) -> PaneRegistry:
+        with self._terminal_lock:
+            if self._pane_registry is None:
+                kernel = self.core_kernel
+                collab_repo = getattr(kernel, "collab_repo", None) if kernel is not None else None
+                self._pane_registry = PaneRegistry(collab_repo=collab_repo)
+            return self._pane_registry
+
+    def _get_embedded_hub(self) -> Optional[EmbeddedMcpHub]:
+        with self._terminal_lock:
+            kernel = self.core_kernel
+            registry = self._get_pane_registry()
+            if self._embedded_hub is None and kernel is not None:
+                self._embedded_hub = EmbeddedMcpHub(
+                    kernel=kernel,
+                    pane_registry=registry,
+                )
+            return self._embedded_hub
+
+    def _ensure_hub_started(self) -> Optional[str]:
+        """Arranca `EmbeddedMcpHub` de forma segura e idempotente; retorna None si falla."""
+        try:
+            hub = self._get_embedded_hub()
+            if hub is None:
+                return None
+            if hub.is_running() and hub.url:
+                return hub.url
+            return hub.start(timeout_s=5.0)
+        except Exception as exc:
+            logger.warning("No se pudo iniciar EmbeddedMcpHub (modo tolerante): %s", exc)
+            return None
+
+    def _resolve_active_code_repo(self) -> Optional[str]:
+        try:
+            target_uuid = self._resolve_project_uuid()
+            if not target_uuid:
+                return None
+            proj = self.db.get_project_by_uuid(target_uuid)
+            if not proj:
+                return None
+            code_repo = proj.get("code_repo_path")
+            if code_repo and Path(str(code_repo)).is_dir():
+                return str(code_repo)
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _extract_degraded_instructions(terminal: Any, hub_url: Optional[str] = None) -> Dict[str, Any]:
+        for obj in (terminal, getattr(terminal, "fallback", None)):
+            if obj is not None and callable(getattr(obj, "_degraded_response", None)):
+                try:
+                    raw = dict(obj._degraded_response())
+                    if raw.get("manual_command") and isinstance(raw.get("mcp_config"), dict):
+                        return {
+                            "manual_command": raw["manual_command"],
+                            "mcp_config": raw["mcp_config"],
+                        }
+                except Exception:
+                    pass
+        return {
+            "manual_command": DEFAULT_MANUAL_COMMAND,
+            "mcp_config": _default_mcp_config(hub_url=hub_url),
+        }
+
+    def pty_get_matrix_status(self) -> Dict[str, Any]:
+        try:
+            terminal = self._get_terminal_connector()
+            registry = self._get_pane_registry()
+
+            try:
+                connector_status = dict(terminal.get_status())
+            except Exception as exc:
+                connector_status = {
+                    "available": False,
+                    "degraded": True,
+                    "mode": "error",
+                    "error": str(exc),
+                }
+
+            avail_fn = getattr(terminal, "is_available", None)
+            is_avail = bool(avail_fn()) if callable(avail_fn) else bool(connector_status.get("available", False))
+            degraded = (
+                bool(connector_status.get("degraded", False))
+                or (not is_avail)
+                or (not bool(connector_status.get("available", is_avail)))
+            )
+
+            sessions: List[Dict[str, Any]] = []
+            list_fn = getattr(terminal, "list_sessions", None)
+            if callable(list_fn):
+                try:
+                    sessions = [_strip_secret_fields(dict(s)) for s in list_fn()]
+                except Exception:
+                    sessions = []
+            elif isinstance(connector_status.get("sessions"), list):
+                sessions = [_strip_secret_fields(dict(s)) for s in connector_status["sessions"]]
+
+            hub = self._embedded_hub
+            hub_running = bool(hub.is_running()) if hub is not None else False
+            hub_url = hub.url if (hub is not None and hub_running) else None
+
+            manual_command: Optional[str] = None
+            mcp_config: Optional[Dict[str, Any]] = None
+            if degraded:
+                instructions = self._extract_degraded_instructions(terminal, hub_url=hub_url)
+                manual_command = instructions["manual_command"]
+                mcp_config = instructions["mcp_config"]
+
+            return {
+                "success": True,
+                "degraded": degraded,
+                "connector_status": connector_status,
+                "hub_url": hub_url,
+                "hub_running": hub_running,
+                "panes": registry.list_panes(),
+                "sessions": sessions,
+                "manual_command": manual_command,
+                "mcp_config": mcp_config,
+            }
+        except Exception as exc:
+            instructions = self._extract_degraded_instructions(None)
+            return {
+                "success": False,
+                "degraded": True,
+                "error": str(exc),
+                "connector_status": {"available": False, "degraded": True, "mode": "error"},
+                "hub_url": None,
+                "hub_running": False,
+                "panes": [],
+                "sessions": [],
+                "manual_command": instructions["manual_command"],
+                "mcp_config": instructions["mcp_config"],
+            }
+
+    def pty_spawn_pane(
+        self,
+        pane_id: Any,
+        cli_profile: str = "claude",
+        role: str = "implementer",
+        command: Optional[Any] = None,
+        cols: int = 100,
+        rows: int = 28,
+        start_hub: bool = True,
+    ) -> Dict[str, Any]:
+        registry = self._get_pane_registry()
+        registered_here = False
+        norm_pane_id: Optional[str] = None
+        try:
+            terminal = self._get_terminal_connector()
+            max_panes = int(getattr(terminal, "max_panes", 4) or 4)
+            norm_pane_id, _ = normalize_pane_id(pane_id, max_panes=max_panes)
+
+            # Evitar pisar el token de una sesión ya viva en ese pane_id.
+            list_fn = getattr(terminal, "list_sessions", None)
+            if callable(list_fn):
+                for existing in list_fn():
+                    if existing.get("pane_id") == norm_pane_id and existing.get("alive"):
+                        return {
+                            "success": False,
+                            "degraded": False,
+                            "code": "PANE_ALREADY_ACTIVE",
+                            "pane_id": norm_pane_id,
+                            "session_id": existing.get("session_id"),
+                            "pid": existing.get("pid"),
+                            "message": f"El panel {norm_pane_id} ya tiene una sesión viva.",
+                        }
+
+            registered = registry.register_pane(
+                norm_pane_id,
+                cli_profile=cli_profile,
+                role=role,
+            )
+            registered_here = True
+            token = registered["session_token"]
+            node_uuid = registered["node_uuid"]
+
+            if start_hub:
+                hub_url = self._ensure_hub_started()
+            else:
+                hub = self._embedded_hub
+                hub_url = hub.url if (hub is not None and hub.is_running()) else None
+
+            cwd = self._resolve_active_code_repo()
+
+            spawn_res = dict(
+                terminal.spawn_session(
+                    pane_id=norm_pane_id,
+                    cli_profile=cli_profile,
+                    role=role,
+                    command=command,
+                    cwd=cwd,
+                    cols=cols,
+                    rows=rows,
+                    hub_url=hub_url,
+                    session_token=token,
+                    node_uuid=node_uuid,
+                )
+            )
+
+            if spawn_res.get("degraded") or not spawn_res.get("success"):
+                if spawn_res.get("code") != "PANE_ALREADY_ACTIVE":
+                    registry.mark_pane_closed(norm_pane_id)
+                degraded = bool(spawn_res.get("degraded", False))
+                cleaned = _strip_secret_fields(spawn_res)
+                cleaned["success"] = False
+                cleaned["degraded"] = degraded
+                cleaned["pane_id"] = norm_pane_id
+                cleaned["hub_url"] = hub_url
+                if degraded:
+                    instructions = self._extract_degraded_instructions(terminal, hub_url=hub_url)
+                    cleaned.setdefault("manual_command", instructions["manual_command"])
+                    cleaned.setdefault("mcp_config", instructions["mcp_config"])
+                return cleaned
+
+            pid = spawn_res.get("pid")
+            rec = registry.get_pane(norm_pane_id)
+            if rec is not None:
+                if pid is not None:
+                    with registry._lock:
+                        rec.pid = int(pid)
+                pane_meta = rec.to_dict(include_token=False)
+            else:
+                pane_meta = {
+                    "pane_id": norm_pane_id,
+                    "node_uuid": node_uuid,
+                    "cli_profile": cli_profile,
+                    "role": role,
+                    "pid": pid,
+                    "status": "active",
+                }
+
+            session_meta = _strip_secret_fields(spawn_res)
+            session_meta.setdefault("alive", True)
+            session_meta.setdefault("paused", False)
+            session_meta.setdefault("rss_mb", 0.0)
+
+            return {
+                "success": True,
+                "degraded": False,
+                "pane_id": norm_pane_id,
+                "node_uuid": node_uuid,
+                "pid": pid,
+                "hub_url": hub_url,
+                "pane": pane_meta,
+                "session": session_meta,
+            }
+        except Exception as exc:
+            if registered_here and norm_pane_id is not None:
+                try:
+                    registry.mark_pane_closed(norm_pane_id)
+                except Exception:
+                    pass
+            return {
+                "success": False,
+                "degraded": False,
+                "pane_id": norm_pane_id or str(pane_id),
+                "error": str(exc),
+            }
+
+    def pty_write_input(self, pane_id: Any, data: str, is_human: bool = True) -> Dict[str, Any]:
+        try:
+            registry = self._get_pane_registry()
+            if is_human:
+                registry.record_human_keystroke(pane_id)
+            terminal = self._get_terminal_connector()
+            return _strip_secret_fields(dict(terminal.send_input(pane_id, data)))
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def pty_resize_pane(self, pane_id: Any, cols: int, rows: int) -> Dict[str, Any]:
+        try:
+            terminal = self._get_terminal_connector()
+            return _strip_secret_fields(dict(terminal.resize_session(pane_id, cols, rows)))
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def pty_poll_output(self, pane_id: Any, since_seq: int = 0) -> Dict[str, Any]:
+        try:
+            terminal = self._get_terminal_connector()
+            poll_fn = getattr(terminal, "poll_output", None)
+            if callable(poll_fn):
+                return _strip_secret_fields(dict(poll_fn(pane_id, since_seq=since_seq)))
+            instructions = self._extract_degraded_instructions(terminal)
+            return {
+                "success": False,
+                "degraded": True,
+                "code": "TERMINAL_ADAPTER_DEGRADED",
+                "pane_id": str(pane_id),
+                "alive": False,
+                "exit_code": None,
+                "paused": False,
+                "rss_mb": 0.0,
+                "since_seq": since_seq,
+                "next_seq": since_seq,
+                "truncated": False,
+                "chunks": [],
+                "text": "",
+                "manual_command": instructions["manual_command"],
+                "mcp_config": instructions["mcp_config"],
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "pane_id": str(pane_id),
+                "alive": False,
+                "exit_code": None,
+                "paused": False,
+                "rss_mb": 0.0,
+                "since_seq": since_seq,
+                "next_seq": since_seq,
+                "truncated": False,
+                "chunks": [],
+                "text": "",
+            }
+
+    def pty_pause_pane(self, pane_id: Any, paused: bool = True) -> Dict[str, Any]:
+        try:
+            terminal = self._get_terminal_connector()
+            return _strip_secret_fields(dict(terminal.pause_session(pane_id, paused=bool(paused))))
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def pty_close_pane(self, pane_id: Any) -> Dict[str, Any]:
+        try:
+            terminal = self._get_terminal_connector()
+            res = _strip_secret_fields(dict(terminal.close_session(pane_id)))
+            registry = self._get_pane_registry()
+            try:
+                registry.mark_pane_closed(pane_id)
+            except ValueError:
+                pass
+            return res
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def close_terminal_matrix(self) -> None:
+        """Detiene limpiamente el EmbeddedMcpHub y revoca tokens de paneles activos."""
+        with self._terminal_lock:
+            hub = self._embedded_hub
+            reg = self._pane_registry
+        if reg is not None:
+            try:
+                terminal = self._get_terminal_connector()
+            except Exception:
+                terminal = None
+            for pane in list(reg.list_panes()):
+                p_id = pane.get("pane_id")
+                if not p_id:
+                    continue
+                if terminal is not None:
+                    try:
+                        terminal.close_session(p_id)
+                    except Exception:
+                        pass
+                try:
+                    reg.mark_pane_closed(p_id)
+                except Exception:
+                    pass
+        if hub is not None:
+            try:
+                hub.stop(timeout_s=3.0)
+            except Exception as exc:
+                logger.debug("Error deteniendo EmbeddedMcpHub en close_terminal_matrix: %s", exc)
+
+    def _close_terminal_matrix(self) -> None:
+        self.close_terminal_matrix()

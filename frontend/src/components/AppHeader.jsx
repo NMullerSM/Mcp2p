@@ -15,7 +15,8 @@ import {
   ArrowDown,
   Eye,
   EyeOff,
-  HelpCircle
+  HelpCircle,
+  Terminal
 } from 'lucide-react';
 import BrandMark from './BrandMark';
 
@@ -27,7 +28,8 @@ export const DEFAULT_WORKSPACE_TABS = [
   { id: 'changes', label: 'Control de Cambios', title: 'Control de Cambios & Grafo Git', icon: GitBranch },
   { id: 'approvals', label: 'Aprobaciones HITL', title: 'HITL — Human in the Loop', icon: ShieldCheck },
   { id: 'okf', label: 'Gobernanza OKF', title: 'Gobernanza OKF (ADRs, Freshness y Firmas)', icon: BookOpen },
-  { id: 'collaborators', label: 'Colaboradores P2P', title: 'Colaboradores & Agentes MCP', icon: Users }
+  { id: 'collaborators', label: 'Colaboradores P2P', title: 'Colaboradores & Agentes MCP', icon: Users },
+  { id: 'terminals', label: 'Swarm Matrix', title: 'Swarm Terminal Matrix (PTY + MCP)', icon: Terminal }
 ];
 
 const VALID_TAB_IDS = DEFAULT_WORKSPACE_TABS.map(t => t.id);

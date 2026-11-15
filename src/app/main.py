@@ -299,6 +299,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_kwargs["icon"] = str(icon_cand)
         webview.start(**start_kwargs)
     finally:
+        if hasattr(api, "_close_terminal_matrix"):
+            try:
+                api._close_terminal_matrix()
+            except Exception as exc:
+                logger.warning("Error cerrando matriz de terminales al salir: %s", exc)
         p2p_network.close()
         if core_kernel is not None and hasattr(core_kernel, "close"):
             core_kernel.close()
