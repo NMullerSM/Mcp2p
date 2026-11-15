@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import json
 import logging
-import platform
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -174,79 +172,8 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
         return self.github.set_remote_url(repo_path, url=remote_url, remote=remote_name)
 
     def ensure_orphan_worktree(self, gov_repo_path: str | Path, project_uuid: str) -> Path:
-        gov_path = Path(gov_repo_path).resolve()
-        wt_path = gov_path / ".git" / "orphan_worktree"
-        orphan_branch = f"orphan-conversa-memory-{project_uuid}"
-
-        if wt_path.exists() and (wt_path / ".git").exists():
-            return wt_path
-
-        if not (gov_path / ".git").exists():
-            raise RuntimeError(
-                f"{gov_path} no es la raíz de un repositorio Git; se omite el worktree huérfano "
-                "para no operar sobre un repositorio contenedor"
-            )
-
-        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-        ref_check = self._subprocess_run(
-            ["git", "show-ref", "--verify", f"refs/heads/{orphan_branch}"],
-            cwd=str(gov_path),
-            capture_output=True,
-            creationflags=creationflags,
-        )
-
-        if ref_check.returncode != 0 and self.github.has_remote(gov_path, "origin"):
-            self.github.git_fetch(gov_path, "origin")
-            fetch_orphan = self._subprocess_run(
-                ["git", "fetch", "origin", f"{orphan_branch}:{orphan_branch}"],
-                cwd=str(gov_path),
-                capture_output=True,
-                creationflags=creationflags,
-            )
-            if fetch_orphan.returncode == 0:
-                ref_check.returncode = 0
-
-        if ref_check.returncode == 0:
-            wt_res = self._subprocess_run(
-                ["git", "worktree", "add", str(wt_path), orphan_branch],
-                cwd=str(gov_path),
-                capture_output=True,
-                creationflags=creationflags,
-            )
-            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
-                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
-                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
-        else:
-            wt_res = self._subprocess_run(
-                ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(wt_path)],
-                cwd=str(gov_path),
-                capture_output=True,
-                creationflags=creationflags,
-            )
-            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
-                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
-                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
-            if wt_path.exists():
-                readme = wt_path / "README_CONVERSA.md"
-                if not readme.exists():
-                    readme.write_text(
-                        f"# Memoria Conversacional Desacoplada\n\nUUID: `{project_uuid}`\nRama: `{orphan_branch}`\n",
-                        encoding="utf-8",
-                    )
-                self._subprocess_run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                commit_res = self._subprocess_run(
-                    ["git", "commit", "-m", f"init(orphan): initialize decoupled conversational memory for {project_uuid}"],
-                    cwd=str(wt_path),
-                    capture_output=True,
-                    creationflags=creationflags,
-                )
-                if commit_res.returncode != 0:
-                    logger.warning(
-                        "ensure_orphan_worktree: commit inicial del README falló en %s: %s",
-                        wt_path,
-                        (commit_res.stderr or b"").decode("utf-8", errors="replace").strip()[:300],
-                    )
-        return wt_path
+        """Delegado en `GitWorkspacePort.ensure_orphan_worktree` (EGM-57)."""
+        return self.github.ensure_orphan_worktree(gov_repo_path, project_uuid)
 
     def publish_project_to_github(
         self,
@@ -358,7 +285,6 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
         if not gov_raw:
             return {"success": False, "error": "Ruta del repositorio de gobernanza no configurada; sincronización omitida"}
 
-        creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
         local_node = local_node_uuid()
         gov_path = Path(gov_raw).resolve()
         app_path = Path(code_raw).resolve() if code_raw else None
@@ -400,20 +326,14 @@ class GitBranchesUIAdapter(_BaseUIAdapter):
                         }
                         f.write(json.dumps(line_data, ensure_ascii=False) + "\n")
 
-                self._subprocess_run(["git", "add", "."], cwd=str(wt_path), capture_output=True, creationflags=creationflags)
-                commit_res = self._subprocess_run(
-                    ["git", "commit", "-m", f"sync(orphan): flush {len(pending_events)} events from node {local_node}"],
-                    cwd=str(wt_path),
-                    capture_output=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    creationflags=creationflags,
+                commit_res = self.github.commit_all_changes(
+                    wt_path, f"sync(orphan): flush {len(pending_events)} events from node {local_node}"
                 )
-                if commit_res.returncode == 0:
+                if commit_res.get("success"):
                     events_committed = True
                     tier1_res["flushed"] = len(pending_events)
                 else:
-                    err = (commit_res.stderr or commit_res.stdout or "").strip()
+                    err = (commit_res.get("error") or "").strip()
                     tier1_res["status"] = f"commit_failed: {err[:300]}"
                     logger.warning(f"sync_three_tiers: commit de outbox falló, eventos quedan pendientes: {err[:300]}")
                     with events_file.open("r+b") as tf:

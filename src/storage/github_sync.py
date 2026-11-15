@@ -600,6 +600,82 @@ class GitHubSyncManager:
         except Exception as e:
             return {"success": False, "committed": False, "error": str(e)}
 
+    def ensure_orphan_worktree(self, gov_repo_path: str | Path, project_uuid: str) -> Path:
+        """Monta (o crea) la rama huérfana `orphan-conversa-memory-{uuid}` en `.git/orphan_worktree`.
+
+        EGM-57: antes lo hacía `git_branches_ui.py` por subprocess. Si la rama no existe en local
+        se intenta traer de `origin`; si tampoco existe allí, se crea huérfana con un README y un
+        commit inicial. Lanza `RuntimeError` si `gov_repo_path` no es raíz de un repo o si
+        `git worktree add` falla.
+        """
+        gov_path = Path(gov_repo_path).resolve()
+        wt_path = gov_path / ".git" / "orphan_worktree"
+        orphan_branch = f"orphan-conversa-memory-{project_uuid}"
+
+        if wt_path.exists() and (wt_path / ".git").exists():
+            return wt_path
+
+        if not (gov_path / ".git").exists():
+            raise RuntimeError(
+                f"{gov_path} no es la raíz de un repositorio Git; se omite el worktree huérfano "
+                "para no operar sobre un repositorio contenedor"
+            )
+
+        ref_check = run_hidden(
+            ["git", "show-ref", "--verify", f"refs/heads/{orphan_branch}"],
+            cwd=str(gov_path),
+            capture_output=True,
+        )
+
+        if ref_check.returncode != 0 and self.has_remote(gov_path, "origin"):
+            self.git_fetch(gov_path, "origin")
+            fetch_orphan = run_hidden(
+                ["git", "fetch", "origin", f"{orphan_branch}:{orphan_branch}"],
+                cwd=str(gov_path),
+                capture_output=True,
+            )
+            if fetch_orphan.returncode == 0:
+                ref_check.returncode = 0
+
+        if ref_check.returncode == 0:
+            wt_res = run_hidden(
+                ["git", "worktree", "add", str(wt_path), orphan_branch],
+                cwd=str(gov_path),
+                capture_output=True,
+            )
+            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
+                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
+        else:
+            wt_res = run_hidden(
+                ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(wt_path)],
+                cwd=str(gov_path),
+                capture_output=True,
+            )
+            if wt_res.returncode != 0 and not (wt_path / ".git").exists():
+                err = (wt_res.stderr or b"").decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"No se pudo montar el worktree huérfano en {wt_path}: {err[:300]}")
+            if wt_path.exists():
+                readme = wt_path / "README_CONVERSA.md"
+                if not readme.exists():
+                    readme.write_text(
+                        f"# Memoria Conversacional Desacoplada\n\nUUID: `{project_uuid}`\nRama: `{orphan_branch}`\n",
+                        encoding="utf-8",
+                    )
+                run_hidden(["git", "add", "."], cwd=str(wt_path), capture_output=True)
+                commit_res = run_hidden(
+                    ["git", "commit", "-m", f"init(orphan): initialize decoupled conversational memory for {project_uuid}"],
+                    cwd=str(wt_path),
+                    capture_output=True,
+                )
+                if commit_res.returncode != 0:
+                    logger.warning(
+                        "ensure_orphan_worktree: commit inicial del README falló en %s: %s",
+                        wt_path,
+                        (commit_res.stderr or b"").decode("utf-8", errors="replace").strip()[:300],
+                    )
+        return wt_path
+
     def has_remote(self, repo_path: str | Path, remote: str = "origin") -> bool:
         """Comprueba si existe un control remoto configurado en el repositorio."""
         path = Path(repo_path)
