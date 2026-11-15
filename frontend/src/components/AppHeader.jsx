@@ -248,7 +248,9 @@ export function AppHeader({
                         }}
                       />
                     )}
-                    <span className="mcp-nav-tab-label">{tab.label}</span>
+                    <span className="mcp-nav-tab-label">
+                      <span className="mcp-nav-tab-label-text">{tab.label}</span>
+                    </span>
                   </button>
                 );
               })}

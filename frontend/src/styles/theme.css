@@ -150,7 +150,21 @@ select:focus {
   border-color: var(--accent-primary);
 }
 
-/* Botones de pestañas de navegación: cuadrados por defecto, despliegan nombre en hover o estado activo */
+/* Botones de pestañas de navegación: cuadrados por defecto, despliegan nombre en hover o estado activo.
+   Apertura y cierre usan EXACTAMENTE la misma duración, easing y retardo de intención:
+   - el retardo (--mcp-nav-delay) hace que barrer el mouse por la barra no abra ni cierre
+     iconos (si el cursor sale antes de que venza el retardo, la transición ni arranca);
+   - al cruzar de un icono a otro, el que se cierra y el que se abre arrancan a la vez
+     tras el mismo retardo, así que no hay parpadeo ni salto de layout intermedio;
+   - la etiqueta se anima con grid 0fr -> 1fr (ancho natural) en lugar de max-width, porque
+     max-width 0 -> 200px solo se ve en la fracción inicial de la curva al abrir y en la
+     fracción final al cerrar, lo que hacía el cierre visualmente más brusco que la apertura. */
+:root {
+  --mcp-nav-duration: 420ms;
+  --mcp-nav-delay: 140ms;
+  --mcp-nav-ease: cubic-bezier(0.45, 0, 0.2, 1);
+}
+
 .mcp-nav-icon-tab {
   display: inline-flex;
   align-items: center;
@@ -164,23 +178,35 @@ select:focus {
   background-color: var(--bg-subtle);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  transition-property: padding, color, background-color, border-color;
+  transition-duration: var(--mcp-nav-duration);
+  transition-timing-function: var(--mcp-nav-ease);
+  transition-delay: var(--mcp-nav-delay);
   overflow: hidden;
   white-space: nowrap;
   position: relative;
 }
 
 .mcp-nav-icon-tab .mcp-nav-tab-label {
-  max-width: 0;
+  display: grid;
+  grid-template-columns: 0fr;
   opacity: 0;
-  overflow: hidden;
   font-size: 13px;
   font-weight: 700;
-  transition: max-width 0.24s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease, margin-left 0.2s ease;
   margin-left: 0;
+  transition-property: grid-template-columns, opacity, margin-left;
+  transition-duration: var(--mcp-nav-duration);
+  transition-timing-function: var(--mcp-nav-ease);
+  transition-delay: var(--mcp-nav-delay);
+}
+
+.mcp-nav-icon-tab .mcp-nav-tab-label-text {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .mcp-nav-icon-tab:hover,
+.mcp-nav-icon-tab:focus-visible,
 .mcp-nav-icon-tab.is-active {
   padding: 0 12px;
   color: var(--text-primary);
@@ -195,10 +221,19 @@ select:focus {
 }
 
 .mcp-nav-icon-tab:hover .mcp-nav-tab-label,
+.mcp-nav-icon-tab:focus-visible .mcp-nav-tab-label,
 .mcp-nav-icon-tab.is-active .mcp-nav-tab-label {
-  max-width: 200px;
+  grid-template-columns: 1fr;
   opacity: 1;
   margin-left: 7px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mcp-nav-icon-tab,
+  .mcp-nav-icon-tab .mcp-nav-tab-label {
+    transition-duration: 0.01ms;
+    transition-delay: 0s;
+  }
 }
 
 .mcp-back-to-hub-btn:hover {
