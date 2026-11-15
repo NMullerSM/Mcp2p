@@ -4,7 +4,9 @@ EGM-53 (defensa en profundidad): el JS del webview es un principal de confianza 
 en el frontend equivale a acceso al proceso Python. Estas guardas fijan dos garantías:
 
 1. `frontend/src/**` no renderiza HTML crudo ni evalúa cadenas como código.
-2. `frontend/index.html` declara una CSP estricta sin `unsafe-inline`/`unsafe-eval` en scripts.
+2. `frontend/index.html` declara una CSP sin `unsafe-inline` en scripts. `unsafe-eval` solo se admite en
+   `script-src`: PyWebView crea cada función de `window.pywebview.api` con `new Function`
+   (`webview/js/api.js`) y sin ello la API queda vacía y la GUI no carga proyectos ni PAT.
 """
 
 from __future__ import annotations
@@ -63,9 +65,10 @@ def test_index_html_declares_strict_csp():
     csp = _csp_directives()
     assert csp.get("default-src") == ["'self'"]
     script_src = csp.get("script-src", csp["default-src"])
-    assert script_src == ["'self'"], f"script-src debe ser solo 'self': {script_src}"
+    assert script_src == ["'self'", "'unsafe-eval'"], f"script-src inesperado: {script_src}"
     for directive, sources in csp.items():
-        assert "'unsafe-eval'" not in sources, directive
+        if directive != "script-src":
+            assert "'unsafe-eval'" not in sources, directive
         if directive != "style-src":
             assert "'unsafe-inline'" not in sources, directive
     assert csp.get("object-src") == ["'none'"]
