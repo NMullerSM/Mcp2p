@@ -36,6 +36,12 @@ elif [ -d "$DIR/frontend/src" ] && [ -n "$(find "$DIR/frontend/src" "$DIR/fronte
     REBUILD_FRONTEND=true
 fi
 
+# MCP2P_SKIP_FRONTEND_BUILD=1 usa el frontend/dist existente sin ejecutar npm
+# (lo usa scripts/check_gui_boot.py para no compilar durante la comprobación de arranque).
+if [ "${MCP2P_SKIP_FRONTEND_BUILD:-0}" = "1" ]; then
+    REBUILD_FRONTEND=false
+fi
+
 if [ "$REBUILD_FRONTEND" = true ] && [ -d "$DIR/frontend" ]; then
     echo "[MCP2P] Detectados cambios en el frontend o build ausente. Compilando bundle de React (Vite)..."
     if [ ! -d "$DIR/frontend/node_modules" ]; then
