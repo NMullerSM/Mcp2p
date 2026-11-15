@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X, GitCommit } from 'lucide-react';
-import { SideDrawer } from './SideDrawer';
+import { CheckCircle2, RefreshCw, Eye, GitBranch, ExternalLink, Lock, Sparkles, CheckSquare, X } from 'lucide-react';
+import { ViewSliderContent, useViewSlider } from './ViewSlider';
 import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
 
 export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranch, searchQuery = '' }) {
@@ -19,9 +19,8 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
   // Modal de Inspección Profunda (Lectura de Mayéutica, Propuestas A/B/C, PRs y Decisiones)
   const [inspectedItem, setInspectedItem] = useState(null); // { type: 'decision' | 'jury_vote' | 'pr_merge', data: {...} }
 
-  // Drawer lateral derecho: detalle granular de Git/GitHub (commits asociados) de la
-  // entrega inspeccionada, fuera del cuerpo principal del inspector (aprobar/rechazar).
-  const [isPrDetailsDrawerOpen, setIsPrDetailsDrawerOpen] = useState(false);
+  // Slider lateral derecho: commits asociados, detalle de GitHub e historial (ver abajo).
+  const { close: closeSlider } = useViewSlider();
 
   // Modal de Doble Factor de Confirmación Consciente (HITL 2FA Cognitivo)
   const [confirmRequest, setConfirmRequest] = useState(null);
@@ -967,133 +966,6 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
 
       </div>
 
-      {/* 4. SECCIÓN DE TRAZABILIDAD: PRECEDENTES OKF Y JUICIOS RATIFICADOS */}
-      {filteredHistoryPrecedents.length > 0 && (
-        <div style={{
-          backgroundColor: 'var(--bg-surface)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--border-subtle)',
-          padding: '16px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '12px',
-          marginTop: '4px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
-            <div>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
-                Trazabilidad Histórica: Precedentes y Juicios Ratificados ({filteredHistoryPrecedents.length})
-              </span>
-              <p style={{ margin: '3px 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
-                Registro inmutable de dictámenes y actas de juicio en la gobernanza OKF.
-              </p>
-            </div>
-            <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', fontWeight: 600 }}>
-              0 tokens de contexto
-            </span>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-            {(historyExpanded ? filteredHistoryPrecedents : filteredHistoryPrecedents.slice(0, 3)).map((item, idx) => (
-              <div
-                key={item.id || idx}
-                onClick={() => openInspector(item.type === 'JURY_RULING' ? 'ruling' : 'decision', item, item.id)}
-                style={{
-                  backgroundColor: 'var(--bg-subtle)',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-subtle)',
-                  padding: '12px 14px',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '6px',
-                  cursor: 'pointer',
-                  transition: 'var(--transition)'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                  <span style={{ fontWeight: 700, fontSize: '12.5px', color: 'var(--text-primary)' }}>
-                    {item.title || item.id}
-                  </span>
-                  <span style={{
-                    fontSize: '10px',
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: 600,
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    backgroundColor: item.type === 'JURY_RULING' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(var(--accent-primary-rgb), 0.15)',
-                    color: item.type === 'JURY_RULING' ? '#c084fc' : 'var(--accent-success)',
-                    flexShrink: 0
-                  }}>
-                    {item.type === 'JURY_RULING' ? 'JUICIO RATIFICADO' : 'ADR'}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{item.id}</span>
-                  {item.winning_option && (
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                      Ganador: <strong style={{ color: 'var(--accent-primary)' }}>{item.winning_option}</strong>
-                    </span>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
-                    <Eye size={12} /> Consultar acta y mayéutica
-                  </span>
-                  {item.card_id && onOpenCard && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpenCard(item.card_id);
-                      }}
-                      style={{
-                        fontSize: '10.5px',
-                        fontFamily: 'var(--font-mono)',
-                        fontWeight: 600,
-                        padding: '2px 6px',
-                        borderRadius: '4px',
-                        border: '1px solid var(--border-subtle)',
-                        backgroundColor: 'var(--bg-surface)',
-                        color: 'var(--text-primary)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {item.card_id}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {filteredHistoryPrecedents.length > 3 && (
-            <button
-              type="button"
-              onClick={() => setHistoryExpanded(prev => !prev)}
-              style={{
-                alignSelf: 'center',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                color: 'var(--accent-primary)',
-                background: 'transparent',
-                border: 'none',
-                padding: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              {historyExpanded
-                ? 'Ver menos'
-                : `Ver ${filteredHistoryPrecedents.length - 3} más`}
-            </button>
-          )}
-        </div>
-      )}
-
       {/* =====================================================================
           MODAL FRONTAL DE INSPECCIÓN PROFUNDA (MAYÉUTICA, PROPUESTAS Y TAREAS)
          ===================================================================== */}
@@ -1509,30 +1381,7 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
                     </div>
                   </div>
 
-                  {inspectedItem.data.commits && inspectedItem.data.commits.length > 0 && (
-                    <div>
-                      <button
-                        type="button"
-                        data-testid="pr-open-details-drawer"
-                        onClick={() => setIsPrDetailsDrawerOpen(true)}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          fontSize: '12px',
-                          fontWeight: 600,
-                          padding: '7px 12px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: '1px solid var(--border-subtle)',
-                          backgroundColor: 'var(--bg-subtle)',
-                          color: 'var(--text-primary)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        <GitCommit size={13} /> Ver Commits Asociados ({inspectedItem.data.commits.length})
-                      </button>
-                    </div>
-                  )}
+                  {/* Los commits asociados de la entrega se consultan en el slider lateral derecho. */}
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
@@ -1820,17 +1669,26 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
         </div>
       )}
 
-      {/* Drawer lateral derecho: detalle granular Git/GitHub (commits) de la entrega
-          inspeccionada en el modal pr_merge — contenido secundario fuera del flujo
-          principal de aprobar/rechazar. */}
-      <SideDrawer
-        isOpen={Boolean(inspectedItem && inspectedItem.type === 'pr_merge' && isPrDetailsDrawerOpen)}
-        onClose={() => setIsPrDetailsDrawerOpen(false)}
-        title={`Commits Asociados — ${inspectedItem?.data?.card_id || ''}`}
-        subtitle="Detalle granular de Git/GitHub"
-        data-testid="pr-details-drawer"
+      {/* Slider lateral derecho (pestana en el borde): detalle Git/GitHub (commits) de la
+          entrega que se este inspeccionando e historial de precedentes y juicios. La cola
+          de aprobacion y la firma se quedan en pantalla. */}
+      <ViewSliderContent
+        title="Detalle de GitHub & Historial"
+        subtitle="Commits asociados y trazabilidad de decisiones"
+        data-testid="approvals-slider"
       >
-        {(inspectedItem?.data?.commits || []).map(cm => (
+        <section data-testid="pr-details-section">
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+            {inspectedItem?.type === 'pr_merge'
+              ? `Commits Asociados — ${inspectedItem?.data?.card_id || ''}`
+              : 'Commits Asociados'}
+          </div>
+          {inspectedItem?.type === 'pr_merge' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {(inspectedItem?.data?.commits || []).length === 0 && (
+                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Esta entrega no reporta commits.</span>
+              )}
+              {(inspectedItem?.data?.commits || []).map(cm => (
           <div key={cm.hash} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', fontSize: '11.5px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--accent-primary)' }}>
@@ -1840,8 +1698,144 @@ export function HumanApprovalsView({ project, api, onOpenCard, onNavigateToBranc
             </div>
             <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>{cm.author}</span>
           </div>
-        ))}
-      </SideDrawer>
+              ))}
+            </div>
+          ) : (
+            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              Inspecciona una entrega (PR) de la cola para ver aquí sus commits.
+            </span>
+          )}
+        </section>
+
+        {/* Historial: precedentes OKF y juicios ratificados (antes bajo la cola de aprobación) */}
+        {filteredHistoryPrecedents.length > 0 && (
+          <div style={{
+            backgroundColor: 'var(--bg-surface)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-subtle)',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.2px' }}>
+                  Trazabilidad Histórica: Precedentes y Juicios Ratificados ({filteredHistoryPrecedents.length})
+                </span>
+                <p style={{ margin: '3px 0 0', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                  Registro inmutable de dictámenes y actas de juicio en la gobernanza OKF.
+                </p>
+              </div>
+              <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                0 tokens de contexto
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '12px' }}>
+              {(historyExpanded ? filteredHistoryPrecedents : filteredHistoryPrecedents.slice(0, 3)).map((item, idx) => (
+                <div
+                  key={item.id || idx}
+                  onClick={() => {
+                    closeSlider();
+                    openInspector(item.type === 'JURY_RULING' ? 'ruling' : 'decision', item, item.id);
+                  }}
+                  style={{
+                    backgroundColor: 'var(--bg-subtle)',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-subtle)',
+                    padding: '12px 14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    cursor: 'pointer',
+                    transition: 'var(--transition)'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '12.5px', color: 'var(--text-primary)' }}>
+                      {item.title || item.id}
+                    </span>
+                    <span style={{
+                      fontSize: '10px',
+                      fontFamily: 'var(--font-mono)',
+                      fontWeight: 600,
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      backgroundColor: item.type === 'JURY_RULING' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(var(--accent-primary-rgb), 0.15)',
+                      color: item.type === 'JURY_RULING' ? '#c084fc' : 'var(--accent-success)',
+                      flexShrink: 0
+                    }}>
+                      {item.type === 'JURY_RULING' ? 'JUICIO RATIFICADO' : 'ADR'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{item.id}</span>
+                    {item.winning_option && (
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Ganador: <strong style={{ color: 'var(--accent-primary)' }}>{item.winning_option}</strong>
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--accent-primary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                      <Eye size={12} /> Consultar acta y mayéutica
+                    </span>
+                    {item.card_id && onOpenCard && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenCard(item.card_id);
+                        }}
+                        style={{
+                          fontSize: '10.5px',
+                          fontFamily: 'var(--font-mono)',
+                          fontWeight: 600,
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          border: '1px solid var(--border-subtle)',
+                          backgroundColor: 'var(--bg-surface)',
+                          color: 'var(--text-primary)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {item.card_id}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {filteredHistoryPrecedents.length > 3 && (
+              <button
+                type="button"
+                onClick={() => setHistoryExpanded(prev => !prev)}
+                style={{
+                  alignSelf: 'center',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  color: 'var(--accent-primary)',
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                {historyExpanded
+                  ? 'Ver menos'
+                  : `Ver ${filteredHistoryPrecedents.length - 3} más`}
+              </button>
+            )}
+          </div>
+        )}
+      </ViewSliderContent>
 
       {/* =====================================================================
           MODAL DE DOBLE FACTOR DE CONFIRMACIÓN CONSCIENTE (2FA COGNITIVO HITL)
