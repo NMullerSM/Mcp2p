@@ -852,11 +852,31 @@ def _extract_pane_token(scope: Dict[str, Any]) -> tuple[bool, str]:
 
 
 class _PaneTokenAuthMiddleware:
-    """Middleware ASGI ligero para autenticar tokens Bearer de paneles MCP2P (EGM-22)."""
+    """Middleware ASGI ligero para autenticar tokens Bearer de paneles MCP2P (EGM-22).
+
+    Falla cerrado (EGM-66): sin token se responde 401. Antes, una peticion sin cabecera pasaba con
+    identidad autodeclarada y cualquier proceso local podia declarar el `node_uuid` de otro panel.
+    """
 
     def __init__(self, app: Any, pane_registry: Any) -> None:
         self.app = app
         self.pane_registry = pane_registry
+
+    @staticmethod
+    async def _reject(send: Any, code: str, error: str) -> None:
+        body = json.dumps({"success": False, "code": code, "error": error}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"www-authenticate", b"Bearer"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body, "more_body": False})
 
     async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -865,30 +885,16 @@ class _PaneTokenAuthMiddleware:
 
         has_token, token = _extract_pane_token(scope)
         if not has_token:
-            await self.app(scope, receive, send)
+            await self._reject(
+                send,
+                "MISSING_PANE_SESSION_TOKEN",
+                "Unauthorized: the embedded hub requires the pane session token (Authorization: Bearer).",
+            )
             return
 
         record = self.pane_registry.authenticate_token(token)
         if record is None:
-            body = json.dumps(
-                {
-                    "success": False,
-                    "code": "INVALID_PANE_SESSION_TOKEN",
-                    "error": "Unauthorized: invalid or revoked pane session token.",
-                }
-            ).encode("utf-8")
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [
-                        (b"content-type", b"application/json; charset=utf-8"),
-                        (b"content-length", str(len(body)).encode("ascii")),
-                        (b"www-authenticate", b"Bearer"),
-                    ],
-                }
-            )
-            await send({"type": "http.response.body", "body": body, "more_body": False})
+            await self._reject(send, "INVALID_PANE_SESSION_TOKEN", "Unauthorized: invalid or revoked pane session token.")
             return
 
         with pane_session_context(record):
