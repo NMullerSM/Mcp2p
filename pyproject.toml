@@ -14,14 +14,19 @@ authors = [
 ]
 dependencies = [
     "pywebview>=5.0.0",
-    "mcp>=1.0.0",
+    # El código usa la API 2.x (mcp.server.mcpserver.MCPServer); 1.x no la tiene y 3.x no está validada (Gate 0d).
+    "mcp>=2.3,<3",
+    # Importado directamente por src/mcp/server.py para el bind explícito de streamable-http.
+    "uvicorn>=0.31.1",
     "msgpack>=1.0.8",
     "cbor2>=5.6.0",
     "cryptography>=42.0.0",
     "PyYAML>=6.0.0",
     "certifi>=2024.0.0",
     "aiortc>=1.9.0",
-    "websockets>=12.0"
+    "websockets>=12.0",
+    # Espacio de nombres .NET `System` (system_projects_ui.py, barra de título en Windows); pywebview ya lo arrastra en win32.
+    "pythonnet>=3.0; sys_platform == 'win32'"
 ]
 
 [project.optional-dependencies]

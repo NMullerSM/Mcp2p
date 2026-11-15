@@ -24,6 +24,10 @@ from src.storage.validators import InvalidIdentifierError, ensure_within, is_saf
 
 MAX_PROPOSAL_CHARS_IN_PROMPT: int = 8000
 
+# Versión del contrato de herramientas MCP (no de la aplicación). Definición única: `server.py`
+# la importa para anunciarla en el handshake y `get_server_version` la devuelve (EGM-39 parte 3).
+MCP_API_VERSION: str = "0.3.0"
+
 
 def _read_git_head_short() -> str:
     """Lee el commit Git HEAD actual en disco de forma segura (solo lectura)."""
@@ -37,6 +41,15 @@ def _read_git_head_short() -> str:
             stderr=subprocess.DEVNULL
         ).decode().strip()
         return val or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _app_version() -> str:
+    """Versión de la aplicación MCP2P (`src/app/version.py`), distinta de la API MCP."""
+    try:
+        from src.app.version import __version__
+        return __version__
     except Exception:
         return "unknown"
 
@@ -1407,7 +1420,8 @@ class MCPToolsHandler:
         resp: Dict[str, Any] = {
             "success": True,
             "server_name": "mcp2p-server",
-            "server_version": "0.3.0",
+            "server_version": MCP_API_VERSION,
+            "app_version": _app_version(),
             "git_commit": disk_commit,
             "loaded_commit": loaded_commit,
             "disk_commit": disk_commit,

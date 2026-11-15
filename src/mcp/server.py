@@ -15,11 +15,22 @@ import sys
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 from mcp.server.mcpserver import MCPServer
-from src.mcp.tools import LOADED_COMMIT, MCPToolsHandler
+from src.mcp.tools import LOADED_COMMIT, MCP_API_VERSION, MCPToolsHandler
+from src.mcp.transport_options import (  # noqa: F401  (re-export para llamadores existentes)
+    DEFAULT_HTTP_HOST,
+    DEFAULT_HTTP_PORT,
+    HTTP_TRANSPORTS,
+    MCP_TRANSPORTS,
+    NonLoopbackBindError,
+    add_transport_arguments,
+    resolve_http_bind,
+)
 from src.storage.db import DatabaseManager
 
 
-SERVER_VERSION = "0.3.0"
+# Alias de compatibilidad: la definición única vive en `src.mcp.tools.MCP_API_VERSION`.
+SERVER_VERSION = MCP_API_VERSION
+
 
 
 def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -> MCPServer:
@@ -745,15 +756,70 @@ def create_mcp_server(db_path: Optional[str] = None, transport: str = "stdio") -
     return server
 
 
+def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tuple[Any, Any, str]:
+    """Prepara el servidor uvicorn de `streamable-http` sobre un socket ya enlazado.
+
+    Enlazar el socket aquí (en vez de dejar que uvicorn lo haga) permite conocer el puerto real
+    cuando se pidió uno efímero y anunciarlo antes de servir. Devuelve `(uvicorn_server, socket, url)`;
+    se arranca con `await uvicorn_server.serve(sockets=[socket])`.
+    """
+    import socket
+
+    import uvicorn
+
+    bind_host = "127.0.0.1" if host.lower() == "localhost" else host.strip("[]")
+    family = socket.AF_INET6 if ":" in bind_host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((bind_host, port))
+        sock.listen(128)
+    except Exception:
+        sock.close()
+        raise
+    bound_port = sock.getsockname()[1]
+    app = server.streamable_http_app(host=bind_host)
+    config = uvicorn.Config(app, log_level=server.settings.log_level.lower())
+    url_host = f"[{bind_host}]" if family == socket.AF_INET6 else bind_host
+    return uvicorn.Server(config), sock, f"http://{url_host}:{bound_port}/mcp"
+
+
+def run_mcp_server(
+    server: MCPServer,
+    transport: str = "stdio",
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+) -> None:
+    """Arranca el servidor MCP en el transporte pedido con bind HTTP explícito y de loopback."""
+    if transport not in MCP_TRANSPORTS:
+        raise ValueError(f"Transporte MCP desconocido: {transport}")
+    if transport == "stdio":
+        server.run(transport="stdio")
+        return
+    bind_host, bind_port = resolve_http_bind(host, port)
+    if transport == "sse":
+        server.run(transport="sse", host=bind_host, port=bind_port)
+        return
+
+    import anyio
+
+    uv_server, sock, url = build_streamable_http_server(server, bind_host, bind_port)
+    # stdout no es canal JSON-RPC en HTTP, pero se anuncia por stderr para no mezclar con logs de la app.
+    print(f"MCP2P streamable-http escuchando en {url}", file=sys.stderr, flush=True)
+    try:
+        anyio.run(lambda: uv_server.serve(sockets=[sock]))
+    finally:
+        sock.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MCP2P: Servidor Local Model Context Protocol")
     parser.add_argument("--db-path", type=str, default=None, help="Ruta a la base de datos SQLite")
-    parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"], help="Tipo de transporte MCP")
+    add_transport_arguments(parser)
     args = parser.parse_args()
 
     server = create_mcp_server(db_path=args.db_path, transport=args.transport)
-    # Ejecutar sobre el transporte especificado
-    server.run(transport=args.transport)
+    run_mcp_server(server, transport=args.transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -93,10 +93,9 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--mcp-server", action="store_true",
         help="Ejecutar este mismo binario como servidor MCP (sin abrir la GUI de escritorio)",
     )
-    parser.add_argument(
-        "--transport", type=str, default="stdio", choices=["stdio", "sse"],
-        help="Transporte MCP a usar junto con --mcp-server",
-    )
+    from src.mcp.transport_options import add_transport_arguments
+
+    add_transport_arguments(parser)
     return parser.parse_args(argv)
 
 
@@ -106,10 +105,10 @@ def _run_as_mcp_server(args: argparse.Namespace) -> int:
     El transporte stdio reserva stdout exclusivamente para los mensajes JSON-RPC,
     así que nada en esta ruta debe hacer print() ni tocar PyWebView/P2P.
     """
-    from src.mcp.server import create_mcp_server
+    from src.mcp.server import create_mcp_server, run_mcp_server
 
     server = create_mcp_server(db_path=args.db_path, transport=args.transport)
-    server.run(transport=args.transport)
+    run_mcp_server(server, transport=args.transport, host=args.host, port=args.port)
     return 0
 
 
