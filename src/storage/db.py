@@ -1378,6 +1378,17 @@ class DatabaseManager:
             row = conn.execute("SELECT * FROM swarm_nodes WHERE node_uuid = ?;", (node_uuid,)).fetchone()
             return dict(row) if row else None
 
+    def mark_node_offline(self, node_uuid: str) -> bool:
+        """Marca un nodo del enjambre como offline actualizando su último heartbeat (EGM-22)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                cur = conn.execute(
+                    "UPDATE swarm_nodes SET status = 'offline', last_heartbeat = ? WHERE node_uuid = ?;",
+                    (now_str, node_uuid),
+                )
+                return cur.rowcount > 0
+
     # ==========================
     # Mensajería A2A y Disputas
     # ==========================
@@ -1828,20 +1839,32 @@ class DatabaseManager:
             "locked_until": lock_until.isoformat() if lock_until is not None else None
         }
 
-    def get_project_collaborators(self, project_uuid: str) -> List[Dict[str, Any]]:
+    def get_project_collaborators(
+        self,
+        project_uuid: str,
+        online_only: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Lista todos los colaboradores y solicitudes pendientes de un proyecto."""
+        query = """
+            SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours, n.node_kind
+            FROM project_collaborators c
+            LEFT JOIN swarm_nodes n ON c.node_uuid = n.node_uuid
+            WHERE c.project_uuid = ?
+        """
+        if online_only:
+            query += " AND COALESCE(n.status, 'offline') IN ('online', 'busy')\n"
+        query += " ORDER BY c.created_at ASC;"
         with self.get_connection() as conn:
-            cur = conn.execute(
-                """
-                SELECT c.*, n.developer_name, n.status as node_status, n.reviewer_sla_hours, n.node_kind
-                FROM project_collaborators c
-                LEFT JOIN swarm_nodes n ON c.node_uuid = n.node_uuid
-                WHERE c.project_uuid = ?
-                ORDER BY c.created_at ASC;
-                """,
-                (project_uuid,)
-            )
+            cur = conn.execute(query, (project_uuid,))
             return [dict(row) for row in cur.fetchall()]
+
+    def list_collaborators(
+        self,
+        project_uuid: str,
+        online_only: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Alias compatible para listar colaboradores de un proyecto."""
+        return self.get_project_collaborators(project_uuid, online_only=online_only)
 
     def approve_collaborator(self, project_uuid: str, node_uuid: str) -> bool:
         """Aprobación explícita (Human-in-the-Loop) de un colaborador por el dueño del proyecto."""

@@ -263,6 +263,8 @@ class CollaborationRepositoryPort(Protocol):
 
     def get_node_by_uuid(self, node_uuid: str) -> Optional[Dict[str, Any]]: ...
 
+    def mark_node_offline(self, node_uuid: str) -> bool: ...
+
     def add_or_request_collaborator(
         self,
         project_uuid: str,
@@ -281,7 +283,13 @@ class CollaborationRepositoryPort(Protocol):
         self, project_uuid: str, public_key: str
     ) -> Optional[Dict[str, Any]]: ...
 
-    def get_project_collaborators(self, project_uuid: str) -> List[Dict[str, Any]]: ...
+    def get_project_collaborators(
+        self, project_uuid: str, online_only: bool = False
+    ) -> List[Dict[str, Any]]: ...
+
+    def list_collaborators(
+        self, project_uuid: str, online_only: bool = False
+    ) -> List[Dict[str, Any]]: ...
 
     def get_project_collaborators_map(self, project_uuid: str) -> Dict[str, Dict[str, Any]]: ...
 

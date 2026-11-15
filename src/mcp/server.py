@@ -15,6 +15,7 @@ import sys
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 from mcp.server.mcpserver import MCPServer
+from src.mcp.pane_registry import pane_session_context
 from src.mcp.tools import LOADED_COMMIT, MCP_API_VERSION, MCPToolsHandler
 from src.mcp.transport_options import (  # noqa: F401  (re-export para llamadores existentes)
     DEFAULT_HTTP_HOST,
@@ -46,15 +47,26 @@ def create_mcp_server(
     """Crea e inicializa el servidor MCP con todas las herramientas registradas."""
     if handler is not None:
         resolved_handler = handler
+        if pane_registry is not None and getattr(resolved_handler, "pane_registry", None) is None:
+            resolved_handler.pane_registry = pane_registry
     elif kernel is not None:
-        resolved_handler = MCPToolsHandler(kernel=kernel, owns_kernel=False)
+        resolved_handler = MCPToolsHandler(
+            kernel=kernel,
+            owns_kernel=False,
+            pane_registry=pane_registry,
+        )
     else:
         if db_path:
             os.environ["MCP2P_DB_PATH"] = str(db_path)
             db = DatabaseManager.get_instance(str(db_path))
         else:
             db = DatabaseManager.get_instance()
-        resolved_handler = MCPToolsHandler(db_manager=db, bus=bus, event_bus=event_bus)
+        resolved_handler = MCPToolsHandler(
+            db_manager=db,
+            bus=bus,
+            event_bus=event_bus,
+            pane_registry=pane_registry,
+        )
     handler = resolved_handler
 
     server = MCPServer("mcp2p-server", version=SERVER_VERSION)
@@ -261,9 +273,11 @@ def create_mcp_server(
         session_id: Optional[str] = None,
         payload_json: Optional[Union[str, Dict[str, Any]]] = None,
         card_id: Optional[str] = None,
+        node_uuid: Optional[str] = None,
         sessionId: Optional[str] = None,
         projectUuid: Optional[str] = None,
         senderNodeUuid: Optional[str] = None,
+        nodeUuid: Optional[str] = None,
         cardId: Optional[str] = None,
         task_id: Optional[str] = None,
         taskId: Optional[str] = None,
@@ -275,6 +289,7 @@ def create_mcp_server(
         """
         resolved_proj = project_uuid or projectUuid or ""
         resolved_sender = sender_node_uuid or senderNodeUuid or ""
+        resolved_node_arg = node_uuid if node_uuid is not None else nodeUuid
         resolved_stage = stage or "PROPOSAL"
         resolved_card = card_id or cardId or task_id or taskId
         resolved_payload = payload_json if payload_json is not None else (payload if payload is not None else "{}")
@@ -303,7 +318,8 @@ def create_mcp_server(
             stage=resolved_stage,
             session_id=resolved_session,
             payload_json=payload_str,
-            card_id=resolved_card
+            card_id=resolved_card,
+            node_uuid=resolved_node_arg,
         )
 
     # 9. Herramienta: Consultar Sesión de Coordinación A2A
@@ -574,9 +590,11 @@ def create_mcp_server(
         agent_id: Optional[str] = None,
         evaluations_json: Optional[Union[str, Dict[str, Any]]] = None,
         rationale: str = "",
+        node_uuid: Optional[str] = None,
         projectUuid: Optional[str] = None,
         ticketId: Optional[str] = None,
         agentId: Optional[str] = None,
+        nodeUuid: Optional[str] = None,
         evaluations: Optional[Union[str, Dict[str, Any]]] = None,
         evaluationsJson: Optional[Union[str, Dict[str, Any]]] = None
     ) -> str:
@@ -586,6 +604,7 @@ def create_mcp_server(
         resolved_proj = project_uuid or projectUuid or ""
         resolved_ticket = ticket_id or ticketId or ""
         resolved_agent = agent_id or agentId or ""
+        resolved_node = node_uuid if node_uuid is not None else nodeUuid
         raw_eval = (
             evaluations_json if evaluations_json is not None
             else (evaluations if evaluations is not None
@@ -598,7 +617,8 @@ def create_mcp_server(
             ticket_id=resolved_ticket,
             agent_id=resolved_agent,
             evaluations_json=eval_str,
-            rationale=rationale
+            rationale=rationale,
+            node_uuid=resolved_node,
         )
 
     # Herramienta: Registrar Síntesis de Tercera Vía C en Juicio de Honor (NEW-04)
@@ -773,6 +793,79 @@ def create_mcp_server(
     return server
 
 
+def _extract_pane_token(scope: Dict[str, Any]) -> tuple[bool, str]:
+    """Extrae el token de panel desde `Authorization: Bearer` o `X-MCP2P-Pane-Token`."""
+    auth_val: Optional[str] = None
+    pane_val: Optional[str] = None
+    for raw_name, raw_value in scope.get("headers") or ():
+        name = raw_name.decode("latin-1").lower()
+        if name == "authorization":
+            auth_val = raw_value.decode("latin-1").strip()
+        elif name == "x-mcp2p-pane-token":
+            pane_val = raw_value.decode("latin-1").strip()
+
+    bearer_token: Optional[str] = None
+    if auth_val is not None:
+        if auth_val.lower().startswith("bearer "):
+            bearer_token = auth_val[7:].strip()
+        else:
+            return True, ""
+
+    if pane_val is not None and bearer_token is not None:
+        if not pane_val or pane_val != bearer_token:
+            return True, ""
+        return True, pane_val
+    if pane_val is not None:
+        return True, pane_val
+    if bearer_token is not None:
+        return True, bearer_token
+    return False, ""
+
+
+class _PaneTokenAuthMiddleware:
+    """Middleware ASGI ligero para autenticar tokens Bearer de paneles MCP2P (EGM-22)."""
+
+    def __init__(self, app: Any, pane_registry: Any) -> None:
+        self.app = app
+        self.pane_registry = pane_registry
+
+    async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        has_token, token = _extract_pane_token(scope)
+        if not has_token:
+            await self.app(scope, receive, send)
+            return
+
+        record = self.pane_registry.authenticate_token(token)
+        if record is None:
+            body = json.dumps(
+                {
+                    "success": False,
+                    "code": "INVALID_PANE_SESSION_TOKEN",
+                    "error": "Unauthorized: invalid or revoked pane session token.",
+                }
+            ).encode("utf-8")
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [
+                        (b"content-type", b"application/json; charset=utf-8"),
+                        (b"content-length", str(len(body)).encode("ascii")),
+                        (b"www-authenticate", b"Bearer"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": body, "more_body": False})
+            return
+
+        with pane_session_context(record):
+            await self.app(scope, receive, send)
+
+
 def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tuple[Any, Any, str]:
     """Prepara el servidor uvicorn de `streamable-http` sobre un socket ya enlazado.
 
@@ -796,6 +889,9 @@ def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tup
         raise
     bound_port = sock.getsockname()[1]
     app = server.streamable_http_app(host=bind_host)
+    pane_registry = getattr(server, "mcp2p_pane_registry", None)
+    if pane_registry is not None and callable(getattr(pane_registry, "authenticate_token", None)):
+        app = _PaneTokenAuthMiddleware(app, pane_registry)
     config = uvicorn.Config(app, log_level=server.settings.log_level.lower(), log_config=None)
     url_host = f"[{bind_host}]" if family == socket.AF_INET6 else bind_host
     return uvicorn.Server(config), sock, f"http://{url_host}:{bound_port}/mcp"

@@ -1,0 +1,449 @@
+"""
+Registro de sesiones de paneles CLI (`PaneRegistry`), propagación de identidad HTTP
+por petición (`ContextVar`) y ciclo de vida del Hub MCP embebido (`EmbeddedMcpHub`).
+
+Cierra EGM-22 ligando cada panel a un token Bearer opaco de un solo propósito y a un
+`node_uuid` inmutable validado en tiempo constante en el servidor MCP.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import secrets
+import threading
+import time
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
+from src.mcp.transport_options import resolve_http_bind
+
+logger = logging.getLogger("mcp2p.mcp.pane_registry")
+
+
+@dataclass
+class PaneSessionRecord:
+    """Estado de autenticación y actividad de un panel terminal conectado al Hub."""
+
+    pane_id: str
+    session_token: str
+    node_uuid: str
+    agent_name: str
+    cli_profile: str
+    role: str
+    pid: Optional[int] = None
+    status: str = "active"
+    created_at: float = 0.0
+    last_seen_at: float = 0.0
+    last_human_keystroke_at: float = 0.0
+
+    def to_dict(self, include_token: bool = False) -> Dict[str, Any]:
+        """Serializa la ficha del panel sin exponer `session_token` por defecto."""
+        data: Dict[str, Any] = {
+            "pane_id": self.pane_id,
+            "node_uuid": self.node_uuid,
+            "agent_name": self.agent_name,
+            "cli_profile": self.cli_profile,
+            "role": self.role,
+            "pid": self.pid,
+            "status": self.status,
+            "created_at": self.created_at,
+            "last_seen_at": self.last_seen_at,
+            "last_human_keystroke_at": self.last_human_keystroke_at,
+        }
+        if include_token:
+            data["session_token"] = self.session_token
+        return data
+
+
+_CURRENT_PANE_SESSION: ContextVar[Optional[PaneSessionRecord]] = ContextVar(
+    "mcp2p_current_pane_session",
+    default=None,
+)
+
+
+def get_current_pane_session() -> Optional[PaneSessionRecord]:
+    """Retorna la sesión de panel autenticada en el contexto actual, si existe."""
+    return _CURRENT_PANE_SESSION.get()
+
+
+@contextlib.contextmanager
+def pane_session_context(
+    record: Optional[PaneSessionRecord],
+) -> Iterator[Optional[PaneSessionRecord]]:
+    """Propaga de forma aislada la sesión autenticada de un request HTTP hacia `MCPToolsHandler`."""
+    ctx_token = _CURRENT_PANE_SESSION.set(record)
+    try:
+        yield record
+    finally:
+        _CURRENT_PANE_SESSION.reset(ctx_token)
+
+
+def _normalize_pane_id(pane_id: int | str) -> tuple[str, str]:
+    """Normaliza identificadores `1` / `'1'` / `'pane_1'` a `('pane_1', '1')`."""
+    if isinstance(pane_id, bool):
+        raise ValueError("pane_id no puede ser booleano")
+    if isinstance(pane_id, int):
+        if pane_id < 0:
+            raise ValueError(f"pane_id inválido: {pane_id}")
+        num = str(pane_id)
+        return f"pane_{num}", num
+    raw = str(pane_id or "").strip()
+    if not raw:
+        raise ValueError("pane_id no puede estar vacío")
+    if raw.isdigit():
+        return f"pane_{raw}", raw
+    if raw.startswith("pane_") and raw[5:]:
+        return raw, raw[5:]
+    return raw, raw
+
+
+class PaneRegistry:
+    """Registro thread-safe de paneles activos, tokens Bearer e interacción humana."""
+
+    def __init__(
+        self,
+        *,
+        collab_repo: Optional[Any] = None,
+        clock: Optional[Callable[[], float]] = None,
+    ) -> None:
+        self._collab_repo = collab_repo
+        self._clock: Callable[[], float] = clock or time.time
+        self._lock = threading.RLock()
+        self._panes: Dict[str, PaneSessionRecord] = {}
+        self._tokens: Dict[str, str] = {}
+        self._human_keystrokes: Dict[str, float] = {}
+
+    def register_pane(
+        self,
+        pane_id: int | str,
+        *,
+        node_uuid: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        cli_profile: str = "claude",
+        role: str = "implementer",
+        pid: Optional[int] = None,
+        session_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Registra o reemplaza la sesión de un panel, emitiendo un nuevo token único."""
+        norm_pane_id, pane_num = _normalize_pane_id(pane_id)
+        now = float(self._clock())
+        token = session_token or secrets.token_urlsafe(24)
+        resolved_node = node_uuid or f"pane_{pane_num}_{secrets.token_hex(4)}"
+        resolved_agent = agent_name or f"{cli_profile}-{norm_pane_id}"
+
+        with self._lock:
+            previous = self._panes.get(norm_pane_id)
+            if previous is not None and previous.session_token:
+                self._tokens.pop(previous.session_token, None)
+
+            # Garantizar que el mismo token no quede ligado a otro panel anterior.
+            self._tokens[token] = norm_pane_id
+            last_keystroke = self._human_keystrokes.get(norm_pane_id, 0.0)
+            record = PaneSessionRecord(
+                pane_id=norm_pane_id,
+                session_token=token,
+                node_uuid=resolved_node,
+                agent_name=resolved_agent,
+                cli_profile=cli_profile,
+                role=role,
+                pid=pid,
+                status="active",
+                created_at=now,
+                last_seen_at=now,
+                last_human_keystroke_at=last_keystroke,
+            )
+            self._panes[norm_pane_id] = record
+            payload = record.to_dict(include_token=True)
+
+        if self._collab_repo is not None:
+            reg_fn = getattr(self._collab_repo, "register_or_update_node", None)
+            if callable(reg_fn):
+                try:
+                    reg_fn(
+                        node_uuid=resolved_node,
+                        developer_name=resolved_agent,
+                        agent_id=cli_profile or resolved_agent,
+                        status="online",
+                        node_kind="agent",
+                    )
+                except Exception:
+                    logger.debug(
+                        "Fallo tolerado al registrar nodo %s en collab_repo",
+                        resolved_node,
+                        exc_info=True,
+                    )
+        return payload
+
+    def authenticate_token(self, token: str) -> Optional[PaneSessionRecord]:
+        """Autentica un token en tiempo constante sobre el mapa de tokens activos."""
+        if not isinstance(token, str) or not token:
+            return None
+
+        with self._lock:
+            matched_pane_id: Optional[str] = None
+            for active_token, pane_key in self._tokens.items():
+                if secrets.compare_digest(active_token, token):
+                    matched_pane_id = pane_key
+
+            if matched_pane_id is None:
+                return None
+
+            rec = self._panes.get(matched_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+
+            rec.last_seen_at = float(self._clock())
+            return rec
+
+    def get_pane(self, pane_id: int | str) -> Optional[PaneSessionRecord]:
+        """Obtiene el registro de sesión del panel si existe."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            return self._panes.get(norm_pane_id)
+
+    def resolve_actor_context(
+        self,
+        *,
+        token: Optional[str] = None,
+        pane_id: Optional[int | str] = None,
+        fallback_node_uuid: Optional[str] = None,
+    ) -> ActorContext:
+        """Resuelve un `ActorContext` ligado al panel autenticado o al `pane_id` activo."""
+        if token:
+            rec = self.authenticate_token(token)
+            if rec is not None:
+                return ActorContext(
+                    kind=ACTOR_AGENT_MCP,
+                    node_uuid=rec.node_uuid,
+                    pane_id=rec.pane_id,
+                    session_id=rec.pane_id,
+                )
+        if pane_id is not None:
+            rec = self.get_pane(pane_id)
+            if rec is not None and rec.status != "closed":
+                return ActorContext(
+                    kind=ACTOR_AGENT_MCP,
+                    node_uuid=rec.node_uuid,
+                    pane_id=rec.pane_id,
+                    session_id=rec.pane_id,
+                )
+        return ActorContext(
+            kind=ACTOR_AGENT_MCP,
+            node_uuid=fallback_node_uuid or "unknown",
+        )
+
+    def record_human_keystroke(
+        self,
+        pane_id: int | str,
+        timestamp: Optional[float] = None,
+    ) -> bool:
+        """Registra la marca temporal de la última pulsación humana sobre el panel."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            ts = float(timestamp) if timestamp is not None else float(self._clock())
+            self._human_keystrokes[norm_pane_id] = ts
+            rec = self._panes.get(norm_pane_id)
+            if rec is not None:
+                rec.last_human_keystroke_at = ts
+            return True
+
+    def is_human_typing_active(
+        self,
+        pane_id: int | str,
+        cooldown_seconds: float = 5.0,
+        now: Optional[float] = None,
+    ) -> bool:
+        """Indica si hubo actividad reciente de teclado humano dentro de `cooldown_seconds`."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if norm_pane_id in self._human_keystrokes:
+                last_ts = self._human_keystrokes[norm_pane_id]
+            elif rec is not None and rec.last_human_keystroke_at > 0.0:
+                last_ts = rec.last_human_keystroke_at
+            else:
+                return False
+            current_now = float(now) if now is not None else float(self._clock())
+            return (current_now - last_ts) < cooldown_seconds
+
+    def mark_pane_closed(self, pane_id: int | str) -> Optional[PaneSessionRecord]:
+        """Cierra la sesión del panel, revoca su token y marca el nodo offline en BD."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None:
+                return None
+            rec.status = "closed"
+            self._tokens.pop(rec.session_token, None)
+            node_uuid = rec.node_uuid
+
+        if self._collab_repo is not None:
+            offline_fn = getattr(self._collab_repo, "mark_node_offline", None)
+            if callable(offline_fn):
+                try:
+                    offline_fn(node_uuid)
+                except Exception:
+                    logger.debug(
+                        "Fallo tolerado al marcar nodo %s offline en collab_repo",
+                        node_uuid,
+                        exc_info=True,
+                    )
+        return rec
+
+    def list_panes(self, *, include_closed: bool = False) -> List[Dict[str, Any]]:
+        """Lista las sesiones de paneles sin exponer los tokens secretos."""
+        with self._lock:
+            return [
+                rec.to_dict(include_token=False)
+                for rec in self._panes.values()
+                if include_closed or rec.status != "closed"
+            ]
+
+
+class EmbeddedMcpHub:
+    """Ciclo de vida del Hub MCP embebido sobre `streamable-http` en loopback."""
+
+    def __init__(
+        self,
+        *,
+        kernel: Any,
+        pane_registry: Optional[PaneRegistry] = None,
+        host: str = "127.0.0.1",
+        port: int = 0,
+    ) -> None:
+        self.kernel = kernel
+        self.pane_registry = (
+            pane_registry
+            if pane_registry is not None
+            else PaneRegistry(collab_repo=getattr(kernel, "collab_repo", None))
+        )
+        self.host = host
+        self.port = port
+        self._lock = threading.RLock()
+        self._server: Optional[Any] = None
+        self._uv_server: Optional[Any] = None
+        self._sock: Optional[Any] = None
+        self._thread: Optional[threading.Thread] = None
+        self._url: Optional[str] = None
+
+    @property
+    def url(self) -> Optional[str]:
+        with self._lock:
+            return self._url
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return bool(
+                self._thread is not None
+                and self._thread.is_alive()
+                and self._uv_server is not None
+                and getattr(self._uv_server, "started", False)
+                and not getattr(self._uv_server, "should_exit", False)
+            )
+
+    def _cleanup_failed_start(
+        self,
+        uv_server: Any,
+        sock: Any,
+        server: Any,
+        thread: Optional[threading.Thread],
+    ) -> None:
+        if uv_server is not None:
+            uv_server.should_exit = True
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.5)
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        if server is not None:
+            handler = getattr(server, "mcp2p_handler", None)
+            if handler is not None and callable(getattr(handler, "close", None)):
+                handler.close()
+
+    def start(self, timeout_s: float = 5.0) -> str:
+        """Arranca el Hub MCP `streamable-http` en un hilo daemon de forma idempotente."""
+        import anyio
+
+        from src.mcp.server import build_streamable_http_server, create_mcp_server
+
+        with self._lock:
+            if self.is_running() and self._url:
+                return self._url
+
+            bind_host, bind_port = resolve_http_bind(self.host, self.port)
+            server = create_mcp_server(
+                kernel=self.kernel,
+                transport="streamable-http",
+                pane_registry=self.pane_registry,
+            )
+            uv_server, sock, url = build_streamable_http_server(server, bind_host, bind_port)
+
+            startup_errors: List[BaseException] = []
+
+            def _serve_target() -> None:
+                try:
+                    anyio.run(lambda: uv_server.serve(sockets=[sock]))
+                except BaseException as exc:  # pragma: no cover - ruta de error de arranque
+                    startup_errors.append(exc)
+
+            thread = threading.Thread(
+                target=_serve_target,
+                name="mcp2p-embedded-hub",
+                daemon=True,
+            )
+            thread.start()
+
+            deadline = time.monotonic() + max(0.1, float(timeout_s))
+            while not getattr(uv_server, "started", False):
+                if startup_errors:
+                    self._cleanup_failed_start(uv_server, sock, server, thread)
+                    raise RuntimeError(f"Error arrancando EmbeddedMcpHub: {startup_errors[0]}") from startup_errors[0]
+                if not thread.is_alive():
+                    self._cleanup_failed_start(uv_server, sock, server, thread)
+                    raise RuntimeError("EmbeddedMcpHub terminó inesperadamente antes de iniciar.")
+                if time.monotonic() >= deadline:
+                    self._cleanup_failed_start(uv_server, sock, server, thread)
+                    raise TimeoutError(f"EmbeddedMcpHub no arrancó en {timeout_s}s ({url})")
+                time.sleep(0.02)
+
+            self._server = server
+            self._uv_server = uv_server
+            self._sock = sock
+            self._thread = thread
+            self._url = url
+            return url
+
+    def stop(self, timeout_s: float = 3.0) -> None:
+        """Detiene limpiamente el Hub HTTP sin cerrar la base de datos del kernel compartido."""
+        with self._lock:
+            uv_server = self._uv_server
+            thread = self._thread
+            sock = self._sock
+            server = self._server
+            self._uv_server = None
+            self._thread = None
+            self._sock = None
+            self._server = None
+            self._url = None
+
+        if uv_server is not None:
+            uv_server.should_exit = True
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(0.1, float(timeout_s)))
+            if thread.is_alive() and uv_server is not None:
+                uv_server.force_exit = True
+                thread.join(timeout=1.0)
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        if server is not None:
+            handler = getattr(server, "mcp2p_handler", None)
+            if handler is not None and callable(getattr(handler, "close", None)):
+                handler.close()

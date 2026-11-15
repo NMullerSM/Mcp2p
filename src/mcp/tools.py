@@ -19,6 +19,11 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
+from src.mcp.pane_registry import (
+    PaneRegistry,
+    PaneSessionRecord,
+    get_current_pane_session,
+)
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
@@ -88,6 +93,7 @@ class MCPToolsHandler:
         bus: Optional[A2ABus] = None,
         event_bus: Optional[Any] = None,
         owns_kernel: Optional[bool] = None,
+        pane_registry: Optional[PaneRegistry] = None,
     ) -> None:
         if kernel is None:
             db = db_manager or DatabaseManager.get_instance()
@@ -102,11 +108,17 @@ class MCPToolsHandler:
         self.kernel = kernel
         self.db = kernel.db
         self.bus = kernel.bus
+        self.pane_registry = pane_registry
+        self._bound_session_token: Optional[str] = None
         okf = kernel.okf_adapter
         if okf is None:
             okf = OKFAdapter()
             kernel.register_connector(CoreKernel.PORT_OKF, okf)
         self.okf = okf
+
+    def bind_session_token(self, token: Optional[str]) -> None:
+        """Vincula o limpia un token de sesión de panel para llamadas locales del handler (EGM-22)."""
+        self._bound_session_token = token
 
     def close(self) -> None:
         """Cierra el kernel asociado respetando `_owns_kernel` (`close_db=False` si es compartido, EGM-60)."""
@@ -117,9 +129,90 @@ class MCPToolsHandler:
             except TypeError:
                 close_fn()
 
-    def _agent(self, node_uuid: Optional[str] = None) -> ActorContext:
-        """Actor no humano del canal MCP (identidad autodeclarada por el agente, EGM-22)."""
-        return ActorContext(kind=ACTOR_AGENT_MCP, node_uuid=(node_uuid or self.kernel.node_uuid))
+    def _resolve_active_pane_session(
+        self,
+        *,
+        session_token: Optional[str] = None,
+    ) -> tuple[Optional[PaneSessionRecord], Optional[str]]:
+        """Localiza y valida la sesión de panel activa sin caer en identidad autodeclarada."""
+        ctx_rec = get_current_pane_session()
+        if ctx_rec is not None:
+            if getattr(ctx_rec, "status", "active") == "closed":
+                return None, "INVALID_PANE_SESSION_TOKEN"
+            return ctx_rec, None
+
+        if session_token is not None:
+            token: Optional[str] = session_token
+        elif self._bound_session_token is not None:
+            token = self._bound_session_token
+        else:
+            token = os.environ.get("MCP2P_SESSION_TOKEN") or None
+
+        auth_fn = getattr(self.pane_registry, "authenticate_token", None)
+        if token is not None and callable(auth_fn):
+            rec = auth_fn(token)
+            if rec is None:
+                return None, "INVALID_PANE_SESSION_TOKEN"
+            return rec, None
+        return None, None
+
+    def _resolve_authenticated_node_uuid(
+        self,
+        declared_node_uuid: Optional[str] = None,
+        *,
+        session_token: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Valida `declared_node_uuid` contra la sesión de panel autenticada (EGM-22)."""
+        rec, err_code = self._resolve_active_pane_session(session_token=session_token)
+        if err_code is not None:
+            return None, err_code
+        if rec is not None:
+            declared_clean = declared_node_uuid.strip() if isinstance(declared_node_uuid, str) else ""
+            if declared_clean and declared_clean != rec.node_uuid:
+                return None, "NODE_UUID_SPOOFING_FORBIDDEN"
+            return rec.node_uuid, None
+        return declared_node_uuid, None
+
+    @staticmethod
+    def _auth_error_response(err_code: str) -> str:
+        messages = {
+            "INVALID_PANE_SESSION_TOKEN": (
+                "EGM-22: Token de sesión de panel inválido, expirado o revocado."
+            ),
+            "NODE_UUID_SPOOFING_FORBIDDEN": (
+                "EGM-22: El node_uuid declarado no coincide con la identidad autenticada del panel."
+            ),
+        }
+        return json.dumps(
+            {
+                "success": False,
+                "code": err_code,
+                "error": messages.get(err_code, f"EGM-22: Error de autenticación ({err_code})."),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    def _agent(
+        self,
+        node_uuid: Optional[str] = None,
+        *,
+        pane_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> ActorContext:
+        """Actor no humano del canal MCP ligado a la sesión de panel cuando existe (EGM-22)."""
+        ctx_rec = get_current_pane_session()
+        if ctx_rec is None and (pane_id is None or session_id is None):
+            ctx_rec, _ = self._resolve_active_pane_session()
+        eff_pane = pane_id if pane_id is not None else (ctx_rec.pane_id if ctx_rec is not None else None)
+        eff_session = session_id if session_id is not None else (ctx_rec.pane_id if ctx_rec is not None else None)
+        eff_node = node_uuid or (ctx_rec.node_uuid if ctx_rec is not None else None) or self.kernel.node_uuid
+        return ActorContext(
+            kind=ACTOR_AGENT_MCP,
+            node_uuid=eff_node,
+            pane_id=eff_pane,
+            session_id=eff_session,
+        )
 
     def _wrap_response(self, project_uuid: Optional[str], result_data: Dict[str, Any]) -> str:
         """
@@ -225,23 +318,27 @@ class MCPToolsHandler:
         self,
         project_uuid: str,
         card_id: str,
-        node_uuid: str,
+        node_uuid: Optional[str] = None,
         duration_minutes: int = 30
     ) -> str:
         """
         Adquiere una tarea atómicamente asignando un lease exclusivo con expiración temporal.
         Si otro agente mantiene un lease activo no expirado, la solicitud es rechazada para prevenir colisiones.
         """
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(node_uuid)
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+        effective_node = resolved_node or self.kernel.node_uuid
         try:
             card = self.kernel.kanban.claim_lease(
                 project_uuid=project_uuid,
                 card_id=card_id,
-                actor=self._agent(node_uuid),
+                actor=self._agent(effective_node),
                 duration_minutes=duration_minutes,
             )["card"]
             return json.dumps({
                 "success": True,
-                "message": f"Tarea {card_id} adquirida exitosamente por {node_uuid}",
+                "message": f"Tarea {card_id} adquirida exitosamente por {effective_node}",
                 "lease_expires_at": card.get("lease_expires_at"),
                 "card": card
             }, indent=2, ensure_ascii=False)
@@ -258,7 +355,7 @@ class MCPToolsHandler:
         self,
         project_uuid: str,
         card_id: str,
-        node_uuid: str,
+        node_uuid: Optional[str] = None,
         target_status: str = "in_review",
         branch_ref: Optional[str] = None,
         dispute_reason: Optional[str] = None,
@@ -272,13 +369,17 @@ class MCPToolsHandler:
         técnico en el Tribunal de Honor Borda (salvo que auto_open_ticket=False), vinculando la tarea
         y evitando disputas huérfanas sin arbitraje.
         """
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(node_uuid)
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+        effective_node = resolved_node or self.kernel.node_uuid
         try:
             # Toda la política (estado válido, titularidad, EGM-35, ticket automático en
             # 'disputed') vive en KanbanGovernanceService.release_lease.
             res = self.kernel.kanban.release_lease(
                 project_uuid=project_uuid,
                 card_id=card_id,
-                actor=self._agent(node_uuid),
+                actor=self._agent(effective_node),
                 target_status=target_status,
                 branch_ref=branch_ref,
                 dispute_reason=dispute_reason,
@@ -359,15 +460,27 @@ class MCPToolsHandler:
     def send_coordination_rfc(
         self,
         project_uuid: str,
-        sender_node_uuid: str,
-        stage: str,
-        session_id: str,
-        payload_json: Any,
-        card_id: Optional[str] = None
+        sender_node_uuid: Optional[str] = None,
+        stage: str = "PROPOSAL",
+        session_id: str = "",
+        payload_json: Any = None,
+        card_id: Optional[str] = None,
+        node_uuid: Optional[str] = None,
     ) -> str:
         """
         Envía un turno dentro del protocolo RFC Dialéctico de 3 turnos (PROPOSAL, COUNTER_PROPOSAL, RESOLUTION).
         """
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(node_uuid)
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+        if sender_node_uuid:
+            resolved_sender, sender_err = self._resolve_authenticated_node_uuid(sender_node_uuid)
+            if sender_err is not None:
+                return self._auth_error_response(sender_err)
+            sender_node_uuid = resolved_sender or sender_node_uuid
+        else:
+            sender_node_uuid = resolved_node or ""
+        _actor = self._agent(sender_node_uuid or None)
         try:
             if isinstance(payload_json, dict):
                 data = payload_json
@@ -1226,13 +1339,18 @@ class MCPToolsHandler:
         ticket_id: str,
         agent_id: str,
         evaluations_json: str,
-        rationale: str = ""
+        rationale: str = "",
+        node_uuid: Optional[str] = None,
     ) -> str:
         """
         Emite la evaluación técnica ponderada (1.5) del agente en un Juicio de Honor.
         evaluations_json: Dict con opciones ('OPTION_A', 'OPTION_B', 'THIRD_WAY_C')
         y sus notas (kiss, performance, security, ux_hicks, testability).
         """
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(node_uuid)
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+        _actor = self._agent(resolved_node)
         try:
             ticket = self.db.get_dispute_ticket(ticket_id)
             if not ticket:
@@ -1431,7 +1549,7 @@ class MCPToolsHandler:
             handler_tools = [
                 m for m in dir(self)
                 if not m.startswith("_") and callable(getattr(self, m))
-                and m not in ("bus", "db", "okf", "kernel", "close")
+                and m not in ("bus", "db", "okf", "kernel", "close", "bind_session_token", "pane_registry")
             ]
             count = len(handler_tools)
         else:

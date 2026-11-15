@@ -424,6 +424,9 @@ class SqliteCollaborationRepository(_BaseSqliteRepository):
     def get_node_by_uuid(self, node_uuid: str) -> Optional[Dict[str, Any]]:
         return self.db.get_node_by_uuid(node_uuid)
 
+    def mark_node_offline(self, node_uuid: str) -> bool:
+        return self.db.mark_node_offline(node_uuid)
+
     def add_or_request_collaborator(
         self,
         project_uuid: str,
@@ -453,8 +456,15 @@ class SqliteCollaborationRepository(_BaseSqliteRepository):
     ) -> Optional[Dict[str, Any]]:
         return self.db.get_unresolved_or_approved_collaborator_by_pubkey(project_uuid, public_key)
 
-    def get_project_collaborators(self, project_uuid: str) -> List[Dict[str, Any]]:
-        return self.db.get_project_collaborators(project_uuid)
+    def get_project_collaborators(
+        self, project_uuid: str, online_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        return self.db.get_project_collaborators(project_uuid, online_only=online_only)
+
+    def list_collaborators(
+        self, project_uuid: str, online_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        return self.db.list_collaborators(project_uuid, online_only=online_only)
 
     def get_project_collaborators_map(self, project_uuid: str) -> Dict[str, Dict[str, Any]]:
         return self.db.get_project_collaborators_map(project_uuid)
