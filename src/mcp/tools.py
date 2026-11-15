@@ -172,7 +172,12 @@ class MCPToolsHandler:
         self._bound_session_token = token
 
     def close(self) -> None:
-        """Cierra el kernel y el relay propio respetando `_owns_kernel` (`close_db=False` si es compartido, EGM-60)."""
+        """Cierra el relay propio y, SOLO si el handler es dueño del kernel, el kernel (EGM-60/EGM-65).
+
+        Un kernel compartido (el de la GUI, usado por `EmbeddedMcpHub`) no se toca: `CoreKernel.close`
+        cierra todos sus conectores (terminales PTY, red P2P...) aunque `close_db=False`, y el Hub se
+        detiene también cuando falla su arranque, con la aplicación todavía en uso.
+        """
         if self._owned_relay_orchestrator is not None:
             close_relay = getattr(self._owned_relay_orchestrator, "close", None)
             if callable(close_relay):
@@ -181,6 +186,8 @@ class MCPToolsHandler:
                 except Exception:
                     pass
             self._owned_relay_orchestrator = None
+        if not self._owns_kernel:
+            return
         close_fn = getattr(self.kernel, "close", None)
         if callable(close_fn):
             try:
