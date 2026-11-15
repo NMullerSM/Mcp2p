@@ -38,6 +38,7 @@ import {
   saveNavbarConfig,
   NAVBAR_CONFIG_EVENT
 } from './AppHeader';
+import { SigningKeySection } from './SigningKeySection';
 
 export function SettingsDrawer({
   isOpen,
@@ -1581,6 +1582,9 @@ export function SettingsDrawer({
                   <RefreshCw size={13} /> Comprobar Detección de CLI
                 </button>
               </div>
+
+              {/* Firma humana: cifrado opcional de la clave Ed25519 (Gate 0c / EGM-53) */}
+              <SigningKeySection api={api} />
             </div>
           )}
 
