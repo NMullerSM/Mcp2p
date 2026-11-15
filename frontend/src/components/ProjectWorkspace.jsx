@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Search, X, Tag, Filter, Plus } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { KanbanBoard } from './KanbanBoard';
 import { OKFGovernanceView } from './OKFGovernanceView';
 import { CollaboratorsView } from './CollaboratorsView';
@@ -7,6 +7,8 @@ import { BranchConsensusView } from './BranchConsensusView';
 import { HumanApprovalsView } from './HumanApprovalsView';
 import { SwarmTerminalMatrix } from './SwarmTerminalMatrix';
 import { CardDetailModal } from './Modals';
+import { ViewSliderProvider } from './ViewSlider';
+import { KanbanSliderTools } from './KanbanSliderTools';
 import { useProjectPulse } from '../hooks/useProjectPulse';
 import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
 
@@ -73,6 +75,7 @@ export function ProjectWorkspace({
 
   const [selectedTag, setSelectedTag] = useState('all');
   const [nodeStatusFilter, setNodeStatusFilter] = useState('all');
+  const [branchFilter, setBranchFilter] = useState('all');
   const [tagsIndex, setTagsIndex] = useState({});
 
   const loadCards = useCallback(async () => {
@@ -139,6 +142,14 @@ export function ProjectWorkspace({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [cards]);
 
+  const availableBranches = useMemo(() => {
+    const set = new Set();
+    cards.forEach(c => {
+      if (c.branch_ref) set.add(c.branch_ref);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [cards]);
+
   const filteredCards = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const tagPaths = selectedTag !== 'all' ? (tagsIndex?.[selectedTag] || []) : [];
@@ -187,14 +198,16 @@ export function ProjectWorkspace({
         }
       }
 
+      if (branchFilter !== 'all' && card.branch_ref !== branchFilter) return false;
+
       return true;
     });
-  }, [cards, searchQuery, selectedTag, nodeStatusFilter, tagsIndex]);
+  }, [cards, searchQuery, selectedTag, nodeStatusFilter, branchFilter, tagsIndex]);
 
   const hasActiveFilter = Boolean(
     searchQuery.trim() ||
     ((normalizedTab === 'kanban' || normalizedTab === 'okf') && selectedTag !== 'all') ||
-    (normalizedTab === 'kanban' && nodeStatusFilter !== 'all')
+    (normalizedTab === 'kanban' && (nodeStatusFilter !== 'all' || branchFilter !== 'all'))
   );
 
   const searchMeta = SEARCH_META_BY_TAB[normalizedTab] || SEARCH_META_BY_TAB.kanban;
@@ -362,6 +375,7 @@ export function ProjectWorkspace({
   };
 
   return (
+    <ViewSliderProvider viewKey={normalizedTab} suspended={Boolean(selectedCard)}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', overflow: 'hidden', minHeight: 0 }}>
       {/* Barra Modular Contextual por Pestaña (38px) */}
       <div className="mcp-toolbar" data-testid="workspace-toolbar">
@@ -416,57 +430,6 @@ export function ProjectWorkspace({
             )}
           </div>
 
-          {/* Filtro por Tag OKF: contextual en Kanban y Gobernanza OKF */}
-          {(normalizedTab === 'kanban' || normalizedTab === 'okf') && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <Tag size={12} color="var(--text-muted)" className="mcp-hide-compact" />
-              <select
-                data-testid="workspace-tag-filter"
-                aria-label="Filtrar por Tag OKF"
-                className="mcp-combobox"
-                value={selectedTag}
-                onChange={(e) => setSelectedTag(e.target.value)}
-                style={{ height: '26px', fontSize: '11.5px', maxWidth: '170px' }}
-              >
-                <option value="all">Todos los Tags OKF</option>
-                {availableTags.map(tag => (
-                  <option key={tag} value={tag}>#{tag}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Filtro por Nodo / Estado: específico de Tablero Kanban */}
-          {normalizedTab === 'kanban' && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <Filter size={12} color="var(--text-muted)" className="mcp-hide-compact" />
-              <select
-                data-testid="workspace-node-status-filter"
-                aria-label="Filtrar por Nodo o Estado"
-                className="mcp-combobox"
-                value={nodeStatusFilter}
-                onChange={(e) => setNodeStatusFilter(e.target.value)}
-                style={{ height: '26px', fontSize: '11.5px', maxWidth: '185px' }}
-              >
-                <option value="all">Todos los Nodos / Estados</option>
-                <optgroup label="Estado">
-                  <option value="status:backlog">Por Hacer</option>
-                  <option value="status:in_progress">En Proceso</option>
-                  <option value="status:in_review">En Revisión</option>
-                  <option value="status:merged">Fusionado / Consolidado</option>
-                </optgroup>
-                <optgroup label="Nodo Asignado">
-                  <option value="node:__unassigned__">Sin asignar</option>
-                  {availableNodes.map(nodeUuid => (
-                    <option key={nodeUuid} value={`node:${nodeUuid}`}>
-                      {nodeUuid.slice(0, 14)}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-            </div>
-          )}
-
           {hasActiveFilter && (
             <button
               type="button"
@@ -477,6 +440,7 @@ export function ProjectWorkspace({
                 }
                 if (normalizedTab === 'kanban') {
                   setNodeStatusFilter('all');
+                  setBranchFilter('all');
                 }
               }}
               style={{
@@ -496,40 +460,11 @@ export function ProjectWorkspace({
           )}
         </div>
 
-        {/* Acciones Derecha de Barra Modular: Nueva Tarea (solo Kanban) + Split Contextual */}
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-          {normalizedTab === 'kanban' && onNewTask && (
-            <button
-              type="button"
-              data-testid="kanban-new-task-btn"
-              onClick={onNewTask}
-              title="Crear Nueva Tarea Kanban (Ctrl+N)"
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                height: '26px',
-                padding: '0 10px',
-                fontSize: '11.5px',
-                fontWeight: 600,
-                borderRadius: 'var(--radius-sm)',
-                border: 'none',
-                backgroundColor: 'var(--accent-primary)',
-                color: '#ffffff',
-                cursor: 'pointer',
-                flexShrink: 0
-              }}
-            >
-              <Plus size={13} />
-              <span>Nueva Tarea</span>
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Main Workspace View Content (el patrón de Vista Dual/Split fue retirado: el
-          contenido secundario de cada vista ahora vive en su propio drawer lateral,
-          ver HumanApprovalsView, BranchConsensusView, KanbanBoard y CollaboratorsView) */}
+          contenido secundario de cada vista ahora vive en el slider lateral derecho,
+          ver ViewSlider.jsx) */}
       <div style={{ flex: 1, overflow: 'hidden', padding: '14px 18px', minHeight: 0 }}>
         {renderPrimaryView()}
       </div>
@@ -550,7 +485,28 @@ export function ProjectWorkspace({
         }}
       />
 
+      {/* Slider lateral derecho: cada vista registra aqui su contenido secundario
+          (ViewSliderContent). El de Kanban vive en este archivo porque comparte los
+          filtros con el tablero; el resto lo registra su propia vista. */}
+      {normalizedTab === 'kanban' && (
+        <KanbanSliderTools
+          cards={cards}
+          filteredCount={filteredCards.length}
+          availableTags={availableTags}
+          availableNodes={availableNodes}
+          availableBranches={availableBranches}
+          selectedTag={selectedTag}
+          onTagChange={setSelectedTag}
+          nodeStatusFilter={nodeStatusFilter}
+          onNodeStatusChange={setNodeStatusFilter}
+          branchFilter={branchFilter}
+          onBranchChange={setBranchFilter}
+          onNewTask={onNewTask}
+        />
+      )}
+
       {unlockDialog}
     </div>
+    </ViewSliderProvider>
   );
 }

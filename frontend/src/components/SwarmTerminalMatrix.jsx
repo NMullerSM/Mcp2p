@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ViewSliderContent } from './ViewSlider';
 import {
   Terminal,
   Play,
@@ -819,6 +820,15 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
         overflow: 'hidden'
       }}
     >
+      {/* Slot del slider lateral derecho (pestana en el borde). Registrado y vacio a
+          proposito: los controles de terminales se montan aqui como hijos de
+          <ViewSliderContent> (seccion 4 del plan). */}
+      <ViewSliderContent
+        title="Terminales"
+        subtitle="Controles del enjambre"
+        data-testid="terminals-slider"
+      />
+
       {/* Barra superior de la matriz */}
       <div
         data-testid="matrix-header-bar"
