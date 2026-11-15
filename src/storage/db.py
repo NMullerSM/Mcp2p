@@ -9,11 +9,9 @@ from __future__ import annotations
 import os
 import json
 import logging
-import platform
 import queue
 import re
 import sqlite3
-import subprocess
 import threading
 import uuid
 from contextlib import contextmanager
@@ -22,20 +20,23 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 
-from src.app.identity import local_node_uuid
-from src.app.paths import get_default_db_path
+# EGM-55: identidad y rutas vienen del paquete neutral `src.runtime`, no de la capa `app`.
+from src.runtime.identity import local_node_uuid
+from src.runtime.paths import get_default_db_path
 from src.storage.validators import validate_safe_id
 
 logger = logging.getLogger("mcp2p.storage.db")
 
 
-def _run_git_logged(args: List[str], cwd: Path, creationflags: int = 0) -> subprocess.CompletedProcess:
-    """Ejecuta git y registra un warning con stderr si el código de salida no es 0 (no lanza)."""
-    res = subprocess.run(args, cwd=str(cwd), capture_output=True, creationflags=creationflags)
-    if res.returncode != 0:
-        err = (res.stderr or b"").decode("utf-8", errors="replace").strip()
-        logger.warning("git %s falló en %s (código %s): %s", " ".join(args[1:3]), cwd, res.returncode, err[:300])
-    return res
+def _default_workspace_effects() -> Tuple[Any, Any]:
+    """Cableado por defecto de los efectos en disco (OKF real + git) cuando nadie inyecta nada.
+
+    Import diferido a propósito: este módulo no depende estáticamente de OKF ni de git (EGM-55);
+    el dueño del cableado es `src.adapters.provisioning.defaults`.
+    """
+    from src.adapters.provisioning.defaults import build_default_workspace_effects
+
+    return build_default_workspace_effects()
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -134,7 +135,19 @@ class DatabaseManager:
     _lock = threading.RLock()
     _POOL_MAX_SIZE: int = 4
 
-    def __init__(self, db_path: Optional[str | Path] = None) -> None:
+    def __init__(
+        self,
+        db_path: Optional[str | Path] = None,
+        *,
+        card_projector: Optional[Any] = None,
+        project_provisioner: Optional[Any] = None,
+    ) -> None:
+        """`card_projector` (`CardProjectionPort`) y `project_provisioner` (`ProjectProvisioningPort`)
+        reciben los efectos en disco que antes estaban aquí dentro (EGM-55). Si no se inyectan se
+        usa el cableado por defecto, que conserva el comportamiento histórico: toda mutación de
+        tarjeta escribe su YAML OKF y `create_project` andamia OKF y repos git."""
+        self._card_projector = card_projector
+        self._project_provisioner = project_provisioner
         self.db_path = resolve_db_path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_lock = threading.Lock()
@@ -151,6 +164,27 @@ class DatabaseManager:
         self._initialize_schema()
         self._anchor_conn = self._create_anchor_connection()
         self._ensure_default_project()
+
+    def configure_workspace_effects(
+        self,
+        *,
+        card_projector: Optional[Any] = None,
+        project_provisioner: Optional[Any] = None,
+    ) -> None:
+        """Sustituye en caliente los colaboradores de efectos en disco (solo los que se pasan)."""
+        if card_projector is not None:
+            self._card_projector = card_projector
+        if project_provisioner is not None:
+            self._project_provisioner = project_provisioner
+
+    def _workspace_effects(self) -> Tuple[Any, Any]:
+        if self._card_projector is None or self._project_provisioner is None:
+            projector, provisioner = _default_workspace_effects()
+            if self._card_projector is None:
+                self._card_projector = projector
+            if self._project_provisioner is None:
+                self._project_provisioner = provisioner
+        return self._card_projector, self._project_provisioner
 
     @classmethod
     def get_instance(cls, db_path: Optional[str | Path] = None) -> DatabaseManager:
@@ -737,65 +771,16 @@ class DatabaseManager:
         app_dir.mkdir(parents=True, exist_ok=True)
         gov_dir.mkdir(parents=True, exist_ok=True)
 
-        # Inicializar OKF estándar en el repositorio de gobernanza
-        from src.storage.okf_adapter import OKFAdapter
-        okf_adapter = OKFAdapter()
-        okf_adapter.initialize_project_okf(gov_dir, name, p_uuid)
-
-        if init_git:
-            # Configurar flags de subprocess para evitar CMD flashing en Windows
-            creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-
-            # 1. Inicializar repo de código si no existe .git
-            if not (app_dir / ".git").exists():
-                _run_git_logged(["git", "init", "-b", "main"], app_dir, creationflags)
-                _run_git_logged(["git", "config", "core.autocrlf", "false"], app_dir, creationflags)
-                readme = app_dir / "README.md"
-                if not readme.exists():
-                    readme.write_text(f"# {name}\n\nEspacio de desarrollo local-first gestionado por MCP2P.\nUUID: `{p_uuid}`\n", encoding="utf-8")
-                _run_git_logged(["git", "add", "."], app_dir, creationflags)
-                _run_git_logged(["git", "commit", "-m", f"chore(init): initialize {clean_name} development workspace"], app_dir, creationflags)
-
-            # 2. Inicializar repo de gobernanza con rama huérfana aislada
-            if not (gov_dir / ".git").exists():
-                _run_git_logged(["git", "init", "-b", "main"], gov_dir, creationflags)
-                _run_git_logged(["git", "config", "core.autocrlf", "false"], gov_dir, creationflags)
-
-                # Commit inicial de OKF en main
-                marker = gov_dir / ".okf_project.json"
-                marker.write_text(f'{{"project_uuid": "{p_uuid}", "name": "{name}"}}\n', encoding="utf-8")
-                _run_git_logged(["git", "add", "."], gov_dir, creationflags)
-                _run_git_logged(["git", "commit", "-m", f"init(okf): initialize governance master branch for {p_uuid}"], gov_dir, creationflags)
-
-                # Desacoplar la rama huérfana en un worktree dentro de .git para no ensuciar main
-                orphan_branch = f"orphan-conversa-memory-{p_uuid}"
-                orphan_wt_path = gov_dir / ".git" / "orphan_worktree"
-                _run_git_logged(
-                    ["git", "worktree", "add", "--orphan", "-b", orphan_branch, str(orphan_wt_path)],
-                    gov_dir, creationflags
-                )
-                if orphan_wt_path.exists():
-                    conversa_readme = orphan_wt_path / "README_CONVERSA.md"
-                    conversa_readme.write_text(
-                        f"# Memoria Conversacional Desacoplada\n\nProyecto: {name} ({p_uuid})\nRama: {orphan_branch}\n",
-                        encoding="utf-8"
-                    )
-                    _run_git_logged(["git", "add", "."], orphan_wt_path, creationflags)
-                    _run_git_logged(
-                        ["git", "commit", "-m", f"init(orphan): initialize conversation memory branch for {p_uuid}"],
-                        orphan_wt_path, creationflags
-                    )
-
-            # 3. Instalar hooks de Git para sincronización en tiempo real
-            for d in (app_dir, gov_dir):
-                hooks_dir = d / ".git" / "hooks"
-                if hooks_dir.is_dir():
-                    post_commit = hooks_dir / "post-commit"
-                    post_commit.write_text("#!/bin/sh\ntouch .git_pulse 2>/dev/null || true\n", encoding="utf-8")
-                    try:
-                        post_commit.chmod(0o755)
-                    except Exception:
-                        pass
+        # EGM-55: estructura OKF y doble repo git los prepara el aprovisionador inyectado.
+        _, provisioner = self._workspace_effects()
+        provisioner.provision_project(
+            name=name,
+            project_uuid=p_uuid,
+            clean_name=clean_name,
+            app_dir=app_dir,
+            gov_dir=gov_dir,
+            init_git=init_git,
+        )
 
         with self._write_lock, self.get_connection() as conn:
             with conn:
@@ -990,9 +975,9 @@ class DatabaseManager:
     # ==========================
 
     def _sync_card_to_okf_yaml(self, project_uuid: str, card_data: Dict[str, Any]) -> None:
-        """Sincroniza atómicamente la tarjeta modificada al archivo YAML en governance/kanban/cards/
-        y comitea el cambio a git con un mensaje que lleva el título y la descripción de la
-        tarjeta, para que el historial de gobernanza quede versionado y no huérfano."""
+        """Proyecta la tarjeta modificada a su YAML en governance/kanban/cards/ (y su commit de
+        gobernanza) a través del `CardProjectionPort` inyectado (EGM-55). Un fallo de la proyección
+        se registra y nunca revierte la escritura SQL."""
         try:
             proj = self.get_project_by_uuid(project_uuid)
             if not proj or not proj.get("gov_repo_path"):
@@ -1000,19 +985,8 @@ class DatabaseManager:
             gov_dir = Path(proj["gov_repo_path"])
             if not gov_dir.exists():
                 return
-            from src.storage.okf_adapter import OKFAdapter
-            okf = OKFAdapter()
-            yaml_path = okf.write_card_yaml(gov_dir, card_data)
-
-            card_id = card_data.get("card_id") or card_data.get("id") or "UNKNOWN"
-            status = card_data.get("status", "")
-            title = (card_data.get("title") or "").strip()
-            description = (card_data.get("description") or "").strip()
-            commit_message = f"sync(kanban): {card_id} [{status}] {title}"
-            if description:
-                commit_message += f"\n\n{description}"
-            should_push = status != "in_review"
-            okf.commit_gov_file(gov_dir, yaml_path, commit_message, push_now=should_push)
+            projector, _ = self._workspace_effects()
+            projector.project_card(gov_dir, card_data)
         except Exception as exc:
             logger.warning(f"Error sincronizando tarjeta {card_data.get('card_id')} a YAML OKF: {exc}")
 

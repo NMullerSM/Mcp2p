@@ -25,7 +25,7 @@ from src.adapters.persistence.sqlite_repositories import (
     SqliteProjectRepository,
     SqliteTribunalRepository,
 )
-from src.app.identity import local_node_uuid
+from src.runtime.identity import local_node_uuid
 from src.core.events import DomainEventBus
 from src.core.kernel import CoreKernel
 from src.core.services.kanban_service import KanbanGovernanceService
@@ -142,7 +142,15 @@ class ApplicationFactory:
             db = db_manager
         else:
             resolved_path = resolve_db_path(db_path)
-            db = DatabaseManager(db_path=resolved_path)
+            # EGM-55: la fábrica es dueña del cableado de los efectos en disco de la persistencia.
+            from src.adapters.provisioning.defaults import build_default_workspace_effects
+
+            card_projector, project_provisioner = build_default_workspace_effects()
+            db = DatabaseManager(
+                db_path=resolved_path,
+                card_projector=card_projector,
+                project_provisioner=project_provisioner,
+            )
 
         resolved_node_uuid = (node_uuid or "").strip() or local_node_uuid()
 

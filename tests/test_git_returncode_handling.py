@@ -65,10 +65,11 @@ def test_create_project_logs_git_failures(tmp_path, monkeypatch, caplog):
     _git_env(monkeypatch)
     db = DatabaseManager(str(tmp_path / "test.db"))
 
-    import src.storage.db as db_mod
-    monkeypatch.setattr(db_mod.subprocess, "run", _fake_run_failing_on("commit"))
+    # EGM-55: el git de create_project vive en el andamiaje inyectado, no en db.py.
+    import src.adapters.provisioning.git_scaffolder as scaffold_mod
+    monkeypatch.setattr(scaffold_mod.subprocess, "run", _fake_run_failing_on("commit"))
 
-    caplog.set_level("WARNING", logger="mcp2p.storage.db")
+    caplog.set_level("WARNING", logger="mcp2p.adapters.provisioning.git")
     proj = db.create_project(name="NoCommit", base_path=str(tmp_path / "ws"), init_git=True)
     assert proj.get("project_uuid")
     assert any("commit" in r.getMessage() and "simulated" in r.getMessage() for r in caplog.records)

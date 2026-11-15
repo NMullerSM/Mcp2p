@@ -8,6 +8,11 @@ from src.core.ports.connectors import (
     PeerMeshPort,
     RestConnectorPort,
 )
+from src.core.ports.workspace_effects import (
+    CardProjectionPort,
+    GitRepositoryScaffoldPort,
+    ProjectProvisioningPort,
+)
 from src.core.ports.repositories import (
     CollaborationRepositoryPort,
     ExtensionRegistryRepositoryPort,
@@ -30,4 +35,7 @@ __all__ = [
     "RestConnectorPort",
     "AgentTerminalPort",
     "GitWorkspacePort",
+    "CardProjectionPort",
+    "ProjectProvisioningPort",
+    "GitRepositoryScaffoldPort",
 ]
