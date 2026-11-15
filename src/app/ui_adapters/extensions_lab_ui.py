@@ -18,7 +18,13 @@ from src.adapters.outbound.extension_gate import (
     OutboundRestConnector,
     SignedConnectorManifest,
 )
-from src.adapters.terminal.cli_catalog import CliCatalogService, has_control_chars
+from src.adapters.terminal.cli_catalog import (
+    CatalogValidationError,
+    CliCatalogService,
+    has_control_chars,
+    validate_install_command,
+)
+from src.adapters.terminal.cli_install import InstallConfirmationBroker
 from src.adapters.terminal.pty_host import (
     DEFAULT_MANUAL_COMMAND,
     HARD_MAX_PANES,
@@ -73,6 +79,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         self._pane_registry: Optional[PaneRegistry] = None
         self._embedded_hub: Optional[EmbeddedMcpHub] = None
         self._null_terminal_connector: Optional[NullAgentTerminalConnector] = None
+        self._install_broker: Optional[InstallConfirmationBroker] = None
 
     def _get_gate(self) -> ExtensionSecurityGate:
         gate = self.extension_gate
@@ -752,6 +759,195 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 repo.set_extension_setting(MAX_PANES_SETTING_NAMESPACE, MAX_PANES_SETTING_KEY, str(applied))
             return {"success": True, "code": "OK", "max_panes": applied, "hard_max_panes": HARD_MAX_PANES,
                     "message": f"Maximo de paneles: {applied}."}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    # ------------------------------------------------------------------
+    # Instalar un CLI si falta (T3): dos pasos, lista cerrada, token de un solo uso
+    # ------------------------------------------------------------------
+
+    def _get_install_broker(self) -> InstallConfirmationBroker:
+        with self._terminal_lock:
+            if self._install_broker is None:
+                self._install_broker = InstallConfirmationBroker()
+            return self._install_broker
+
+    def _plan_install(self, cli_id: Any) -> tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """Resuelve el instalador del catalogo del repo; `(plan, error)`. Nunca toma un comando del JS."""
+        svc = self._catalog_service()
+        spec = svc.get_spec(cli_id) if isinstance(cli_id, str) else None
+        if spec is None:
+            known = svc.catalog().ids()
+            return None, _fail("CLI_PROFILE_UNKNOWN", f"CLI desconocido en el catalogo. Permitidos: {known}.",
+                               known_profiles=known)
+        if spec.kind == "shell":
+            return None, _fail("INSTALL_NOT_AVAILABLE", "La shell no se instala desde el catalogo.", cli_id=spec.id)
+        if spec.source != "repo" or not spec.verified:
+            return None, _fail(
+                "INSTALL_NOT_ALLOWED",
+                "Este CLI viene del catalogo del usuario (no verificado): no es instalable desde la interfaz.",
+                cli_id=spec.id,
+            )
+        resolution = svc.resolve(spec.id)
+        if resolution.found:
+            return None, _fail("ALREADY_INSTALLED", f"{spec.display_name} ya esta instalado.",
+                               cli_id=spec.id, resolved_path=resolution.path)
+        selection = svc.select_install(spec)
+        if selection.code == "NO_INSTALL_METHOD" or selection.option is None:
+            return None, _fail(
+                "INSTALL_NOT_AVAILABLE",
+                f"No hay un metodo de instalacion verificado de {spec.display_name} para este sistema; instalelo manualmente.",
+                cli_id=spec.id,
+            )
+        option = selection.option
+        if selection.code == "PREREQUISITE_MISSING":
+            missing = list(selection.missing)
+            return None, _fail(
+                "PREREQUISITE_MISSING",
+                f"Faltan herramientas previas para instalar {spec.display_name}: {', '.join(missing)}. "
+                "Instalelas primero; esta interfaz no las instala.",
+                cli_id=spec.id,
+                missing=missing,
+                command=option.command,
+                method=option.method,
+                source_url=option.source_url,
+            )
+        if not option.verified:
+            return None, _fail("INSTALL_NOT_ALLOWED", "El comando de instalacion no esta verificado.", cli_id=spec.id)
+        try:
+            validate_install_command(option.method, option.command)
+        except CatalogValidationError as exc:  # defensa en profundidad: ya se valido al cargar
+            return None, _fail("INSTALL_NOT_ALLOWED", f"Comando de instalacion rechazado: {exc}", cli_id=spec.id)
+        return {"spec": spec, "option": option, "svc": svc}, None
+
+    def pty_prepare_install(self, cli_id: Any) -> Dict[str, Any]:
+        """Paso 1: devuelve el comando exacto del catalogo y un token de confirmacion de un solo uso."""
+        try:
+            if is_unsupported_terminal_platform():
+                svc = self._catalog_service()
+                spec = svc.get_spec(cli_id) if isinstance(cli_id, str) else None
+                manual = None
+                if spec is not None and spec.source == "repo" and spec.kind != "shell":
+                    options = spec.install.get(svc.platform, ())
+                    manual = options[0].command if options and options[0].verified else None
+                return {**unsupported_platform_response(), "cli_id": cli_id if spec else None,
+                        "install_command": manual}
+            plan, error = self._plan_install(cli_id)
+            if error is not None or plan is None:
+                return error or _fail("INTERNAL_ERROR", "Plan de instalacion vacio.")
+            spec, option, svc = plan["spec"], plan["option"], plan["svc"]
+            token, ttl = self._get_install_broker().issue(spec.id, option.command, svc.platform)
+            warning = (
+                "El instalador oficial es un script descargado de Internet y ejecutado en su shell "
+                f"({option.command}). Revise el comando antes de confirmar."
+                if option.downloads_script
+                else ""
+            )
+            return {
+                "success": True,
+                "code": "OK",
+                "message": f"Confirme para instalar {spec.display_name} en una terminal visible.",
+                "requires_confirmation": True,
+                "cli_id": spec.id,
+                "display_name": spec.display_name,
+                "command": option.command,
+                "method": option.method,
+                "downloads_script": option.downloads_script,
+                "warning": warning,
+                "requires": list(option.requires),
+                "platform": svc.platform,
+                "source_url": option.source_url,
+                "note": option.note,
+                "confirmation_token": token,
+                "expires_in_s": ttl,
+            }
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def _pick_install_pane(self, terminal: Any, requested: Any) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        max_panes = self._terminal_max_panes(terminal)
+        alive: set[str] = set()
+        list_fn = getattr(terminal, "list_sessions", None)
+        if callable(list_fn):
+            alive = {str(sess.get("pane_id")) for sess in list_fn() if sess.get("alive")}
+        if requested is not None:
+            try:
+                norm, _ = normalize_pane_id(requested, max_panes=max_panes)
+            except PaneLimitError as exc:
+                return None, _fail("PANE_LIMIT_REACHED", str(exc), reason="pane_out_of_range", max_panes=max_panes)
+            except ValueError as exc:
+                return None, _fail("INVALID_PANE_ID", str(exc))
+            if norm in alive:
+                return None, _fail("PANE_ALREADY_ACTIVE", f"El panel {norm} ya tiene una sesion viva.", pane_id=norm)
+            return norm, None
+        for index in range(1, max_panes + 1):
+            if f"pane_{index}" not in alive:
+                return f"pane_{index}", None
+        return None, _fail("PANE_LIMIT_REACHED", f"Los {max_panes} paneles estan ocupados; cierre uno primero.",
+                           reason="max_panes", max_panes=max_panes)
+
+    def pty_install_cli(self, cli_id: Any, confirmation_token: Any, pane_id: Any = None) -> Dict[str, Any]:
+        """Paso 2: con un token valido abre un panel real que ejecuta el comando del catalogo."""
+        try:
+            if is_unsupported_terminal_platform():
+                return {**unsupported_platform_response(), "cli_id": cli_id if isinstance(cli_id, str) else None}
+            plan, error = self._plan_install(cli_id)
+            if error is not None or plan is None:
+                return error or _fail("INTERNAL_ERROR", "Plan de instalacion vacio.")
+            spec, option, svc = plan["spec"], plan["option"], plan["svc"]
+
+            terminal = self._get_terminal_connector()
+            target_pane, pane_error = self._pick_install_pane(terminal, pane_id)
+            if pane_error is not None or target_pane is None:
+                return {**(pane_error or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
+
+            verdict = self._get_install_broker().consume(spec.id, confirmation_token, option.command, svc.platform)
+            if verdict == "INSTALL_TOKEN_EXPIRED":
+                return _fail("INSTALL_TOKEN_EXPIRED", "La confirmacion vencio; vuelva a preparar la instalacion.",
+                             cli_id=spec.id)
+            if verdict != "OK":
+                return _fail("INSTALL_TOKEN_INVALID",
+                             "Token de confirmacion invalido o ya usado; prepare la instalacion de nuevo.",
+                             cli_id=spec.id)
+
+            wrapper = (
+                f"{option.command}; rc=$?; echo; "
+                'echo "[mcp2p] El instalador termino con codigo $rc. Cierre este panel y vuelva a abrir el selector de CLI."; '
+                "exit $rc"
+            )
+            shell = "/bin/sh" if os.access("/bin/sh", os.X_OK) else (svc.which("sh") or "/bin/sh")
+            spawn_res = dict(
+                terminal.spawn_session(
+                    pane_id=target_pane,
+                    cli_profile="custom_shell",
+                    role="installer",
+                    command=[shell, "-c", wrapper],
+                    cwd=None,
+                    cols=100,
+                    rows=28,
+                    hub_url=None,
+                    session_token=None,
+                    node_uuid=None,
+                )
+            )
+            if not spawn_res.get("success"):
+                cleaned = _strip_secret_fields(spawn_res)
+                cleaned.setdefault("code", "PTY_SPAWN_FAILED")
+                cleaned["success"] = False
+                cleaned["cli_id"] = spec.id
+                return cleaned
+            return {
+                "success": True,
+                "code": "INSTALL_STARTED",
+                "message": f"Instalando {spec.display_name} en {target_pane}; revise la salida en la terminal.",
+                "cli_id": spec.id,
+                "pane_id": target_pane,
+                "session_id": spawn_res.get("session_id"),
+                "pid": spawn_res.get("pid"),
+                "command": option.command,
+                "method": option.method,
+                "downloads_script": option.downloads_script,
+            }
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 

@@ -695,6 +695,14 @@ class ApiBridge:
     def pty_set_max_panes(self, max_panes: int) -> Dict[str, Any]:
         return self.extensions_ui.pty_set_max_panes(max_panes=max_panes)
 
+    def pty_prepare_install(self, cli_id: str) -> Dict[str, Any]:
+        return self.extensions_ui.pty_prepare_install(cli_id=cli_id)
+
+    def pty_install_cli(self, cli_id: str, confirmation_token: str, pane_id: Any = None) -> Dict[str, Any]:
+        return self.extensions_ui.pty_install_cli(
+            cli_id=cli_id, confirmation_token=confirmation_token, pane_id=pane_id
+        )
+
     def pty_write_input(self, pane_id: Any, data: str, is_human: bool = True) -> Dict[str, Any]:
         return self.extensions_ui.pty_write_input(pane_id=pane_id, data=data, is_human=is_human)
 

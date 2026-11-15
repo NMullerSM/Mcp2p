@@ -102,6 +102,7 @@ def build():
         "--hidden-import=src.a2a.jury_engine",
         "--hidden-import=src.adapters.terminal",
         "--hidden-import=src.adapters.terminal.cli_catalog",
+        "--hidden-import=src.adapters.terminal.cli_install",
         "--hidden-import=src.adapters.terminal.pty_host",
         "--hidden-import=src.runtime.terminal_platform",
         entry_point,
