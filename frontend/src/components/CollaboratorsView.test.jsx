@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import { CollaboratorsView, formatLockRemaining } from './CollaboratorsView';
+import { ViewSliderProvider } from './ViewSlider';
 
 const PROJECT = { project_uuid: 'proj_abc123', name: 'Proyecto Demo' };
 
@@ -179,9 +180,13 @@ describe('CollaboratorsView - pegar código de solicitud (ingesta manual, nivel 
   const PENDING_ROW = { node_uuid: 'node_req', github_username: 'requester', status: 'pending_approval', role: 'collaborator', node_kind: 'human', locked_until: null };
 
   async function renderAndFill(api, code) {
-    render(<CollaboratorsView project={PROJECT} api={api} />);
-    // Ingesta manual vive en el drawer secundario (EGM UI: reemplazo de Vista Dual/Split).
-    fireEvent.click(await screen.findByTestId('collab-open-secondary-drawer'));
+    render(
+      <ViewSliderProvider viewKey="collaborators">
+        <CollaboratorsView project={PROJECT} api={api} />
+      </ViewSliderProvider>
+    );
+    // Ingesta manual vive en el slider lateral derecho: se abre con la pestana del borde.
+    fireEvent.click(await screen.findByTestId('view-slider-tab'));
     const input = await screen.findByLabelText('Código de solicitud de unión');
     fireEvent.change(input, { target: { value: code } });
     return input;

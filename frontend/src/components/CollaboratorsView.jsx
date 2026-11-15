@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock, ClipboardPaste, PanelRight } from 'lucide-react';
-import { SideDrawer } from './SideDrawer';
+import { Users, Check, X, Shield, Clock, Share2, Copy, Bot, Cpu, Radio, Trash2, Lock, ClipboardPaste } from 'lucide-react';
+import { ViewSliderContent } from './ViewSlider';
 
 /**
  * Formatea el tiempo restante de un bloqueo de solicitud de unión (`locked_until`,
@@ -36,9 +36,6 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
   const [requestCodeInput, setRequestCodeInput] = useState('');
   const [ingesting, setIngesting] = useState(false);
   const [ingestMessage, setIngestMessage] = useState(null); // { type: 'success' | 'error', text }
-  // Drawer lateral derecho: contenido secundario (invitar, ingesta manual, pasarela MCP),
-  // dejando la lista de colaboradores humanos como vista principal despejada.
-  const [isSecondaryDrawerOpen, setIsSecondaryDrawerOpen] = useState(false);
 
   const loadData = async (isInitial = false) => {
     if (!api || !project) return;
@@ -182,38 +179,12 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
         </div>
       ) : (
         <>
-      {/* Barra de acceso al Drawer Secundario: invitar, ingesta manual y pasarela MCP
-          dejan de vivir permanentemente en la vista principal (antes era un split fijo)
-          y pasan a un drawer lateral derecho que se abre a demanda. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <button
-          type="button"
-          data-testid="collab-open-secondary-drawer"
-          onClick={() => setIsSecondaryDrawerOpen(true)}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '7px 14px',
-            fontSize: '12px',
-            fontWeight: 600,
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border-subtle)',
-            backgroundColor: 'var(--bg-card)',
-            color: 'var(--text-primary)',
-            cursor: 'pointer'
-          }}
-        >
-          <PanelRight size={14} /> Invitar & Pasarela MCP
-        </button>
-      </div>
-
-      <SideDrawer
-        isOpen={isSecondaryDrawerOpen}
-        onClose={() => setIsSecondaryDrawerOpen(false)}
+      {/* Invitar, ingesta manual y pasarela MCP viven en el slider lateral derecho
+          (pestana en el borde de la pantalla); la vista principal solo lista colaboradores. */}
+      <ViewSliderContent
         title="Invitar colaboradores & Pasarela MCP"
         subtitle="Contenido secundario de Colaboradores P2P"
-        data-testid="collaborators-secondary-drawer"
+        data-testid="collaborators-slider"
       >
       {/* 1. SECCIÓN INVITACIÓN P2P */}
       <div style={{
@@ -517,7 +488,7 @@ export function CollaboratorsView({ project, api, searchQuery = '' }) {
           )}
         </div>
       </div>
-      </SideDrawer>
+      </ViewSliderContent>
 
       {/* 2. SECCIÓN COLABORADORES HUMANOS */}
       <div style={{
