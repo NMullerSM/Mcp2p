@@ -17,10 +17,9 @@ import {
   X,
   Info,
   CheckSquare,
-  Scale,
-  PanelRight
+  Scale
 } from 'lucide-react';
-import { SideDrawer } from './SideDrawer';
+import { ViewSliderContent } from './ViewSlider';
 
 const PALETTE = [
   '#63b0f4', // Azul claro
@@ -57,10 +56,6 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
   const [newBranchName, setNewBranchName] = useState('');
   const [isRemoteModalOpen, setIsRemoteModalOpen] = useState(false);
   const [remoteUrlInput, setRemoteUrlInput] = useState('');
-
-  // Drawer lateral derecho: acciones secundarias (Más acciones / Sync P2P) y la barra
-  // de estado del remoto Git & auto-publicación, fuera de la vista principal.
-  const [isSecondaryDrawerOpen, setIsSecondaryDrawerOpen] = useState(false);
 
   const loadData = async () => {
     if (!api || !project) return;
@@ -677,49 +672,8 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               </button>
             </div>
 
-            {/* Operaciones Git (Fetch, Pull, Merge, Push) + acceso al drawer secundario */}
+            {/* Operaciones Git principales (Pull, Merge, Push); Fetch y el resto viven en el slider lateral */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                data-testid="branch-open-secondary-drawer"
-                onClick={() => setIsSecondaryDrawerOpen(true)}
-                title="Más acciones, remoto Git y publicación"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  color: 'var(--text-secondary)',
-                  cursor: 'pointer'
-                }}
-              >
-                <PanelRight size={13} /> Más acciones & Remoto
-              </button>
-              <button
-                onClick={handleFetch}
-                disabled={actionLoading}
-                title="Traer referencias del remoto sin fusionar (git fetch)"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-subtle)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  color: 'var(--text-primary)',
-                  cursor: actionLoading ? 'wait' : 'pointer'
-                }}
-              >
-                <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Traer cambios
-              </button>
 
               <button
                 onClick={handlePull}
@@ -830,13 +784,36 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
             </div>
           )}
 
-          <SideDrawer
-            isOpen={isSecondaryDrawerOpen}
-            onClose={() => setIsSecondaryDrawerOpen(false)}
+          <ViewSliderContent
             title="Más acciones & Remoto Git"
             subtitle="Contenido secundario de Control de Cambios"
-            data-testid="branch-secondary-drawer"
+            data-testid="branch-slider"
           >
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Actualizar
+            </div>
+            <button
+              onClick={handleFetch}
+              disabled={actionLoading}
+              title="Traer referencias del remoto sin fusionar (git fetch)"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 500,
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-subtle)',
+                backgroundColor: 'var(--bg-subtle)',
+                color: 'var(--text-primary)',
+                cursor: actionLoading ? 'wait' : 'pointer'
+              }}
+            >
+              <RefreshCw size={13} className={actionLoading ? 'spin' : ''} /> Traer cambios
+            </button>
+          </div>
           {/* Acción secundaria poco comprendida por el usuario: se saca de la fila
               primaria de botones y se guarda en el drawer, igual que las "3 Vías
               Dialécticas" en HumanApprovalsView. */}
@@ -992,7 +969,7 @@ export function BranchConsensusView({ project, api, initialBranch = '', onOpenCa
               )}
             </div>
           </div>
-          </SideDrawer>
+          </ViewSliderContent>
 
           {/* Grafo de Commits SVG Nativo */}
           <div style={{
