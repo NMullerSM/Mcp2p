@@ -673,6 +673,7 @@ class ApiBridge:
         cols: int = 100,
         rows: int = 28,
         start_hub: bool = True,
+        cwd: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.extensions_ui.pty_spawn_pane(
             pane_id=pane_id,
@@ -682,7 +683,17 @@ class ApiBridge:
             cols=cols,
             rows=rows,
             start_hub=start_hub,
+            cwd=cwd,
         )
+
+    def pty_list_cli_catalog(self) -> Dict[str, Any]:
+        return self.extensions_ui.pty_list_cli_catalog()
+
+    def pty_set_cli_path(self, cli_id: str, path: str) -> Dict[str, Any]:
+        return self.extensions_ui.pty_set_cli_path(cli_id=cli_id, path=path)
+
+    def pty_set_max_panes(self, max_panes: int) -> Dict[str, Any]:
+        return self.extensions_ui.pty_set_max_panes(max_panes=max_panes)
 
     def pty_write_input(self, pane_id: Any, data: str, is_human: bool = True) -> Dict[str, Any]:
         return self.extensions_ui.pty_write_input(pane_id=pane_id, data=data, is_human=is_human)

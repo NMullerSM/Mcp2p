@@ -6,6 +6,8 @@ Multi-Seed P2P, Puerta con Llave (ExtensionSecurityGate) y Diagnóstico del Sist
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -16,11 +18,20 @@ from src.adapters.outbound.extension_gate import (
     OutboundRestConnector,
     SignedConnectorManifest,
 )
-from src.adapters.terminal.pty_host import DEFAULT_MANUAL_COMMAND, normalize_pane_id
+from src.adapters.terminal.cli_catalog import CliCatalogService, has_control_chars
+from src.adapters.terminal.pty_host import (
+    DEFAULT_MANUAL_COMMAND,
+    HARD_MAX_PANES,
+    MAX_PANES_SETTING_KEY,
+    MAX_PANES_SETTING_NAMESPACE,
+    PaneLimitError,
+    normalize_pane_id,
+)
 from src.app.ui_adapters import _BaseUIAdapter
 from src.core.kernel import CoreKernel
 from src.mcp.pane_registry import EmbeddedMcpHub, PaneRegistry
 from src.p2p.mesh_adapter import MultiPeerMeshConnector
+from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_platform_response
 
 logger = logging.getLogger("mcp2p.api_bridge.extensions_lab")
 
@@ -33,6 +44,17 @@ def _default_mcp_config(hub_url: Optional[str] = None) -> Dict[str, Any]:
             }
         }
     }
+
+
+_ROLE_RE = re.compile(r"[A-Za-z0-9_.-]{1,48}")
+_MAX_CWD_LEN = 4096
+_MAX_TERMINAL_DIMENSION = 1000
+_MAX_COMMAND_LEN = 2000
+
+
+def _fail(code: str, message: str, **extra: Any) -> Dict[str, Any]:
+    """Respuesta de error uniforme `{success, code, message, ...}` del puente de terminales."""
+    return {"success": False, "code": code, "message": message, **extra}
 
 
 def _strip_secret_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -665,6 +687,88 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "mcp_config": instructions["mcp_config"],
             }
 
+    # ------------------------------------------------------------------
+    # Catalogo de CLIs (T1/T2 del plan 2026-11-15, seccion 5b)
+    # ------------------------------------------------------------------
+
+    def _catalog_service(self) -> CliCatalogService:
+        """Reutiliza el servicio del conector PTY (misma resolucion que el spawn) o crea uno nuevo."""
+        try:
+            terminal = self._get_terminal_connector()
+            primary = getattr(terminal, "primary", terminal)
+            svc = getattr(primary, "catalog_service", None)
+            if isinstance(svc, CliCatalogService):
+                return svc
+        except Exception:
+            pass
+        kernel = self.core_kernel
+        return CliCatalogService(getattr(kernel, "extension_repo", None))
+
+    @staticmethod
+    def _terminal_max_panes(terminal: Any) -> int:
+        try:
+            return int(getattr(terminal, "max_panes", 4) or 4)
+        except (TypeError, ValueError):
+            return 4
+
+    def pty_list_cli_catalog(self) -> Dict[str, Any]:
+        """Lista los CLIs del catalogo con estado de instalacion; no ejecuta ningun binario."""
+        try:
+            svc = self._catalog_service()
+            view = svc.describe()
+            terminal = self._get_terminal_connector()
+            return {
+                "success": True,
+                "code": "OK",
+                "message": "Catalogo de CLIs.",
+                "max_panes": self._terminal_max_panes(terminal),
+                "hard_max_panes": HARD_MAX_PANES,
+                "terminal_platform_supported": not is_unsupported_terminal_platform(),
+                **view,
+            }
+        except Exception as exc:
+            logger.warning("pty_list_cli_catalog fallo: %s", exc)
+            return _fail("INTERNAL_ERROR", f"No se pudo leer el catalogo de CLIs: {exc}")
+
+    def pty_set_cli_path(self, cli_id: Any, path: Any) -> Dict[str, Any]:
+        """Fija (o borra con cadena vacia) la ruta del binario de un CLI del catalogo."""
+        try:
+            return self._catalog_service().set_binary_path(cli_id, path)
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_set_max_panes(self, max_panes: Any) -> Dict[str, Any]:
+        """Cambia el maximo de paneles (1..6) y lo persiste; no cierra paneles vivos."""
+        if isinstance(max_panes, bool) or not isinstance(max_panes, int) or not (1 <= max_panes <= HARD_MAX_PANES):
+            return _fail("INVALID_ARGUMENT", f"max_panes debe ser un entero entre 1 y {HARD_MAX_PANES}.")
+        try:
+            terminal = self._get_terminal_connector()
+            setter = getattr(terminal, "set_max_panes", None)
+            if not callable(setter):
+                return _fail("TERMINAL_ADAPTER_DEGRADED", "El conector de terminales no admite cambiar el maximo.")
+            applied = int(setter(max_panes))
+            repo = getattr(self.core_kernel, "extension_repo", None)
+            if repo is not None:
+                repo.set_extension_setting(MAX_PANES_SETTING_NAMESPACE, MAX_PANES_SETTING_KEY, str(applied))
+            return {"success": True, "code": "OK", "max_panes": applied, "hard_max_panes": HARD_MAX_PANES,
+                    "message": f"Maximo de paneles: {applied}."}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    @staticmethod
+    def _validate_cwd(cwd: Any) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if cwd is None:
+            return None, None
+        if not isinstance(cwd, str) or not cwd.strip():
+            return None, _fail("INVALID_CWD", "La carpeta de trabajo debe ser un texto no vacio.")
+        if len(cwd) > _MAX_CWD_LEN or has_control_chars(cwd):
+            return None, _fail("INVALID_CWD", "La carpeta de trabajo contiene caracteres no validos.")
+        if not os.path.isabs(cwd):
+            return None, _fail("INVALID_CWD", "La carpeta de trabajo debe ser una ruta absoluta.")
+        if not os.path.isdir(cwd):
+            return None, _fail("INVALID_CWD", f"La carpeta de trabajo no existe o no es un directorio: {cwd}")
+        return os.path.realpath(cwd), None
+
     def pty_spawn_pane(
         self,
         pane_id: Any,
@@ -674,14 +778,59 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         cols: int = 100,
         rows: int = 28,
         start_hub: bool = True,
+        cwd: Optional[str] = None,
     ) -> Dict[str, Any]:
         registry = self._get_pane_registry()
         registered_here = False
         norm_pane_id: Optional[str] = None
         try:
             terminal = self._get_terminal_connector()
-            max_panes = int(getattr(terminal, "max_panes", 4) or 4)
-            norm_pane_id, _ = normalize_pane_id(pane_id, max_panes=max_panes)
+            max_panes = self._terminal_max_panes(terminal)
+
+            if is_unsupported_terminal_platform():
+                return {**unsupported_platform_response(), "pane_id": str(pane_id)}
+
+            try:
+                norm_pane_id, _ = normalize_pane_id(pane_id, max_panes=max_panes)
+            except PaneLimitError as exc:
+                return _fail("PANE_LIMIT_REACHED", str(exc), reason="pane_out_of_range",
+                             degraded=False, pane_id=str(pane_id), max_panes=max_panes)
+            except ValueError as exc:
+                return _fail("INVALID_PANE_ID", str(exc), degraded=False, pane_id=str(pane_id))
+
+            svc = self._catalog_service()
+            if not isinstance(cli_profile, str) or svc.get_spec(cli_profile) is None:
+                known = svc.catalog().ids()
+                return _fail("CLI_PROFILE_UNKNOWN", f"Perfil de CLI desconocido. Permitidos: {known}.",
+                             degraded=False, pane_id=norm_pane_id, known_profiles=known)
+            if not isinstance(role, str) or _ROLE_RE.fullmatch(role) is None:
+                return _fail("INVALID_ARGUMENT", "role invalido (letras, digitos, '_', '.', '-'; max 48).",
+                             degraded=False, pane_id=norm_pane_id)
+            for name, value in (("cols", cols), ("rows", rows)):
+                if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= _MAX_TERMINAL_DIMENSION):
+                    return _fail("INVALID_ARGUMENT", f"{name} debe ser un entero entre 1 y {_MAX_TERMINAL_DIMENSION}.",
+                                 degraded=False, pane_id=norm_pane_id)
+            if command is not None:
+                # El argv de un CLI del catalogo sale SIEMPRE del catalogo; solo la shell acepta comando propio.
+                if cli_profile != "custom_shell":
+                    return _fail("COMMAND_NOT_ALLOWED",
+                                 "Solo el perfil custom_shell admite un comando propio; los demas salen del catalogo.",
+                                 degraded=False, pane_id=norm_pane_id)
+                if isinstance(command, str):
+                    command_ok = 0 < len(command) <= _MAX_COMMAND_LEN and not has_control_chars(command)
+                elif isinstance(command, (list, tuple)):
+                    command_ok = (
+                        0 < len(command) <= 32
+                        and all(isinstance(c, str) and len(c) <= _MAX_COMMAND_LEN and not has_control_chars(c)
+                                for c in command)
+                    )
+                else:
+                    command_ok = False
+                if not command_ok:
+                    return _fail("INVALID_ARGUMENT", "command invalido.", degraded=False, pane_id=norm_pane_id)
+            resolved_cwd, cwd_error = self._validate_cwd(cwd)
+            if cwd_error is not None:
+                return {**cwd_error, "degraded": False, "pane_id": norm_pane_id}
 
             # Evitar pisar el token de una sesión ya viva en ese pane_id.
             list_fn = getattr(terminal, "list_sessions", None)
@@ -713,7 +862,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 hub = self._embedded_hub
                 hub_url = hub.url if (hub is not None and hub.is_running()) else None
 
-            cwd = self._resolve_active_code_repo()
+            effective_cwd = resolved_cwd if resolved_cwd is not None else self._resolve_active_code_repo()
 
             spawn_res = dict(
                 terminal.spawn_session(
@@ -721,7 +870,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                     cli_profile=cli_profile,
                     role=role,
                     command=command,
-                    cwd=cwd,
+                    cwd=effective_cwd,
                     cols=cols,
                     rows=rows,
                     hub_url=hub_url,
@@ -739,6 +888,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 cleaned["degraded"] = degraded
                 cleaned["pane_id"] = norm_pane_id
                 cleaned["hub_url"] = hub_url
+                cleaned.setdefault("code", "PTY_SPAWN_FAILED")
+                cleaned.setdefault("message", "No se pudo abrir el panel.")
                 if degraded:
                     instructions = self._extract_degraded_instructions(terminal, hub_url=hub_url)
                     cleaned.setdefault("manual_command", instructions["manual_command"])
@@ -769,11 +920,13 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
             return {
                 "success": True,
+                "code": "OK",
                 "degraded": False,
                 "pane_id": norm_pane_id,
                 "node_uuid": node_uuid,
                 "pid": pid,
                 "hub_url": hub_url,
+                "cwd": effective_cwd,
                 "pane": pane_meta,
                 "session": session_meta,
             }
@@ -786,7 +939,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             return {
                 "success": False,
                 "degraded": False,
+                "code": "INTERNAL_ERROR",
                 "pane_id": norm_pane_id or str(pane_id),
+                "message": f"No se pudo abrir el panel: {exc}",
                 "error": str(exc),
             }
 
