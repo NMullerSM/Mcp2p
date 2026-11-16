@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { ExternalLink, X } from 'lucide-react';
 import { ViewSliderContent, useViewSlider } from './ViewSlider';
 import { EmptyTerminalSlot, TerminalPane } from './terminals/TerminalPane';
+import { createPanePoller } from './terminals/panePoller';
+import {
+  acquireTerminal,
+  disposeTerminal,
+  getTerminalEntry,
+  writeTerminalNotice
+} from './terminals/terminalRegistry';
 import { TerminalSliderControls } from './terminals/TerminalSliderControls';
 import {
   DEFAULT_MAX_PANES,
@@ -9,6 +16,7 @@ import {
   HARD_MAX_PANES,
   MATRIX_PANE_IDS,
   computeGridLayout,
+  computePollDelay,
   describeTerminalError,
   forgetPaneSession,
   paneNumber,
@@ -19,9 +27,6 @@ import {
 
 // Compatibilidad: estos nombres se exportaban desde este modulo antes de partirlo.
 export { MATRIX_PANE_IDS, ROLE_OPTIONS, stripAnsiSequences } from './terminals/terminalModel';
-
-const POLL_INTERVAL_MS = 350;
-const MAX_OUTPUT_CHARS = 150000;
 
 function createInitialPaneState(paneId) {
   return {
@@ -40,8 +45,7 @@ function createInitialPaneState(paneId) {
     nodeUuid: '',
     sessionId: '',
     registryStatus: '',
-    exitCode: null,
-    output: ''
+    exitCode: null
   };
 }
 
@@ -181,7 +185,12 @@ function ExternalUrlConfirmDialog({ url, onCancel, onConfirm }) {
   );
 }
 
-export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
+/**
+ * `active` = la vista de terminales esta a la vista. ProjectWorkspace la mantiene montada (oculta)
+ * al cambiar de pestana para que el sondeo y las instancias de xterm sigan vivas; mientras esta
+ * oculta no registra su contenido en el slider y sondea despacio.
+ */
+export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = true }) {
   const { close: closeSlider, open: openSlider, isOpen: sliderOpen } = useViewSlider();
   const [panes, setPanes] = useState(() => createInitialPanesMap());
   const [focusedPaneId, setFocusedPaneId] = useState('pane_1');
@@ -213,8 +222,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
   panesRef.current = panes;
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
-  const nextSeqRef = useRef({});
-  const pollingInFlightRef = useRef({});
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const pollersRef = useRef({});
   const launchingRef = useRef(false);
   const installTokenRef = useRef(null);
   const installingRef = useRef(false);
@@ -380,81 +390,104 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
   }, [refreshAll, project?.project_uuid]);
 
   // ---- Sondeo de la salida ------------------------------------------------------------
+  // La salida NO pasa por el estado de React: va directa a la instancia de xterm del panel
+  // (terminalRegistry). Un bucle por panel vivo, que espera cada respuesta antes de pedir la
+  // siguiente y cuyo ritmo se adapta a la actividad (computePollDelay).
 
-  const pollPaneOnce = useCallback(async (paneId) => {
-    if (!api?.pty_poll_output || pollingInFlightRef.current[paneId]) return;
-    pollingInFlightRef.current[paneId] = true;
-    const cursor = nextSeqRef.current[paneId] ?? 0;
-    try {
-      const res = await api.pty_poll_output(paneId, cursor);
-      if (!mountedRef.current || !res) return;
+  const apiRef = useRef(api);
+  apiRef.current = api;
 
-      if (typeof res.next_seq === 'number') {
-        nextSeqRef.current[paneId] = res.next_seq;
+  const applyPollResult = useCallback((paneId, res, since) => {
+    if (!mountedRef.current) return false;
+    const before = panesRef.current[paneId];
+    if (!before || !before.open) return false;
+
+    const entry = acquireTerminal(paneId, { sessionId: before.sessionId, cols: before.cols, rows: before.rows });
+    // Una respuesta que no continua desde el cursor actual es un duplicado (p. ej. de un bucle
+    // que ya se habia sustituido): el texto ya se escribio, no se repite.
+    const duplicate = since !== entry.nextSeq;
+    if (!duplicate) {
+      if (typeof res.next_seq === 'number') entry.nextSeq = res.next_seq;
+      if (res.truncated) writeTerminalNotice(entry, 'salida anterior truncada del buffer');
+      if (res.text) {
+        entry.term.write(res.text);
+        entry.lastActivityAt = Date.now();
       }
+    }
 
-      const before = panesRef.current[paneId];
-      const stillAlive = Boolean(res.alive);
-      const installJustEnded = Boolean(before?.alive && !stillAlive && before.kind === 'install');
+    const stillAlive = Boolean(res.alive);
+    const exitCode = res.exit_code !== undefined ? res.exit_code : before.exitCode;
+    if (!stillAlive && !entry.exitAnnounced && exitCode !== null && exitCode !== undefined) {
+      entry.exitAnnounced = true;
+      writeTerminalNotice(entry, `proceso terminado, código ${exitCode}`);
+    }
 
+    const paused = Boolean(res.paused);
+    const rssMb = stillAlive ? (typeof res.rss_mb === 'number' ? res.rss_mb : before.rssMb) : 0;
+    // Solo se re-renderiza si cambia algo visible (un sondeo cada 30 ms no debe repintar el panel).
+    const changed = before.alive !== stillAlive
+      || before.paused !== paused
+      || before.exitCode !== exitCode
+      || Math.abs((before.rssMb || 0) - rssMb) >= 0.5
+      || (rssMb === 0 && before.rssMb !== 0);
+    if (changed) {
       setPanes((prev) => {
         const cur = prev[paneId];
         if (!cur || !cur.open) return prev;
-        let nextOutput = cur.output;
-        if (res.truncated) {
-          nextOutput += '\n[...salida anterior truncada del buffer...]\n';
-        }
-        if (res.text) {
-          nextOutput += res.text;
-          if (nextOutput.length > MAX_OUTPUT_CHARS) {
-            nextOutput = nextOutput.slice(-MAX_OUTPUT_CHARS);
-          }
-        }
-        return {
-          ...prev,
-          [paneId]: {
-            ...cur,
-            output: nextOutput,
-            alive: stillAlive,
-            paused: Boolean(res.paused),
-            rssMb: stillAlive ? (typeof res.rss_mb === 'number' ? res.rss_mb : cur.rssMb) : 0,
-            exitCode: res.exit_code !== undefined ? res.exit_code : cur.exitCode
-          }
-        };
+        return { ...prev, [paneId]: { ...cur, alive: stillAlive, paused, rssMb, exitCode } };
       });
-
-      if (res.degraded && res.code) {
-        setNotice((prev) => (prev?.code === res.code ? prev : describeTerminalError(res)));
-      }
-      if (installJustEnded) {
-        void refreshCatalog();
-      }
-    } catch {
-      // No romper el ciclo de polling por un fallo transitorio
-    } finally {
-      pollingInFlightRef.current[paneId] = false;
     }
-  }, [api, refreshCatalog]);
+
+    if (res.degraded && res.code) {
+      setNotice((prev) => (prev?.code === res.code ? prev : describeTerminalError(res)));
+    }
+    if (before.alive && !stillAlive && before.kind === 'install') {
+      void refreshCatalog();
+    }
+    return stillAlive;
+  }, [refreshCatalog]);
+  const applyPollResultRef = useRef(applyPollResult);
+  applyPollResultRef.current = applyPollResult;
 
   const alivePaneIdsKey = MATRIX_PANE_IDS.filter((id) => panes[id].open && panes[id].alive).join(',');
 
   useEffect(() => {
-    if (!alivePaneIdsKey || !api?.pty_poll_output) return undefined;
-    const activeIds = alivePaneIdsKey.split(',').filter(Boolean);
-    if (!activeIds.length) return undefined;
-
-    activeIds.forEach((id) => {
-      void pollPaneOnce(id);
+    const wanted = new Set(alivePaneIdsKey ? alivePaneIdsKey.split(',') : []);
+    // Fuera los bucles de paneles que ya no estan vivos (o que se detuvieron solos).
+    Object.keys(pollersRef.current).forEach((paneId) => {
+      const poller = pollersRef.current[paneId];
+      if (!wanted.has(paneId) || !poller.isRunning()) {
+        poller.stop();
+        delete pollersRef.current[paneId];
+      }
     });
-
-    const timer = setInterval(() => {
-      activeIds.forEach((id) => {
-        void pollPaneOnce(id);
+    if (!api?.pty_poll_output) return;
+    wanted.forEach((paneId) => {
+      if (pollersRef.current[paneId]) return; // un solo bucle por panel
+      const poller = createPanePoller({
+        poll: async () => {
+          const pane = panesRef.current[paneId];
+          const entry = acquireTerminal(paneId, { sessionId: pane?.sessionId, cols: pane?.cols, rows: pane?.rows });
+          const since = entry.nextSeq;
+          const res = await apiRef.current.pty_poll_output(paneId, since);
+          return res ? { res, since } : null;
+        },
+        onResult: ({ res, since }) => applyPollResultRef.current(paneId, res, since),
+        getDelay: () => computePollDelay({
+          now: Date.now(),
+          lastActivityAt: getTerminalEntry(paneId)?.lastActivityAt || 0,
+          hidden: !activeRef.current
+        })
       });
-    }, POLL_INTERVAL_MS);
+      pollersRef.current[paneId] = poller;
+      poller.start();
+    });
+  }, [alivePaneIdsKey, api]);
 
-    return () => clearInterval(timer);
-  }, [alivePaneIdsKey, api, pollPaneOnce]);
+  useEffect(() => () => {
+    Object.values(pollersRef.current).forEach((poller) => poller.stop());
+    pollersRef.current = {};
+  }, []);
 
   // ---- Foco ---------------------------------------------------------------------------
 
@@ -482,6 +515,24 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     terminalRefs.current[paneId] = el;
   }, []);
 
+  // Al volver a la vista (sigue montada mientras esta oculta): sondeo rapido, estado fresco del
+  // backend y el teclado de nuevo en la terminal enfocada.
+  const focusedPaneIdRef = useRef(focusedPaneId);
+  focusedPaneIdRef.current = focusedPaneId;
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    if (active && !wasActiveRef.current) {
+      const now = Date.now();
+      MATRIX_PANE_IDS.forEach((id) => {
+        const entry = getTerminalEntry(id);
+        if (entry) entry.lastActivityAt = now;
+      });
+      void refreshAll();
+      terminalRefs.current[focusedPaneIdRef.current]?.focus();
+    }
+    wasActiveRef.current = active;
+  }, [active, refreshAll]);
+
   // Seleccionar una terminal en el slider la enfoca y deja el teclado listo para escribir.
   const handleFocusFromSlider = useCallback((paneId) => {
     requestTerminalFocus(paneId);
@@ -491,7 +542,14 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
   // ---- Acciones sobre terminales ------------------------------------------------------
 
   const markPaneOpened = useCallback((paneId, patch) => {
-    nextSeqRef.current[paneId] = 0;
+    // Sesion nueva en este panel: terminal limpia y lectura desde el principio.
+    disposeTerminal(paneId);
+    const entry = acquireTerminal(paneId, {
+      sessionId: patch.sessionId || '',
+      cols: patch.cols || DEFAULT_PTY_SIZE.cols,
+      rows: patch.rows || DEFAULT_PTY_SIZE.rows
+    });
+    entry.lastActivityAt = Date.now();
     setPanes((prev) => ({
       ...prev,
       [paneId]: { ...createInitialPaneState(paneId), open: true, alive: true, ...patch }
@@ -596,8 +654,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
     } catch {
       // Limpiar estado visual aunque el proceso ya haya salido
     }
+    disposeTerminal(paneId);
     if (!mountedRef.current) return;
-    nextSeqRef.current[paneId] = 0;
     forgetPaneSession(paneId);
     setPanes((prev) => ({ ...prev, [paneId]: createInitialPaneState(paneId) }));
   }, [api]);
@@ -616,6 +674,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
 
   const sendPaneInput = useCallback(async (paneId, payload) => {
     if (!api?.pty_write_input || !payload) return;
+    // Teclear = actividad: sondeo rapido para ver el eco enseguida.
+    const entry = getTerminalEntry(paneId);
+    if (entry) entry.lastActivityAt = Date.now();
+    pollersRef.current[paneId]?.wake();
     try {
       const res = await api.pty_write_input(paneId, payload, true);
       if (mountedRef.current && res && res.success === false && (res.message || res.error)) {
@@ -786,8 +848,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
           catalogById[p.cliProfile]?.display_name,
           p.role,
           p.cwd,
-          p.nodeUuid,
-          p.output
+          p.nodeUuid
         ]
           .filter(Boolean)
           .join(' ')
@@ -828,6 +889,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
       }}
     >
       {/* Todo el control vive en el slider lateral derecho (seccion 4 del plan). */}
+      {active && (
       <ViewSliderContent
         title="Terminales"
         subtitle="Controles del enjambre"
@@ -858,7 +920,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
           onFocusPane={handleFocusFromSlider}
           onPausePane={handlePausePane}
           onClosePane={handleClosePane}
-          onResizePane={handleResizePane}
           onSetMaxPanes={handleSetMaxPanes}
           installPlan={installPlan}
           installBusyCliId={installBusyCliId}
@@ -869,6 +930,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
           pathEditRequest={pathEditRequest}
         />
       </ViewSliderContent>
+      )}
 
       <div
         data-testid="matrix-grid"
@@ -910,6 +972,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '' }) {
                 focusToken={focusRequest.paneId === paneId ? focusRequest.nonce : 0}
                 onFocus={handleClickPane}
                 onInput={sendPaneInput}
+                onResize={handleResizePane}
                 onRequestOpenUrl={setPendingExternalUrl}
                 registerTerminalRef={registerTerminalRef}
               />

@@ -2,7 +2,11 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   computeGridLayout,
   pickFreePaneId,
-  renderTerminalText,
+  computePollDelay,
+  POLL_FAST_MS,
+  POLL_WARM_MS,
+  POLL_IDLE_MS,
+  POLL_HIDDEN_MS,
   stripAnsiSequences,
   describeTerminalError,
   describeInstallBlock,
@@ -48,18 +52,36 @@ describe('pickFreePaneId', () => {
 });
 
 describe('texto del terminal', () => {
-  it('quita secuencias ANSI y de conjunto de caracteres', () => {
+  it('quita secuencias ANSI y de conjunto de caracteres (solo para texto plano fuera de xterm)', () => {
     expect(stripAnsiSequences('\x1b[32mok\x1b[0m \x1b(B\x1b]0;titulo\x07fin')).toBe('ok fin');
   });
 
-  it('aplica retorno de carro y retroceso como una terminal', () => {
-    expect(renderTerminalText('10%\r50%\r100%\nlisto')).toBe('100%\nlisto');
-    expect(renderTerminalText('ls\b \bx')).toBe('lx');
-    expect(renderTerminalText('a\r\nb\r\n')).toBe('a\nb\n');
+  it('ya no hay limpieza casera de la salida: la interpreta el emulador', async () => {
+    const model = await import('./terminalModel');
+    expect(model.renderTerminalText).toBeUndefined();
+  });
+});
+
+describe('computePollDelay (sondeo adaptativo)', () => {
+  const NOW = 1_000_000;
+
+  it('va rapido (~30 ms) mientras haya salida reciente o se acabe de teclear', () => {
+    expect(computePollDelay({ now: NOW, lastActivityAt: NOW })).toBe(POLL_FAST_MS);
+    expect(computePollDelay({ now: NOW, lastActivityAt: NOW - 1400 })).toBe(POLL_FAST_MS);
+    expect(POLL_FAST_MS).toBeLessThanOrEqual(30);
   });
 
-  it('no interpreta HTML: lo devuelve como texto', () => {
-    expect(renderTerminalText('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');
+  it('retrocede de forma escalonada hasta ~300 ms en reposo', () => {
+    expect(computePollDelay({ now: NOW, lastActivityAt: NOW - 2500 })).toBe(POLL_WARM_MS);
+    expect(computePollDelay({ now: NOW, lastActivityAt: NOW - 4000 })).toBe(POLL_IDLE_MS);
+    expect(computePollDelay({ now: NOW, lastActivityAt: 0 })).toBe(POLL_IDLE_MS);
+    expect(POLL_IDLE_MS).toBeGreaterThanOrEqual(250);
+    expect(POLL_IDLE_MS).toBeLessThanOrEqual(350);
+  });
+
+  it('con la vista oculta sondea despacio aunque haya actividad', () => {
+    expect(computePollDelay({ now: NOW, lastActivityAt: NOW, hidden: true })).toBe(POLL_HIDDEN_MS);
+    expect(POLL_HIDDEN_MS).toBeGreaterThan(POLL_IDLE_MS);
   });
 });
 

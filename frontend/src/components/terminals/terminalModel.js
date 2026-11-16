@@ -1,6 +1,6 @@
 /**
- * Modelo puro del panel de terminales (sin React): layout dinamico, limpieza de la salida
- * del PTY, eleccion de pane libre, memoria de sesiones y mapeo de codigos de error del
+ * Modelo puro del panel de terminales (sin React): layout dinamico, ritmo del sondeo de la
+ * salida del PTY, eleccion de pane libre, memoria de sesiones y mapeo de codigos de error del
  * backend a mensajes con la accion sugerida (seccion 4 del plan 2026-11-15).
  *
  * Nada de lo que hay aqui construye ni edita comandos de instalacion: el frontend solo
@@ -18,12 +18,8 @@ export const ROLE_OPTIONS = [
   { value: 'coordinator', label: 'Coordinator' }
 ];
 
-export const SIZE_PRESETS = [
-  { label: '80x24', cols: 80, rows: 24 },
-  { label: '100x28', cols: 100, rows: 28 },
-  { label: '120x36', cols: 120, rows: 36 }
-];
-
+// Tamano con el que se lanza el PTY. Despues manda el panel: xterm lo ajusta con fit() y se
+// avisa al backend con pty_resize_pane (ya no hay presets manuales).
 export const DEFAULT_PTY_SIZE = { cols: 100, rows: 28 };
 
 export const DEFAULT_MANUAL_COMMAND =
@@ -90,9 +86,11 @@ export function paneNumber(paneId) {
 }
 
 // ---------------------------------------------------------------------------
-// Salida del terminal (texto plano, nunca HTML)
+// Salida del terminal
 // ---------------------------------------------------------------------------
 
+// La salida del PTY (con sus secuencias ANSI) se escribe tal cual en xterm: la interpreta el
+// emulador. Esta funcion solo sirve para texto plano fuera de la terminal (p. ej. busquedas).
 const ANSI_ESCAPE_REGEX =
   /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-Z\\-_]/g;
 
@@ -101,42 +99,37 @@ export function stripAnsiSequences(text) {
   return String(text).replace(ANSI_ESCAPE_REGEX, '');
 }
 
+// ---------------------------------------------------------------------------
+// Sondeo adaptativo de la salida
+// ---------------------------------------------------------------------------
+
+export const POLL_FAST_MS = 30;
+export const POLL_WARM_MS = 100;
+export const POLL_IDLE_MS = 300;
+export const POLL_HIDDEN_MS = 1000;
+export const POLL_FAST_WINDOW_MS = 1500;
+export const POLL_WARM_WINDOW_MS = 4000;
+
 /**
- * Texto visible de un terminal: sin secuencias ANSI y aplicando retorno de carro (\r) y
- * retroceso (\b) como hace una terminal sobre la linea actual, para que el eco del
- * prompt y las barras de progreso no queden duplicados. No emula cursor ni colores.
+ * Espera hasta la siguiente llamada a pty_poll_output. Rapido (~30 ms) mientras haya salida
+ * reciente o la persona acaba de teclear, retrocede a ~100 ms y luego a ~300 ms en reposo.
+ * Con la vista oculta basta un sondeo lento: nadie lo ve y ahorra llamadas al puente.
+ * `lastActivityAt` es el instante (ms) de la ultima salida recibida o tecla enviada.
  */
-export function renderTerminalText(raw) {
-  const clean = stripAnsiSequences(raw).replace(/[\x00-\x07\x0e-\x1f]/g, '');
-  if (!/[\r\b\x7f]/.test(clean)) return clean;
-  const lines = [];
-  let line = [];
-  let col = 0;
-  for (const ch of clean) {
-    if (ch === '\n') {
-      lines.push(line.join(''));
-      line = [];
-      col = 0;
-    } else if (ch === '\r') {
-      col = 0;
-    } else if (ch === '\b' || ch === '\x7f') {
-      col = Math.max(0, col - 1);
-    } else {
-      if (col < line.length) line[col] = ch;
-      else line.push(ch);
-      col += 1;
-    }
-  }
-  lines.push(line.join(''));
-  return lines.join('\n');
+export function computePollDelay({ now, lastActivityAt = 0, hidden = false }) {
+  if (hidden) return POLL_HIDDEN_MS;
+  const idleFor = Math.max(0, now - (lastActivityAt || 0));
+  if (idleFor < POLL_FAST_WINDOW_MS) return POLL_FAST_MS;
+  if (idleFor < POLL_WARM_WINDOW_MS) return POLL_WARM_MS;
+  return POLL_IDLE_MS;
 }
 
 // ---------------------------------------------------------------------------
 // Memoria de sesiones (solo en memoria del modulo, no en disco)
 // ---------------------------------------------------------------------------
 
-// El backend no devuelve `cwd` en la lista de sesiones, y al cambiar de pestana la vista se
-// desmonta. Se recuerda la carpeta de cada sesion mientras dure la pagina para no perderla.
+// Respaldo para la carpeta de cada sesion cuando el backend no la devuelve en la lista de
+// sesiones (pty_get_matrix_status). Se recuerda mientras dure la pagina.
 const sessionMemory = new Map();
 
 export function rememberPaneSession(paneId, { sessionId, cwd = null, kind = 'cli' }) {

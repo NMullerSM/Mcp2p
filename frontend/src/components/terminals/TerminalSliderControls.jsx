@@ -19,8 +19,7 @@ import {
   DEFAULT_MANUAL_COMMAND,
   DEFAULT_MCP_CONFIG,
   HARD_MAX_PANES,
-  ROLE_OPTIONS,
-  SIZE_PRESETS
+  ROLE_OPTIONS
 } from './terminalModel';
 
 /**
@@ -553,10 +552,8 @@ function CliRow({
   );
 }
 
-function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePane, onClosePane, onResizePane }) {
+function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePane, onClosePane }) {
   const paneId = pane.paneId;
-  const sizeValue = `${pane.cols}x${pane.rows}`;
-  const knownSize = SIZE_PRESETS.some((p) => p.label === sizeValue);
   const stateLabel = pane.alive ? (pane.paused ? 'Pausado' : 'Activo') : 'Finalizado';
   const stateColor = pane.alive ? (pane.paused ? 'var(--accent-warning)' : 'var(--accent-success)') : 'var(--text-muted)';
   return (
@@ -610,6 +607,11 @@ function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePa
         {(pane.alive || pane.rssMb > 0) && (
           <span data-testid={`pane-rss-${paneId}`} style={chip}>{Number(pane.rssMb || 0).toFixed(1)} MB</span>
         )}
+        {pane.cols > 0 && pane.rows > 0 && (
+          <span data-testid={`pane-size-${paneId}`} title="Tamaño del terminal: se ajusta solo al panel" style={chip}>
+            {pane.cols}x{pane.rows}
+          </span>
+        )}
         {pane.nodeUuid && (
           <span data-testid={`pane-node-${paneId}`} title={pane.nodeUuid} style={chip}>{pane.nodeUuid.slice(0, 12)}</span>
         )}
@@ -635,22 +637,6 @@ function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePa
           <Square size={10} />
           <span>Cerrar</span>
         </button>
-        <select
-          aria-label={`Tamaño del terminal ${label}`}
-          data-testid={`size-select-${paneId}`}
-          className="mcp-combobox"
-          value={sizeValue}
-          onChange={(e) => {
-            const [c, r] = e.target.value.split('x').map((n) => parseInt(n, 10));
-            if (c > 0 && r > 0) onResizePane(paneId, c, r);
-          }}
-          style={{ height: '27px', fontSize: '11px', maxWidth: '96px' }}
-        >
-          {!knownSize && <option value={sizeValue}>{sizeValue}</option>}
-          {SIZE_PRESETS.map((preset) => (
-            <option key={preset.label} value={preset.label}>{preset.label}</option>
-          ))}
-        </select>
       </div>
     </li>
   );
@@ -681,7 +667,6 @@ export function TerminalSliderControls({
   onFocusPane,
   onPausePane,
   onClosePane,
-  onResizePane,
   onSetMaxPanes,
   installPlan,
   installBusyCliId,
@@ -887,7 +872,6 @@ export function TerminalSliderControls({
                 onFocusPane={onFocusPane}
                 onPausePane={onPausePane}
                 onClosePane={onClosePane}
-                onResizePane={onResizePane}
               />
             ))}
           </ul>

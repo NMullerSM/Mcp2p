@@ -8,8 +8,14 @@ import {
   makeCli,
   makeMatrixApi,
   notInstalled,
-  renderMatrix
+  renderMatrix,
+  resetTerminalTestState,
+  termOf
 } from './terminals/terminalTestKit';
+
+// jsdom no renderiza xterm: se sustituye por un doble que registra lo que se le escribe.
+vi.mock('@xterm/xterm', () => import('./terminals/xtermTestDouble'));
+vi.mock('@xterm/addon-fit', () => import('./terminals/xtermTestDouble'));
 
 const TOKEN = 'tok-secreto-8f3a21';
 // Comando con caracteres que un armado en el frontend podria "limpiar": debe mostrarse tal cual.
@@ -17,6 +23,7 @@ const EXACT_COMMAND = 'npm install -g @example/gemini-cli@1.2.3  # --registry=ht
 
 afterEach(() => {
   cleanup();
+  resetTerminalTestState();
   resetPaneSessionMemory();
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -106,13 +113,13 @@ describe('Instalar un CLI que falta', () => {
     // El backend abre un panel real con la salida de la instalacion.
     const pane = await screen.findByTestId('terminal-pane-pane_1');
     expect(within(pane).getByTestId('pane-logo-pane_1').getAttribute('data-cli')).toBe('custom_shell');
-    await waitFor(() => expect(pane.textContent).toContain('added 120 packages'));
+    await waitFor(() => expect(termOf('pane_1').output).toContain('added 120 packages'));
 
     // Al terminar el instalador se vuelve a leer el catalogo.
     expect(api.pty_list_cli_catalog.mock.calls.length).toBe(catalogCallsBefore);
     state.installAlive = false;
     await waitFor(() => expect(api.pty_list_cli_catalog.mock.calls.length).toBeGreaterThan(catalogCallsBefore));
-    expect(within(pane).getByTestId('pane-exit-pane_1').textContent).toContain('código 0');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('proceso terminado, código 0'));
   });
 
   it('sin confirmar nunca se llama a pty_install_cli; cancelar descarta el token y exige preparar otra vez', async () => {

@@ -4,6 +4,49 @@ import { render } from '@testing-library/react';
 import { vi } from 'vitest';
 import { ViewSliderProvider } from '../ViewSlider';
 import { SwarmTerminalMatrix } from '../SwarmTerminalMatrix';
+import { disposeAllTerminals, getTerminalEntry } from './terminalRegistry';
+import { FitAddon, Terminal, resetXtermDouble } from './xtermTestDouble';
+
+// Cada archivo de test que monte terminales debe declarar (jsdom no renderiza xterm):
+//   vi.mock('@xterm/xterm', () => import('./terminals/xtermTestDouble'));
+//   vi.mock('@xterm/addon-fit', () => import('./terminals/xtermTestDouble'));
+export { FitAddon, Terminal };
+
+/** Instancia (doble) de xterm del panel, o null si aun no existe. */
+export function termOf(paneId) {
+  return getTerminalEntry(paneId)?.term || null;
+}
+
+/** Limpia el registro de terminales y el doble entre tests. */
+export function resetTerminalTestState() {
+  disposeAllTerminals();
+  resetXtermDouble();
+}
+
+/** ResizeObserver de juguete: `fire()` simula un cambio de tamano del contenedor observado. */
+export function installResizeObserverDouble() {
+  const observers = [];
+  class FakeResizeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.targets = new Set();
+      observers.push(this);
+    }
+    observe(target) { this.targets.add(target); }
+    unobserve(target) { this.targets.delete(target); }
+    disconnect() { this.targets.clear(); }
+  }
+  const previous = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = FakeResizeObserver;
+  return {
+    observers,
+    fire: () => observers.forEach((o) => o.targets.size && o.callback([], o)),
+    restore: () => {
+      if (previous === undefined) delete globalThis.ResizeObserver;
+      else globalThis.ResizeObserver = previous;
+    }
+  };
+}
 
 export const PROJECT = { project_uuid: 'proj_matrix_1', name: 'Proyecto Matrix' };
 export const MANUAL_CMD =
@@ -139,7 +182,6 @@ export function makeMatrixApi(overrides = {}) {
       since_seq: sinceSeq,
       next_seq: sinceSeq === 0 ? 1 : sinceSeq,
       truncated: false,
-      chunks: [],
       text: sinceSeq === 0 ? 'Agente listo en https://docs.example.com/auth\n' : ''
     })),
     pty_write_input: vi.fn(async (paneId, data) => ({ success: true, pane_id: paneId, bytes_written: data.length })),

@@ -5,6 +5,7 @@ import React from 'react';
 import { AppHeader } from './AppHeader';
 import { ProjectWorkspace } from './ProjectWorkspace';
 import { resetPaneSessionMemory } from './terminals/terminalModel';
+import { createUrlLinkProvider } from './terminals/terminalLinks';
 import {
   DEFAULT_CLIS,
   MANUAL_CMD,
@@ -13,12 +14,21 @@ import {
   makeCatalogResponse,
   makeCli,
   makeMatrixApi,
+  Terminal,
+  installResizeObserverDouble,
   notInstalled,
-  renderMatrix
+  renderMatrix,
+  resetTerminalTestState,
+  termOf
 } from './terminals/terminalTestKit';
+
+// jsdom no renderiza xterm: se sustituye por un doble que registra lo que se le escribe.
+vi.mock('@xterm/xterm', () => import('./terminals/xtermTestDouble'));
+vi.mock('@xterm/addon-fit', () => import('./terminals/xtermTestDouble'));
 
 afterEach(() => {
   cleanup();
+  resetTerminalTestState();
   resetPaneSessionMemory();
   window.localStorage.clear();
   vi.restoreAllMocks();
@@ -61,8 +71,8 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     expect(within(pane).getByTestId('pane-cwd-pane_1').textContent).toBe('/home/u/mi-proyecto');
 
     // Sin rama, PID, RSS, estado, botones ni campos de entrada dentro del panel.
-    expect(pane.querySelector('button:not([data-testid="tty-detected-url"])')).toBeNull();
-    expect(pane.querySelector('input, select, textarea')).toBeNull();
+    expect(pane.querySelector('button')).toBeNull();
+    expect(pane.querySelector('input, select, textarea:not(.xterm-helper-textarea)')).toBeNull();
     expect(within(pane).queryByTestId('pane-status-pane_1')).toBeNull();
     expect(within(pane).queryByTestId('pane-pid-pane_1')).toBeNull();
     expect(within(pane).queryByTestId('pane-rss-pane_1')).toBeNull();
@@ -84,40 +94,79 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
 
     fireEvent.click(p1);
     expect(p1.getAttribute('data-focused')).toBe('true');
-    expect(document.activeElement).toBe(screen.getByTestId('pane-output-pane_1'));
+    expect(termOf('pane_1').textarea).toBe(document.activeElement);
+    expect(screen.getByTestId('pane-output-pane_1').contains(document.activeElement)).toBe(true);
   });
 
-  it('escribe directo en la terminal: teclas, Ctrl+letra, pegado, Ctrl+C con y sin seleccion', async () => {
+  it('la entrada de xterm (onData) se reenvia tal cual al PTY como entrada humana', async () => {
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    const pre = screen.getByTestId('pane-output-pane_1');
+    const term = termOf('pane_1');
 
-    fireEvent.keyDown(pre, { key: 'x' });
+    // Teclas, secuencias de cursor y Ctrl+letra: las traduce xterm; el panel solo las reenvia.
+    term.emitData('x');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', 'x', true));
-    fireEvent.keyDown(pre, { key: 'Enter' });
+    term.emitData('\r');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', '\r', true));
-    fireEvent.keyDown(pre, { key: 'ArrowUp' });
+    term.emitData('\x1b[A');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', '\x1b[A', true));
-    fireEvent.keyDown(pre, { key: 'd', ctrlKey: true });
+    term.emitData('\x04');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', '\x04', true));
-
-    // Ctrl+C sin texto seleccionado interrumpe el proceso.
-    fireEvent.keyDown(pre, { key: 'c', ctrlKey: true });
-    await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', '\x03', true));
-
-    // Con texto seleccionado deja copiar y no envia nada.
-    api.pty_write_input.mockClear();
-    vi.spyOn(window, 'getSelection').mockReturnValue({ toString: () => 'seleccion' });
-    fireEvent.keyDown(pre, { key: 'c', ctrlKey: true });
-    expect(api.pty_write_input).not.toHaveBeenCalled();
-
-    // Pegado multilinea: saltos de linea como Enter.
-    fireEvent.paste(pre, { clipboardData: { getData: () => 'echo hola\nls' } });
+    // Pegado (xterm ya lo entrega como datos, con saltos de linea como Enter).
+    term.emitData('echo hola\rls');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', 'echo hola\rls', true));
+    // Siempre con el tercer argumento (alimenta el cooldown de tecleo humano del relevo).
+    api.pty_write_input.mock.calls.forEach((call) => expect(call[2]).toBe(true));
   });
 
-  it('hace polling incremental de pty_poll_output y escribe la salida como texto, nunca como HTML', async () => {
+  it('no envia nada al PTY de un proceso terminado', async () => {
+    const api = makeMatrixApi({
+      pty_poll_output: vi.fn(async () => ({
+        success: true, alive: false, paused: false, rss_mb: 0, next_seq: 1, truncated: false, text: '', exit_code: 0
+      }))
+    });
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(screen.getByTestId('pane-status-pane_1').textContent).toBe('Finalizado'));
+    termOf('pane_1').emitData('x');
+    await new Promise((r) => setTimeout(r, 40));
+    expect(api.pty_write_input).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+C con seleccion copia y no interrumpe; sin seleccion pasa a xterm (^C); Ctrl+V deja pegar', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const api = makeMatrixApi();
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    const term = termOf('pane_1');
+
+    // Sin seleccion: xterm procesa la tecla y manda ^C al PTY (interrumpe).
+    expect(term.pressKey({ key: 'c', ctrlKey: true })).toBe(true);
+    expect(writeText).not.toHaveBeenCalled();
+
+    // Con seleccion: se copia al portapapeles y xterm NO la procesa (no llega ^C al proceso).
+    term.selection = 'texto seleccionado';
+    expect(term.pressKey({ key: 'c', ctrlKey: true })).toBe(false);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('texto seleccionado'));
+
+    // Ctrl+Shift+C sin seleccion no envia nada.
+    term.selection = '';
+    expect(term.pressKey({ key: 'C', ctrlKey: true, shiftKey: true })).toBe(false);
+
+    // Ctrl+V / Ctrl+Shift+V: lo resuelve el evento paste del navegador, no el manejador de teclas.
+    expect(term.pressKey({ key: 'v', ctrlKey: true })).toBe(false);
+    expect(term.pressKey({ key: 'V', ctrlKey: true, shiftKey: true })).toBe(false);
+
+    // Esc, flechas y demas son de la terminal: nada se intercepta.
+    expect(term.pressKey({ key: 'Escape' })).toBe(true);
+    expect(term.pressKey({ key: 'ArrowUp' })).toBe(true);
+    expect(term.pressKey({ key: 'd', ctrlKey: true })).toBe(true);
+    expect(api.pty_write_input).not.toHaveBeenCalled();
+  });
+
+  it('hace polling incremental de pty_poll_output y alimenta a xterm con el texto tal cual (con ANSI), nunca como HTML', async () => {
     const api = makeMatrixApi({
       pty_poll_output: vi.fn(async (paneId, sinceSeq = 0) => ({
         success: true,
@@ -125,6 +174,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
         alive: true,
         paused: false,
         rss_mb: 10,
+        since_seq: sinceSeq,
         next_seq: 1,
         truncated: false,
         text: sinceSeq === 0 ? '<img src=x onerror=alert(1)>\x1b[32m verde\x1b[0m\n' : ''
@@ -134,29 +184,70 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     const pane = await openCli('claude', 'pane_1');
 
     await waitFor(() => expect(api.pty_poll_output).toHaveBeenCalledWith('pane_1', 0));
-    await waitFor(() => expect(pane.textContent).toContain('<img src=x onerror=alert(1)> verde'));
+    await waitFor(() => expect(termOf('pane_1').output).toContain('<img src=x onerror=alert(1)>\x1b[32m verde\x1b[0m\n'));
+    // Los codigos ANSI llegan intactos a xterm (los interpreta el emulador) y nada se inyecta como DOM.
     expect(pane.querySelector('img')).toBeNull();
+    expect(pane.textContent).not.toContain('onerror');
     await waitFor(() => expect(api.pty_poll_output).toHaveBeenCalledWith('pane_1', 1));
+    // El texto solo se escribe una vez aunque haya muchos sondeos posteriores.
+    expect(termOf('pane_1').written.filter((chunk) => chunk.includes('verde'))).toHaveLength(1);
   });
 
-  it('protege las URLs de la salida con un dialogo de confirmacion explicito antes de abrirlas', async () => {
+  it('consume text/next_seq y nunca el campo duplicado chunks (EGM-78)', async () => {
+    const api = makeMatrixApi({
+      pty_poll_output: vi.fn(async (paneId, sinceSeq = 0) => ({
+        success: true, alive: true, paused: false, rss_mb: 10, since_seq: sinceSeq, next_seq: 3, truncated: false,
+        chunks: [{ seq: 1, text: 'SOLO_EN_CHUNKS' }],
+        text: sinceSeq === 0 ? 'salida real\n' : ''
+      }))
+    });
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(api.pty_poll_output).toHaveBeenCalledWith('pane_1', 3));
+    expect(termOf('pane_1').output).toBe('salida real\n');
+    expect(termOf('pane_1').output).not.toContain('SOLO_EN_CHUNKS');
+  });
+
+  it('si el backend trunca el buffer, avisa de forma discreta dentro de la terminal', async () => {
+    const api = makeMatrixApi({
+      pty_poll_output: vi.fn(async (paneId, sinceSeq = 0) => ({
+        success: true, alive: true, paused: false, rss_mb: 10, since_seq: sinceSeq, next_seq: 9,
+        truncated: sinceSeq === 0, text: sinceSeq === 0 ? 'resto\n' : ''
+      }))
+    });
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('salida anterior truncada del buffer'));
+    const out = termOf('pane_1').output;
+    expect(out.indexOf('truncada')).toBeLessThan(out.indexOf('resto'));
+    expect(out).toContain('\x1b[2m'); // gris tenue, sin llamar la atencion
+  });
+
+  it('las URLs de la terminal pasan por un dialogo de confirmacion explicito antes de abrirse', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('docs.example.com'));
 
-    const urlBtn = await screen.findByTestId('tty-detected-url');
-    expect(urlBtn.textContent).toBe('https://docs.example.com/auth');
-    fireEvent.click(urlBtn);
+    // xterm consulta el proveedor de enlaces con la fila bajo el raton.
+    const term = termOf('pane_1');
+    term.lines = [{ isWrapped: false, translateToString: () => 'Agente listo en https://docs.example.com/auth.' }];
+    expect(term.linkProviders).toHaveLength(1);
+    let links;
+    term.linkProviders[0].provideLinks(1, (found) => { links = found; });
+    expect(links).toHaveLength(1);
+    expect(links[0].text).toBe('https://docs.example.com/auth');
+
+    links[0].activate({}, links[0].text);
     expect(openSpy).not.toHaveBeenCalled();
-
     const modal = await screen.findByTestId('external-url-confirm-modal');
     expect(modal.textContent).toContain('https://docs.example.com/auth');
     fireEvent.click(screen.getByTestId('external-url-confirm-btn'));
     expect(openSpy).toHaveBeenCalledWith('https://docs.example.com/auth', '_blank', 'noopener,noreferrer');
   });
 
-  it('un proceso terminado deja su salida y el codigo de salida dentro del terminal', async () => {
+  it('un proceso terminado deja su salida y el codigo de salida dentro de la terminal', async () => {
     const api = makeMatrixApi({
       pty_poll_output: vi.fn(async () => ({
         success: true, alive: false, paused: false, rss_mb: 0, next_seq: 2, truncated: false,
@@ -164,10 +255,13 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
       }))
     });
     renderMatrix(api);
-    const pane = await openCli('claude', 'pane_1');
-    await waitFor(() => expect(within(pane).getByTestId('pane-exit-pane_1').textContent).toContain('código 3'));
-    expect(pane.textContent).toContain('adios');
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('proceso terminado, código 3'));
+    expect(termOf('pane_1').output.indexOf('adios')).toBeLessThan(termOf('pane_1').output.indexOf('proceso terminado'));
+    // El aviso se escribe una sola vez.
+    expect(termOf('pane_1').written.filter((chunk) => chunk.includes('proceso terminado'))).toHaveLength(1);
     expect(screen.getByTestId('pane-status-pane_1').textContent).toBe('Finalizado');
+    expect(screen.getByTestId('active-row-pane_1').textContent).toContain('código 3');
   });
 
   it('el filtro de busqueda del espacio de trabajo oculta las terminales que no coinciden', async () => {
@@ -205,6 +299,61 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     const pane = await screen.findByTestId('terminal-pane-pane_1');
     expect(within(pane).getByTestId('pane-cwd-pane_1').textContent).toBe('/srv/app');
     expect(screen.getByTestId('pane-status-pane_1').textContent).toBe('Activo');
+  });
+
+  it('al reconectar a una sesion viva la misma instancia de xterm sigue y el sondeo continua desde su seq (sin repetir la salida)', async () => {
+    const polls = [];
+    const pollFn = vi.fn(async (paneId, sinceSeq = 0) => {
+      polls.push(sinceSeq);
+      return {
+        success: true, alive: true, paused: false, rss_mb: 10, since_seq: sinceSeq,
+        next_seq: sinceSeq === 0 ? 5 : sinceSeq, truncated: false,
+        text: sinceSeq === 0 ? '\x1b[?1049hPANTALLA ALTERNA\n' : ''
+      };
+    });
+    const api = makeMatrixApi({ pty_poll_output: pollFn });
+    const first = renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('PANTALLA ALTERNA'));
+    const instance = termOf('pane_1');
+    first.unmount();
+    // Desmontar la vista NO destruye la terminal.
+    expect(instance.disposed).toBe(false);
+
+    polls.length = 0;
+    const api2 = makeMatrixApi({
+      pty_poll_output: pollFn,
+      pty_get_matrix_status: vi.fn(async () => ({
+        success: true, degraded: false, hub_url: null, hub_running: false, panes: [],
+        sessions: [{
+          pane_id: 'pane_1', session_id: 'pane_1-sess1', cli_profile: 'claude', role: 'implementer',
+          node_uuid: 'n1', pid: 4242, alive: true, paused: false, rss_mb: 30, cols: 100, rows: 28
+        }]
+      }))
+    });
+    renderMatrix(api2);
+    await screen.findByTestId('terminal-pane-pane_1');
+    await waitFor(() => expect(polls.length).toBeGreaterThan(0));
+    expect(Terminal.instances).toHaveLength(1);
+    expect(termOf('pane_1')).toBe(instance);
+    expect(polls.every((seq) => seq === 5)).toBe(true); // jamas vuelve a pedir desde 0
+    expect(instance.output.match(/PANTALLA ALTERNA/g)).toHaveLength(1);
+    // Y el elemento de xterm vuelve a estar colgado en el panel nuevo.
+    expect(screen.getByTestId('pane-output-pane_1').contains(instance.element)).toBe(true);
+  });
+
+  it('una sesion nueva en el mismo panel empieza con una terminal limpia', async () => {
+    const api = makeMatrixApi();
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    const old = termOf('pane_1');
+    fireEvent.click(screen.getByTestId('pane-close-btn-pane_1'));
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull());
+    expect(old.disposed).toBe(true);
+
+    await openCli('gemini', 'pane_1');
+    expect(termOf('pane_1')).not.toBe(old);
+    expect(termOf('pane_1').disposed).toBe(false);
   });
 });
 
@@ -301,7 +450,7 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     expect(api.pty_spawn_pane.mock.calls[0][7]).toBeNull();
   });
 
-  it('cada terminal activa se controla desde el slider: RSS, pausa, reanudar, tamano y cerrar', async () => {
+  it('cada terminal activa se controla desde el slider: RSS, pausa, reanudar, tamano visible y cerrar', async () => {
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
@@ -321,8 +470,9 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     await waitFor(() => expect(api.pty_pause_pane).toHaveBeenCalledWith('pane_1', false));
     await waitFor(() => expect(screen.getByTestId('pane-status-pane_1').textContent).toBe('Activo'));
 
-    fireEvent.change(screen.getByTestId('size-select-pane_1'), { target: { value: '120x36' } });
-    await waitFor(() => expect(api.pty_resize_pane).toHaveBeenCalledWith('pane_1', 120, 36));
+    // El tamano ya no se elige a mano: se ve el real y se ajusta solo al panel (fit).
+    expect(screen.getByTestId('pane-size-pane_1').textContent).toBe('100x28');
+    expect(screen.queryByTestId('size-select-pane_1')).toBeNull();
 
     fireEvent.click(screen.getByTestId('pane-close-btn-pane_1'));
     await waitFor(() => expect(api.pty_close_pane).toHaveBeenCalledWith('pane_1'));
@@ -340,7 +490,7 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     fireEvent.click(screen.getByTestId('pane-focus-btn-pane_1'));
     expect(screen.getByTestId('terminal-pane-pane_1').getAttribute('data-focused')).toBe('true');
     expect(screen.getByTestId('terminal-pane-pane_2').getAttribute('data-focused')).toBe('false');
-    expect(document.activeElement).toBe(screen.getByTestId('pane-output-pane_1'));
+    expect(termOf('pane_1').textarea).toBe(document.activeElement);
   });
 
   it('el selector de maximo llama a pty_set_max_panes y actualiza el contador', async () => {

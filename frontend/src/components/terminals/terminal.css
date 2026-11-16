@@ -1,0 +1,11 @@
+/* Ajustes del contenedor de xterm (el CSS base de xterm se importa desde terminalRegistry). */
+.mcp-xterm-host {
+  position: absolute;
+  inset: 0;
+}
+.mcp-xterm-host .xterm {
+  padding: 4px 8px 6px;
+}
+.mcp-xterm-host .xterm-viewport {
+  background-color: #000000 !important;
+}

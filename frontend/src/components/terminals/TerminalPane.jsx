@@ -1,98 +1,60 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { CliLogo } from './CliLogo';
-import { renderTerminalText } from './terminalModel';
-
-const URL_SPLIT_REGEX = /(https?:\/\/[^\s<>"'`)\]]+)/g;
+import { acquireTerminal, attachTerminal, detachTerminal } from './terminalRegistry';
+import './terminal.css';
 
 // Superficie fija de terminal: negra y sin la estetica de la aplicacion, en cualquier tema.
 const TERMINAL_BG = '#000000';
-const TERMINAL_FG = '#d4d4d4';
 const TERMINAL_DIM = '#6b7280';
 const TERMINAL_BORDER = '#1e1f24';
 
-function splitUrlTrailingPunctuation(rawUrl) {
-  let clean = rawUrl;
-  let trailing = '';
-  while (clean.length > 0 && /[.,;:!?]/.test(clean[clean.length - 1])) {
-    trailing = clean[clean.length - 1] + trailing;
-    clean = clean.slice(0, -1);
+/** Debounce del redimensionado: el ResizeObserver dispara muchas veces mientras se arrastra. */
+export const RESIZE_DEBOUNCE_MS = 100;
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Cae al metodo clasico.
   }
-  return { clean, trailing };
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(area);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Salida del terminal como texto: las URLs se vuelven botones que piden confirmacion antes
- * de abrirse. Todo lo demas se escribe como nodo de texto (React lo escapa), nunca como HTML.
+ * Atajos de portapapeles de la terminal (xterm manda a la funcion todo keydown; `false` = no
+ * lo proceses). Ctrl+C con texto seleccionado lo copia; sin seleccion pasa al PTY como ^C
+ * (interrumpe). Ctrl+V y Ctrl+Shift+V dejan que el navegador dispare el evento `paste`, que
+ * xterm ya convierte en entrada. Todo lo demas (Esc, flechas, Ctrl+letra...) es de la terminal.
  */
-export function renderOutputWithSafeLinks(text, onRequestOpenUrl) {
-  const cleaned = renderTerminalText(text);
-  if (!cleaned) return null;
-  const parts = cleaned.split(URL_SPLIT_REGEX);
-  return parts.map((part, idx) => {
-    if (!part) return null;
-    if (/^https?:\/\//i.test(part)) {
-      const { clean, trailing } = splitUrlTrailingPunctuation(part);
-      if (!clean) return part;
-      return (
-        <React.Fragment key={`url-${idx}`}>
-          <button
-            type="button"
-            data-testid="tty-detected-url"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRequestOpenUrl(clean);
-            }}
-            title={`Abrir enlace externo con confirmación: ${clean}`}
-            style={{
-              display: 'inline',
-              border: 'none',
-              background: 'transparent',
-              padding: 0,
-              margin: 0,
-              font: 'inherit',
-              color: '#6aa9ff',
-              textDecoration: 'underline',
-              cursor: 'pointer'
-            }}
-          >
-            {clean}
-          </button>
-          {trailing}
-        </React.Fragment>
-      );
+export function handleTerminalKey(term, ev) {
+  if (ev.type !== 'keydown') return true;
+  const key = String(ev.key || '').toLowerCase();
+  const mod = (ev.ctrlKey || ev.metaKey) && !ev.altKey;
+  if (mod && key === 'c') {
+    if (term.hasSelection()) {
+      void copyToClipboard(term.getSelection());
+      return false;
     }
-    return <React.Fragment key={`txt-${idx}`}>{part}</React.Fragment>;
-  });
-}
-
-/** Traduce un KeyboardEvent a los bytes que espera un PTY, o null si no aplica. */
-export function keyEventToTerminalInput(e) {
-  const key = e.key;
-  if (!key) return null;
-  if (e.ctrlKey && !e.altKey && !e.metaKey) {
-    if (key.length === 1 && /[a-zA-Z]/.test(key) && !e.shiftKey) {
-      return String.fromCharCode(key.toUpperCase().charCodeAt(0) - 64);
-    }
-    return null;
+    return !ev.shiftKey; // Ctrl+Shift+C sin seleccion no envia nada
   }
-  if (e.metaKey) return null;
-  switch (key) {
-    case 'Enter': return '\r';
-    case 'Backspace': return '\x7f';
-    case 'Tab': return e.shiftKey ? '\x1b[Z' : '\t';
-    case 'Escape': return '\x1b';
-    case 'ArrowUp': return '\x1b[A';
-    case 'ArrowDown': return '\x1b[B';
-    case 'ArrowRight': return '\x1b[C';
-    case 'ArrowLeft': return '\x1b[D';
-    case 'Home': return '\x1b[H';
-    case 'End': return '\x1b[F';
-    case 'Delete': return '\x1b[3~';
-    case 'PageUp': return '\x1b[5~';
-    case 'PageDown': return '\x1b[6~';
-    default:
-      return key.length === 1 && !e.altKey ? key : null;
-  }
+  if (mod && key === 'v') return false;
+  return true;
 }
 
 /**
@@ -137,8 +99,12 @@ export function EmptyTerminalSlot({ index, showHint = false }) {
 }
 
 /**
- * Un panel = una terminal. Logotipo discreto del CLI y la carpeta de trabajo arriba; el resto
- * es la salida del proceso y el teclado va directo al PTY.
+ * Un panel = una terminal real (xterm). Logotipo discreto del CLI y la carpeta de trabajo
+ * arriba; el resto es el emulador, con el teclado directo al PTY.
+ *
+ * La instancia de xterm vive en terminalRegistry (fuera de React): este componente solo la
+ * cuelga en su contenedor, conecta teclado/redimensionado/enlaces mientras esta montado y la
+ * suelta al desmontarse SIN destruirla. La salida la escribe el bucle de sondeo del padre.
  */
 export function TerminalPane({
   pane,
@@ -148,62 +114,100 @@ export function TerminalPane({
   focusToken,
   onFocus,
   onInput,
+  onResize,
   onRequestOpenUrl,
   registerTerminalRef
 }) {
-  const preRef = useRef(null);
-  const stickRef = useRef(true);
+  const containerRef = useRef(null);
+  const termRef = useRef(null);
   const paneId = pane.paneId;
+  const sessionId = pane.sessionId;
 
-  const setRefs = (el) => {
-    preRef.current = el;
-    registerTerminalRef?.(paneId, el);
-  };
+  // Siempre la ultima version de los callbacks y del estado sin reconectar el emulador.
+  const latest = useRef({});
+  latest.current = { pane, onInput, onResize, onRequestOpenUrl };
 
-  const rendered = useMemo(
-    () => renderOutputWithSafeLinks(pane.output, onRequestOpenUrl),
-    [pane.output, onRequestOpenUrl]
-  );
-
-  // Pegado al final salvo que la persona haya subido a leer el historial.
   useLayoutEffect(() => {
-    const el = preRef.current;
-    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [pane.output, pane.exitCode]);
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const entry = acquireTerminal(paneId, {
+      sessionId,
+      cols: latest.current.pane.cols,
+      rows: latest.current.pane.rows
+    });
+    const term = entry.term;
+    termRef.current = term;
+    attachTerminal(entry, container);
+    entry.onOpenUrl = (url) => latest.current.onRequestOpenUrl?.(url);
+
+    // Entrada: xterm traduce teclas, pegado y secuencias; aqui solo se reenvia al PTY.
+    const dataSub = term.onData((data) => {
+      if (!latest.current.pane.alive) return;
+      latest.current.onInput(paneId, data);
+    });
+    term.attachCustomKeyEventHandler((ev) => handleTerminalKey(term, ev));
+
+    // Redimensionado: fit() al tamano del contenedor y, si cambio, avisa al backend.
+    const syncSize = () => {
+      if (entry.disposed) return;
+      let dims;
+      try {
+        dims = entry.fit.proposeDimensions?.();
+      } catch {
+        dims = null;
+      }
+      if (!dims || !(dims.cols > 0) || !(dims.rows > 0)) return; // oculto o sin medir aun
+      try {
+        entry.fit.fit();
+      } catch {
+        return;
+      }
+      const { cols, rows } = term;
+      if (cols !== entry.ptySize.cols || rows !== entry.ptySize.rows) {
+        entry.ptySize = { cols, rows };
+        latest.current.onResize?.(paneId, cols, rows);
+      }
+    };
+    let debounceTimer = null;
+    const scheduleSync = () => {
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        syncSize();
+      }, RESIZE_DEBOUNCE_MS);
+    };
+    syncSize(); // primer ajuste sin esperar al debounce
+    let observer = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(scheduleSync);
+      observer.observe(container);
+    } else {
+      window.addEventListener('resize', scheduleSync);
+    }
+
+    registerTerminalRef?.(paneId, { focus: () => term.focus() });
+
+    return () => {
+      dataSub?.dispose?.();
+      term.attachCustomKeyEventHandler(() => true);
+      if (entry.onOpenUrl) entry.onOpenUrl = null;
+      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      if (observer) observer.disconnect();
+      else window.removeEventListener('resize', scheduleSync);
+      registerTerminalRef?.(paneId, null);
+      termRef.current = null;
+      detachTerminal(entry, container);
+    };
+    // La instancia solo cambia con el panel o con la sesion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paneId, sessionId]);
 
   useEffect(() => {
-    if (focusToken && isFocused) preRef.current?.focus();
+    if (focusToken && isFocused) termRef.current?.focus();
     // Solo reacciona a una peticion nueva de foco.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusToken]);
 
-  const handleScroll = (e) => {
-    const el = e.currentTarget;
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  };
-
-  const handleKeyDown = (e) => {
-    if (!pane.alive) return;
-    if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'c') {
-      const sel = typeof window !== 'undefined' ? window.getSelection?.()?.toString() : '';
-      if (sel) return; // copiar el texto seleccionado
-    }
-    if (e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v') return; // deja pasar el pegado
-    const payload = keyEventToTerminalInput(e);
-    if (payload !== null) {
-      e.preventDefault();
-      onInput(paneId, payload);
-    }
-  };
-
-  const handlePaste = (e) => {
-    if (!pane.alive) return;
-    const text = e.clipboardData?.getData?.('text');
-    e.preventDefault();
-    if (text) onInput(paneId, text.replace(/\r?\n/g, '\r'));
-  };
-
-  const exited = !pane.alive && pane.exitCode !== null && pane.exitCode !== undefined;
   const logoName = cli?.display_name || pane.cliProfile;
 
   return (
@@ -263,40 +267,19 @@ export function TerminalPane({
         )}
       </div>
 
-      <pre
-        ref={setRefs}
+      <div
+        ref={containerRef}
         data-testid={`pane-output-${paneId}`}
-        tabIndex={0}
         aria-label={`Terminal: ${label}`}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        onScroll={handleScroll}
         style={{
+          position: 'relative',
           flex: 1,
           minHeight: 0,
-          margin: 0,
-          padding: '4px 10px 8px',
+          minWidth: 0,
           backgroundColor: TERMINAL_BG,
-          color: TERMINAL_FG,
-          fontFamily: 'var(--font-mono)',
-          fontSize: '12px',
-          lineHeight: 1.4,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          outline: 'none',
-          userSelect: 'text',
-          caretColor: TERMINAL_FG
+          overflow: 'hidden'
         }}
-      >
-        {rendered}
-        {exited && (
-          <span data-testid={`pane-exit-${paneId}`} style={{ display: 'block', color: TERMINAL_DIM }}>
-            {`[proceso terminado, código ${pane.exitCode}]`}
-          </span>
-        )}
-      </pre>
+      />
     </section>
   );
 }
