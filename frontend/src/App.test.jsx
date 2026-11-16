@@ -236,6 +236,9 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
       })),
       subscribe_project_events: vi.fn(async () => ({ success: true })),
       poll_project_events: vi.fn(async () => ({ success: true, events: [] })),
+      get_project_collaborators: vi.fn(async () => ({ success: true, collaborators: [] })),
+      generate_p2p_invite: vi.fn(async () => ({ success: true, invite_url: '' })),
+      get_mcp_and_agents_status: vi.fn(async () => ({ success: true, mcp_server: null, connected_agents: [] })),
       get_okf_tags_index: vi.fn(async () => ({
         success: true,
         tags: { hexagonal: ['docs/okf/adr/ADR-001.md'], seguridad: ['docs/okf/backend/auth.md'] },
@@ -389,6 +392,31 @@ describe('App - Header Combobox, Gobernanza OKF, Filtros Kanban y Vista Dual (Hi
       expect(sliderTab.getAttribute('aria-expanded')).toBe('true');
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(sliderTab.getAttribute('aria-expanded')).toBe('false');
+    }
+  });
+});
+
+describe('App - atajos globales y terminales', () => {
+  it('con el foco dentro de una terminal (xterm) las teclas son del proceso: Ctrl+D no cambia el tema', async () => {
+    await renderReadyApp();
+    const theme = () => document.documentElement.getAttribute('data-theme');
+    const before = theme();
+
+    // Un elemento con la clase de xterm: lo que tiene el foco cuando se teclea en una terminal.
+    const host = document.createElement('div');
+    host.className = 'xterm';
+    const helper = document.createElement('textarea');
+    host.appendChild(helper);
+    document.body.appendChild(host);
+    try {
+      fireEvent.keyDown(helper, { key: 'd', ctrlKey: true });
+      expect(theme()).toBe(before);
+
+      // Fuera de la terminal el atajo de la aplicacion sigue funcionando.
+      fireEvent.keyDown(document.body, { key: 'd', ctrlKey: true });
+      await waitFor(() => expect(theme()).not.toBe(before));
+    } finally {
+      document.body.removeChild(host);
     }
   });
 });

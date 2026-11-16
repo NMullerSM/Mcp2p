@@ -158,6 +158,9 @@ export default function App() {
   // Manejo de atajos de teclado globales
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Con el foco en una terminal (xterm) las teclas son del proceso: Ctrl+D (EOF), Ctrl+P/N
+      // (historial), Esc... no deben disparar atajos de la aplicacion. F1 sigue abriendo la ayuda.
+      if (e.key !== 'F1' && e.target instanceof Element && e.target.closest('.xterm')) return;
       // Ctrl+D: Alternar tema
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
         e.preventDefault();
