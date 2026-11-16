@@ -80,6 +80,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         self._embedded_hub: Optional[EmbeddedMcpHub] = None
         self._null_terminal_connector: Optional[NullAgentTerminalConnector] = None
         self._install_broker: Optional[InstallConfirmationBroker] = None
+        # Un cerrojo por panel: serializa comprobar -> registrar token -> lanzar (EGM-75).
+        self._pane_locks: Dict[str, threading.Lock] = {}
+
+    def _pane_lock(self, pane_id: str) -> threading.Lock:
+        with self._terminal_lock:
+            return self._pane_locks.setdefault(pane_id, threading.Lock())
 
     def _get_gate(self) -> ExtensionSecurityGate:
         gate = self.extension_gate
@@ -892,6 +898,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
     def pty_install_cli(self, cli_id: Any, confirmation_token: Any, pane_id: Any = None) -> Dict[str, Any]:
         """Paso 2: con un token valido abre un panel real que ejecuta el comando del catalogo."""
+        pane_lock: Optional[threading.Lock] = None
         try:
             if is_unsupported_terminal_platform():
                 return {**unsupported_platform_response(), "cli_id": cli_id if isinstance(cli_id, str) else None}
@@ -904,6 +911,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             target_pane, pane_error = self._pick_install_pane(terminal, pane_id)
             if pane_error is not None or target_pane is None:
                 return {**(pane_error or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
+            pane_lock = self._pane_lock(target_pane)
+            pane_lock.acquire()
 
             verdict = self._get_install_broker().consume(spec.id, confirmation_token, option.command, svc.platform)
             if verdict == "INSTALL_TOKEN_EXPIRED":
@@ -954,6 +963,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             }
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
+        finally:
+            if pane_lock is not None:
+                pane_lock.release()
 
     @staticmethod
     def _validate_cwd(cwd: Any) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
@@ -979,10 +991,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         rows: int = 28,
         start_hub: bool = True,
         cwd: Optional[str] = None,
+        resume: bool = False,
     ) -> Dict[str, Any]:
         registry = self._get_pane_registry()
         registered_here = False
         norm_pane_id: Optional[str] = None
+        pane_lock: Optional[threading.Lock] = None
         try:
             terminal = self._get_terminal_connector()
             max_panes = self._terminal_max_panes(terminal)
@@ -1032,6 +1046,13 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if cwd_error is not None:
                 return {**cwd_error, "degraded": False, "pane_id": norm_pane_id}
 
+            if not isinstance(resume, bool):
+                return _fail("INVALID_ARGUMENT", "resume debe ser booleano.", degraded=False, pane_id=norm_pane_id)
+
+            # EGM-75: dos spawns simultaneos del mismo panel no deben pisarse el token del registro.
+            pane_lock = self._pane_lock(norm_pane_id)
+            pane_lock.acquire()
+
             # Evitar pisar el token de una sesión ya viva en ese pane_id.
             list_fn = getattr(terminal, "list_sessions", None)
             if callable(list_fn):
@@ -1076,6 +1097,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                     hub_url=hub_url,
                     session_token=token,
                     node_uuid=node_uuid,
+                    resume=resume,
                 )
             )
 
@@ -1127,6 +1149,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "pid": pid,
                 "hub_url": hub_url,
                 "cwd": effective_cwd,
+                "mcp_injection": spawn_res.get("mcp_injection"),
                 "pane": pane_meta,
                 "session": session_meta,
             }
@@ -1144,6 +1167,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "message": f"No se pudo abrir el panel: {exc}",
                 "error": str(exc),
             }
+        finally:
+            if pane_lock is not None:
+                pane_lock.release()
 
     def pty_write_input(self, pane_id: Any, data: str, is_human: bool = True) -> Dict[str, Any]:
         try:

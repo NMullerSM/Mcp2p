@@ -107,6 +107,8 @@ def test_egm67_concurrent_spawns_never_orphan_processes(monkeypatch: pytest.Monk
             super().__init__(*a, **k)
 
     monkeypatch.setattr(pty_host.subprocess, "Popen", _SlowPopen)
+    # Hijos que ya existian (de otros tests del mismo proceso) no cuentan como huerfanos de ESTE test.
+    preexisting = {c.pid for c in psutil.Process().children(recursive=True)}
     host = pty_host.PosixPtyHostConnector(max_panes=max_panes, min_available_mb=0)
     barrier = threading.Barrier(len(panes))
     results: list = []
@@ -129,7 +131,8 @@ def test_egm67_concurrent_spawns_never_orphan_processes(monkeypatch: pytest.Monk
         host.close()
     time.sleep(0.2)
     leftovers = [c for c in psutil.Process().children(recursive=True)
-                 if c.status() != psutil.STATUS_ZOMBIE and "sleep" in " ".join(c.cmdline())]
+                 if c.pid not in preexisting and c.status() != psutil.STATUS_ZOMBIE
+                 and "sleep" in " ".join(c.cmdline())]
     for c in leftovers:
         c.kill()
     assert leftovers == [], "procesos huerfanos fuera del registro del host"

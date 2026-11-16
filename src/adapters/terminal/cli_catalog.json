@@ -17,9 +17,10 @@
       "launch_flags": [],
       "mcp": {
         "method": "flag",
+        "format": "claude_mcp_json",
         "argv": ["--mcp-config", "{mcp_config_file}"],
         "verified": true,
-        "note": "Verificado con `claude --help` local: --mcp-config <configs...> y --strict-mcp-config."
+        "note": "Verificado con el binario local (2.1.309): `--mcp-config <archivo>` con mcpServers.<n>.{type:http,url,headers}; el Hub embebido respondio 200 con el token del panel. No se usa --strict-mcp-config para respetar los MCP del usuario."
       },
       "resume": {
         "argv": ["--continue"],
@@ -105,10 +106,11 @@
       },
       "launch_flags": [],
       "mcp": {
-        "method": "config_file",
-        "path": "~/.gemini/settings.json",
+        "method": "env",
+        "format": "gemini_settings_json",
+        "env": {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": "{mcp_config_file}"},
         "verified": false,
-        "note": "No verificado contra el binario ni la documentacion oficial."
+        "note": "NO verificado con binario (gemini no esta instalado). Segun la documentacion, GEMINI_CLI_SYSTEM_SETTINGS_PATH sustituye el archivo de ajustes del sistema (maxima precedencia) y mcpServers de los distintos ambitos se fusionan; httpUrl + headers para Streamable HTTP."
       },
       "resume": {
         "argv": ["--resume"],
@@ -173,10 +175,11 @@
       },
       "launch_flags": [],
       "mcp": {
-        "method": "subcommand",
-        "argv": ["mcp"],
-        "verified": true,
-        "note": "La documentacion oficial indica `codex mcp` para anadir servidores MCP."
+        "method": "flag",
+        "format": "none",
+        "argv": ["-c", "mcp_servers.mcp2p.url=\"{hub_url}\"", "-c", "mcp_servers.mcp2p.bearer_token_env_var=\"MCP2P_SESSION_TOKEN\""],
+        "verified": false,
+        "note": "NO verificado con binario (codex no esta instalado). Segun la documentacion, mcp_servers.<id>.{url,bearer_token_env_var} en config.toml; se pasan como sobrescrituras `-c` (solo viaja el NOMBRE de la variable; el token queda en el entorno del panel)."
       },
       "resume": {
         "argv": ["resume"],
@@ -255,10 +258,11 @@
       },
       "launch_flags": [],
       "mcp": {
-        "method": "subcommand",
-        "argv": ["mcp", "add"],
+        "method": "env",
+        "format": "opencode_json",
+        "env": {"OPENCODE_CONFIG": "{mcp_config_file}"},
         "verified": true,
-        "note": "Verificado con `opencode mcp --help` local (v1.16.2)."
+        "note": "Verificado con el binario local (v1.16.2): OPENCODE_CONFIG=<archivo> con mcp.<n>.{type:remote,url,headers}; `opencode mcp list` mostro el Hub embebido como connected. `mcp add` es interactivo y no se usa."
       },
       "resume": {
         "argv": ["--continue"],
@@ -329,10 +333,9 @@
       },
       "launch_flags": [],
       "mcp": {
-        "method": "subcommand",
-        "argv": ["mcp", "add"],
+        "method": "unsupported",
         "verified": true,
-        "note": "Verificado con `agy --help` local (1.5.4): subcomando `mcp` (add, remove, list, enable, disable)."
+        "note": "Verificado con el binario local (1.5.4): agy solo lee MCP de ~/.gemini/config/mcp_config.json (global y persistente) o de plugins instalados; no hay flag ni variable de sesion. Inyectar ahi dejaria el token del panel en disco y compartido entre sesiones, asi que NO se inyecta: conecte el Hub a mano."
       },
       "resume": {
         "argv": ["--continue"],
@@ -385,6 +388,7 @@
       "launch_flags": [],
       "mcp": {
         "method": "none",
+        "format": "none",
         "verified": true,
         "note": ""
       },

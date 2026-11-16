@@ -60,7 +60,17 @@ _INSTALL_PATTERNS: Dict[str, "re.Pattern[str]"] = {
 }
 _SCRIPT_METHODS = frozenset({"curl_sh", "powershell_irm"})
 INSTALL_METHODS = tuple(_INSTALL_PATTERNS)
-_MCP_METHODS = frozenset({"flag", "subcommand", "config_file", "env", "none"})
+# `flag` y `env` son los unicos metodos que el host inyecta al lanzar un panel (EGM-70). `subcommand` y
+# `config_file` se conservan como metadato para catalogos de usuario; `unsupported` marca un CLI verificado
+# que no admite configuracion MCP de sesion.
+_MCP_METHODS = frozenset({"flag", "subcommand", "config_file", "env", "none", "unsupported"})
+# Formatos del archivo de configuracion MCP por panel (los renderiza `mcp_injection.py`).
+MCP_CONFIG_FORMATS = frozenset({"none", "claude_mcp_json", "opencode_json", "gemini_settings_json"})
+# Marcadores permitidos en `mcp.argv` / `mcp.env`. NO existe un marcador de token: el token del panel no
+# puede llegar al argv ni a las variables inyectadas desde el catalogo; solo viaja dentro del archivo 0600.
+MCP_PLACEHOLDERS = ("{mcp_config_file}", "{hub_url}")
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+_MCP_ENV_DENY = frozenset({"PATH", "HOME", "SHELL", "PYTHONPATH", "PYTHONHOME", "IFS", "TERM", "USER"})
 _KINDS = frozenset({"agent_cli", "shell"})
 
 
@@ -267,7 +277,7 @@ _ENTRY_KEYS = (
     "launch_flags", "mcp", "resume", "install", "shell_env",
 )
 _INSTALL_KEYS = ("method", "command", "verified", "source_url", "note")
-_MCP_KEYS = ("method", "argv", "path", "verified", "note")
+_MCP_KEYS = ("method", "format", "argv", "env", "path", "verified", "note")
 _RESUME_KEYS = ("argv", "verified", "note")
 
 
@@ -328,9 +338,42 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
     mcp_method = _text(mcp_raw.get("method", "none"), f"{where}.mcp.method", max_len=16)
     if mcp_method not in _MCP_METHODS:
         raise CatalogValidationError(f"{where}.mcp.method invalido.")
+    mcp_format = _text(mcp_raw.get("format", "none"), f"{where}.mcp.format", max_len=32)
+    if mcp_format not in MCP_CONFIG_FORMATS:
+        raise CatalogValidationError(f"{where}.mcp.format invalido.")
+    mcp_env_raw = mcp_raw.get("env", {})
+    if not isinstance(mcp_env_raw, dict) or len(mcp_env_raw) > 4:
+        raise CatalogValidationError(f"{where}.mcp.env: se esperaba un objeto corto.")
+    mcp_env: Dict[str, str] = {}
+    for env_name, env_template in mcp_env_raw.items():
+        if (
+            not isinstance(env_name, str)
+            or _ENV_NAME_RE.fullmatch(env_name) is None
+            or env_name in _MCP_ENV_DENY
+            or env_name.startswith(("MCP2P_", "LD_", "DYLD_"))
+        ):
+            raise CatalogValidationError(f"{where}.mcp.env: nombre de variable no permitido: {env_name!r}.")
+        mcp_env[env_name] = _text(env_template, f"{where}.mcp.env.{env_name}", max_len=200)
+    mcp_argv = list(_argv_list(mcp_raw.get("argv", []), f"{where}.mcp.argv"))
+    templates = [*mcp_argv, *mcp_env.values()]
+    for template in templates:
+        for marker in _PLACEHOLDER_RE.findall(template):
+            if marker not in MCP_PLACEHOLDERS:
+                raise CatalogValidationError(f"{where}.mcp: marcador no permitido {marker!r}.")
+    uses_file = any("{mcp_config_file}" in t for t in templates)
+    if uses_file != (mcp_format != "none"):
+        raise CatalogValidationError(f"{where}.mcp: format y {{mcp_config_file}} deben usarse juntos.")
+    if mcp_method == "flag" and (not mcp_argv or mcp_env):
+        raise CatalogValidationError(f"{where}.mcp: method=flag exige argv (sin env).")
+    if mcp_method == "env" and (not mcp_env or mcp_argv):
+        raise CatalogValidationError(f"{where}.mcp: method=env exige env (sin argv).")
+    if mcp_method in ("none", "unsupported") and (mcp_argv or mcp_env):
+        raise CatalogValidationError(f"{where}.mcp: method={mcp_method} no admite argv ni env.")
     mcp: Dict[str, Any] = {
         "method": mcp_method,
-        "argv": list(_argv_list(mcp_raw.get("argv", []), f"{where}.mcp.argv")),
+        "format": mcp_format,
+        "argv": mcp_argv,
+        "env": mcp_env,
         "verified": bool(mcp_raw.get("verified", False)) and source == "repo",
         "note": _text(mcp_raw.get("note", ""), f"{where}.mcp.note", max_len=300, allow_empty=True),
     }

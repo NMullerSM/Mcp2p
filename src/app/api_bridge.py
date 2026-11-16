@@ -674,6 +674,7 @@ class ApiBridge:
         rows: int = 28,
         start_hub: bool = True,
         cwd: Optional[str] = None,
+        resume: bool = False,
     ) -> Dict[str, Any]:
         return self.extensions_ui.pty_spawn_pane(
             pane_id=pane_id,
@@ -684,6 +685,7 @@ class ApiBridge:
             rows=rows,
             start_hub=start_hub,
             cwd=cwd,
+            resume=resume,
         )
 
     def pty_list_cli_catalog(self) -> Dict[str, Any]:

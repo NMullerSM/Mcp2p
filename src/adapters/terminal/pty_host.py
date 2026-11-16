@@ -32,6 +32,8 @@ from src.adapters.terminal.cli_catalog import (
     legacy_profiles,
     load_repo_catalog,
 )
+from src.adapters.terminal.cli_catalog import CliSpec
+from src.adapters.terminal.mcp_injection import McpInjection, McpInjectionError, PaneMcpConfigStore
 from src.proc_utils import no_window_kwargs
 from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_platform_response
 
@@ -288,6 +290,8 @@ class _PtySession:
     stop_event: threading.Event = field(default_factory=threading.Event)
     fd_lock: threading.Lock = field(default_factory=threading.Lock)
     reader_thread: Optional[threading.Thread] = None
+    cwd: Optional[str] = None
+    mcp_injection: Dict[str, Any] = field(default_factory=dict)
 
     def is_alive(self) -> bool:
         return self.process.poll() is None
@@ -323,6 +327,7 @@ class PosixPtyHostConnector:
         catalog_service: Optional[CliCatalogService] = None,
         min_available_mb: int = DEFAULT_MIN_AVAILABLE_MB,
         memory_probe: Optional[Callable[[], float]] = None,
+        mcp_config_store: Optional[PaneMcpConfigStore] = None,
     ) -> None:
         if int(max_panes) < 1 or int(max_panes) > HARD_MAX_PANES:
             raise ValueError(f"max_panes debe estar entre 1 y {HARD_MAX_PANES}.")
@@ -337,6 +342,12 @@ class PosixPtyHostConnector:
         self._sessions: Dict[str, _PtySession] = {}
         # Paneles con un spawn en curso (reserva bajo `_lock` entre la comprobacion y el registro, EGM-67).
         self._spawning: set[str] = set()
+        # Configuracion MCP por panel (EGM-70): se barre lo que dejo una GUI anterior muerta sin cerrar.
+        self._mcp_store = mcp_config_store if mcp_config_store is not None else PaneMcpConfigStore()
+        try:
+            self._mcp_store.sweep_orphans()
+        except Exception as exc:  # pragma: no cover - defensivo: el barrido nunca debe impedir el arranque
+            logger.debug("No se pudo barrer la configuracion MCP huerfana: %s", exc)
 
     @property
     def max_panes(self) -> int:
@@ -515,6 +526,13 @@ class PosixPtyHostConnector:
         finally:
             session.buffer.flush()
             session.close_master_fd()
+            # Si el proceso ya termino por su cuenta, su configuracion MCP (con el token) no debe quedar en disco.
+            try:
+                session.process.wait(timeout=2.0)
+            except Exception:
+                pass
+            if not session.is_alive():
+                self._mcp_store.cleanup(session.session_id)
 
     def _shutdown_session(self, session: _PtySession) -> Optional[int]:
         proc = session.process
@@ -573,6 +591,7 @@ class PosixPtyHostConnector:
             thread.join(timeout=0.3)
 
         session.buffer.flush()
+        self._mcp_store.cleanup(session.session_id)
         return proc.poll()
 
     @staticmethod
@@ -592,6 +611,8 @@ class PosixPtyHostConnector:
             "rows": session.rows,
             "started_at": session.started_at,
             "next_seq": session.buffer.next_seq,
+            "cwd": session.cwd,
+            "mcp_injection": dict(session.mcp_injection),
         }
 
     # ------------------------------------------------------------------
@@ -630,6 +651,7 @@ class PosixPtyHostConnector:
         session_token: Optional[str] = None,
         node_uuid: Optional[str] = None,
         use_trampoline: bool = True,
+        resume: bool = False,
     ) -> Dict[str, Any]:
         try:
             norm_pane, pane_index = self._normalize_pane(pane_id)
@@ -675,6 +697,7 @@ class PosixPtyHostConnector:
                 }
 
         profile_label = cli_profile if isinstance(cli_profile, str) else repr(cli_profile)
+        launch_spec: Optional[CliSpec] = None
         if command is not None:
             resolved_cmd = self._parse_command(command)
             binary_ok = self._which_executable(resolved_cmd[0], resolved_cwd) is not None
@@ -695,6 +718,7 @@ class PosixPtyHostConnector:
             display_name = spec.display_name
             binary_ok = argv is not None
             resolved_cmd = argv if argv is not None else [spec.binary]
+            launch_spec = spec
 
         if not binary_ok:
             hint = self.catalog_service.install_hint(cli_profile) if isinstance(cli_profile, str) else {
@@ -717,6 +741,20 @@ class PosixPtyHostConnector:
                 "mcp_config": _default_mcp_config(),
                 **hint,
             }
+
+        if resume:
+            # Solo el argv de reanudacion VERIFICADO del catalogo del repo; nunca texto del llamador.
+            resume_argv = list(launch_spec.resume.get("argv", [])) if launch_spec is not None else []
+            if launch_spec is None or not resume_argv or not launch_spec.resume.get("verified"):
+                return {
+                    "success": False,
+                    "degraded": False,
+                    "code": "RESUME_NOT_AVAILABLE",
+                    "pane_id": norm_pane,
+                    "cli_profile": profile_label,
+                    "message": "Este CLI no tiene una reanudacion verificada en el catalogo.",
+                }
+            resolved_cmd = [*resolved_cmd, *resume_argv]
 
         stale_session: Optional[_PtySession] = None
         with self._lock:
@@ -752,6 +790,7 @@ class PosixPtyHostConnector:
                 alive_others=alive_others, cli_profile=cli_profile, role=role, resolved_cmd=resolved_cmd,
                 resolved_cwd=resolved_cwd, cols_int=cols_int, rows_int=rows_int, env_overrides=env_overrides,
                 hub_url=hub_url, session_token=session_token, node_uuid=node_uuid, use_trampoline=use_trampoline,
+                launch_spec=launch_spec,
             )
         finally:
             with self._lock:
@@ -775,6 +814,7 @@ class PosixPtyHostConnector:
         session_token: Optional[str],
         node_uuid: Optional[str],
         use_trampoline: bool,
+        launch_spec: Optional[CliSpec] = None,
     ) -> Dict[str, Any]:
         """Resto del spawn con el panel ya reservado en `_spawning` (lo libera `spawn_session`)."""
         if alive_others >= self.max_panes:
@@ -791,13 +831,27 @@ class PosixPtyHostConnector:
         if stale_session is not None:
             self._shutdown_session(stale_session)
 
+        session_id = f"{norm_pane}-{uuid.uuid4().hex[:12]}"
+        try:
+            injection = self._mcp_store.prepare(
+                launch_spec, session_id=session_id, hub_url=hub_url, token=session_token
+            )
+        except McpInjectionError as exc:
+            return {
+                "success": False,
+                "degraded": False,
+                "code": "MCP_CONFIG_FAILED",
+                "pane_id": norm_pane,
+                "message": f"No se pudo preparar la conexion MCP del panel: {exc}",
+            }
+        resolved_cmd = [*resolved_cmd, *injection.argv]
         launch_cmd = self._build_launch_command(resolved_cmd, use_trampoline=use_trampoline)
         child_env = self._build_child_env(
             norm_pane=norm_pane,
             hub_url=hub_url,
             session_token=session_token,
             node_uuid=node_uuid,
-            env_overrides=env_overrides,
+            env_overrides={**(env_overrides or {}), **injection.env},
             use_trampoline=use_trampoline,
         )
 
@@ -841,6 +895,7 @@ class PosixPtyHostConnector:
                     proc.wait(timeout=0.5)
                 except OSError:
                     pass
+            self._mcp_store.cleanup(session_id)
             return {
                 "success": False,
                 "degraded": True,
@@ -858,7 +913,6 @@ class PosixPtyHostConnector:
         except OSError:
             pgid = proc.pid
 
-        session_id = f"{norm_pane}-{uuid.uuid4().hex[:12]}"
         session = _PtySession(
             pane_id=norm_pane,
             pane_index=pane_index,
@@ -876,6 +930,8 @@ class PosixPtyHostConnector:
             rows=rows_int,
             started_at=datetime.now(timezone.utc).isoformat(),
             buffer=PtyOutputRingBuffer(max_bytes=self.ring_max_bytes),
+            cwd=resolved_cwd,
+            mcp_injection=injection.public(),
         )
         reader = threading.Thread(
             target=self._reader_loop,
@@ -900,6 +956,7 @@ class PosixPtyHostConnector:
             "node_uuid": node_uuid,
             "cols": cols_int,
             "rows": rows_int,
+            "mcp_injection": injection.public(),
         }
 
     def send_input(self, pane_id: Any, data: Union[str, bytes]) -> Dict[str, Any]:
