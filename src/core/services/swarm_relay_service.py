@@ -301,9 +301,17 @@ class SwarmRelayOrchestrator:
         # la clave de ronda sale SOLO de la tarjeta/sesion y del par de nodos, derivados en el servidor.
         sender = self._extract_sender_node(item)
         base_key = self._make_loop_key(project_uuid=project_uuid, card_id=card_id, session_id=session_id)
-        loop_key = (
-            f"{base_key}|{'|'.join(sorted({sender, target}))}" if base_key is not None else None
-        )
+        if base_key is None:
+            loop_key = None
+        elif target == "*":
+            # EGM-83: el trafico real del Hub (RFC, eventos kanban) va a la cola "*": no hay par de nodos que
+            # derivar. Con el par {remitente, "*"} cada agente tenia su propia clave y el ping-pong A<->B no
+            # sumaba nunca. En difusion la clave es la de la tarjeta (y la sesion RFC si la hay) y una ronda
+            # es un cambio de remitente.
+            scope = f"|s:{session_id}" if card_id and session_id else ""
+            loop_key = f"{base_key}{scope}|*"
+        else:
+            loop_key = f"{base_key}|{'|'.join(sorted({sender, target}))}"
 
         with self._lock:
             if self._closed:
@@ -325,10 +333,8 @@ class SwarmRelayOrchestrator:
             if loop_key is not None:
                 # Una ronda es un CAMBIO DE SENTIDO entre los dos nodos (respuesta -> nuevo despacho); varios
                 # eventos seguidos del mismo remitente (ediciones legitimas) son un solo turno.
-                same_turn = (
-                    ("relay", loop_key) in self._relay_rounds
-                    and self._relay_last_sender.get(loop_key) == sender
-                )
+                # Un evento sin remitente no se puede atribuir a ningun nodo: nunca abre una ronda (EGM-83).
+                same_turn = not sender or self._relay_last_sender.get(loop_key) == sender
                 if loop_key in self._loop_breaker_states or (
                     not same_turn and self._relay_rounds[("relay", loop_key)] >= self.max_relay_rounds
                 ):
