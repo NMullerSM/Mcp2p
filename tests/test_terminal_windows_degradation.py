@@ -43,7 +43,7 @@ def test_every_port_method_answers_unsupported_on_win32_without_raising(monkeypa
         _assert_unsupported(host.terminate_session(1))
         poll = host.poll_output(1)
         _assert_unsupported(poll)
-        assert poll["chunks"] == [] and poll["alive"] is False
+        assert "chunks" not in poll and poll["alive"] is False
         status = host.get_status()
         assert status["available"] is False and status["degraded"] is True
     finally:

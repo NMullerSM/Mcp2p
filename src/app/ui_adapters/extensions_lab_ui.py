@@ -1257,7 +1257,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "since_seq": since_seq,
                 "next_seq": since_seq,
                 "truncated": False,
-                "chunks": [],
                 "text": "",
                 "manual_command": instructions["manual_command"],
                 "mcp_config": instructions["mcp_config"],
@@ -1274,7 +1273,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "since_seq": since_seq,
                 "next_seq": since_seq,
                 "truncated": False,
-                "chunks": [],
                 "text": "",
             }
 

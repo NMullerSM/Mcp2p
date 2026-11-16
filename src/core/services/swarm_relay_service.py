@@ -21,6 +21,19 @@ _MAX_DEDUP_IDS_PER_NODE = 4096
 MAX_QUEUE_DEPTH = 1024
 # Tope de colas distintas: el destino puede venir de un payload, no debe poder crear colas sin limite.
 MAX_TARGET_QUEUES = 256
+# Una espera ocupa un hilo del threadpool del Hub: se acota (EGM-76). El agente vuelve a llamar al vencer.
+MAX_AWAIT_TIMEOUT_MS = 300_000
+
+
+def clamp_await_timeout_ms(value: Any) -> int:
+    """`timeout_ms` externo -> entero en `0..MAX_AWAIT_TIMEOUT_MS` (basura o negativo = 0)."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(number, MAX_AWAIT_TIMEOUT_MS))
 _IGNORED_INFORMATIVE_SIGNALS = frozenset({"HEARTBEAT", "PING", "PONG", "LEASE_CLAIMED"})
 _EXPLICIT_TARGET_KEYS = (
     "target_node_uuid",
@@ -383,6 +396,7 @@ class SwarmRelayOrchestrator:
         timeout_ms: int = 0,
     ) -> Dict[str, Any]:
         """Desencola la siguiente asignación o espera con ``Condition.wait`` sin busy-wait."""
+        timeout_ms = clamp_await_timeout_ms(timeout_ms)
         target = (node_uuid or "").strip()
         if not target:
             return {

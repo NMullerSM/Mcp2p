@@ -19,7 +19,7 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
-from src.core.services.swarm_relay_service import SwarmRelayOrchestrator
+from src.core.services.swarm_relay_service import SwarmRelayOrchestrator, clamp_await_timeout_ms
 from src.mcp.pane_registry import (
     PaneRegistry,
     PaneSessionRecord,
@@ -1616,11 +1616,13 @@ class MCPToolsHandler:
         effective_node = resolved_node or getattr(self.kernel, "node_uuid", None) or "*"
         try:
             relay = self._get_relay_orchestrator()
+            applied_timeout_ms = clamp_await_timeout_ms(timeout_ms)  # EGM-76: tope a la espera
             res = relay.await_next_assignment(
                 effective_node,
                 project_uuid=project_uuid,
-                timeout_ms=int(timeout_ms or 0),
+                timeout_ms=applied_timeout_ms,
             )
+            res = {**res, "timeout_ms_applied": applied_timeout_ms}
             return self._wrap_response(project_uuid, res)
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})

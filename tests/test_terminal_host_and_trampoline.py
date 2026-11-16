@@ -126,7 +126,6 @@ def test_ring_buffer_incremental_polling_utf8_and_eviction() -> None:
         "since_seq": 0,
         "next_seq": 0,
         "truncated": False,
-        "chunks": [],
         "text": "",
     }
 
@@ -156,7 +155,7 @@ def test_ring_buffer_incremental_polling_utf8_and_eviction() -> None:
     fresh_poll = buf.poll_since(s1)
     assert fresh_poll["truncated"] is False
     assert fresh_poll["text"] == "ABCDEFGHIJ"
-    assert buf.poll_since(s2)["chunks"] == []
+    assert buf.poll_since(s2)["text"] == ""
 
     # Chunk individual > max_bytes conserva la cola acotada y marca truncated
     s_big = buf.append(b"x" * 35)
@@ -534,7 +533,7 @@ class _StubTerminalPrimary:
         self.calls += 1
         if self.fail_with is not None:
             raise self.fail_with
-        return {"success": True, "since_seq": since_seq, "next_seq": since_seq, "truncated": False, "chunks": [], "text": ""}
+        return {"success": True, "since_seq": since_seq, "next_seq": since_seq, "truncated": False, "text": ""}
 
     def close_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return {"success": True}
@@ -587,7 +586,7 @@ def test_supervisor_circuit_breaker_opens_falls_back_and_recovers() -> None:
     assert primary.calls == calls_at_open
     assert poll_fb["code"] == "TERMINAL_ADAPTER_DEGRADED"
     assert poll_fb["supervisor_fallback"] is True
-    assert poll_fb["chunks"] == []
+    assert "chunks" not in poll_fb
 
     # Al vencer cooldown_s pasa a half_open; un fallo reabre inmediatamente
     now[0] += 16.0

@@ -28,7 +28,6 @@ IMPORT_TO_DIST: Dict[str, str] = {
     "clr": "pythonnet",
     "nacl": "PyNaCl",
     "PIL": "pillow",
-    "winpty": "pywinpty",
 }
 
 OWN_TOP_LEVEL = {"src"}

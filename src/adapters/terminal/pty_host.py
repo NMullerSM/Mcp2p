@@ -249,21 +249,15 @@ class PtyOutputRingBuffer:
             return seq
 
     def poll_since(self, since_seq: int = 0) -> Dict[str, Any]:
-        """Devuelve los chunks con `seq > since_seq` y metadatos de truncado/cursor."""
+        """Texto con `seq > since_seq` y metadatos de truncado/cursor (sin duplicarlo en `chunks`, EGM-78)."""
         cursor = max(0, int(since_seq))
         with self._lock:
             truncated = cursor < self._min_untruncated_since
-            chunks = [
-                {"seq": c_seq, "text": c_text}
-                for c_seq, _, c_text in self._chunks
-                if c_seq > cursor
-            ]
-            combined = "".join(item["text"] for item in chunks)
+            combined = "".join(c_text for c_seq, _, c_text in self._chunks if c_seq > cursor)
             return {
                 "since_seq": since_seq,
                 "next_seq": self._seq,
                 "truncated": truncated,
-                "chunks": chunks,
                 "text": combined,
             }
 
@@ -534,7 +528,23 @@ class PosixPtyHostConnector:
             if not session.is_alive():
                 self._mcp_store.cleanup(session.session_id)
 
+    @staticmethod
+    def _signal_group(session: _PtySession, sig: int) -> bool:
+        """Envia `sig` al grupo de procesos del panel (o solo al lider si no hay grupo propio)."""
+        if session.pgid > 1:
+            try:
+                os.killpg(session.pgid, sig)
+                return True
+            except (ProcessLookupError, OSError):
+                pass
+        try:
+            session.process.send_signal(sig)
+            return True
+        except (ProcessLookupError, OSError):
+            return False
+
     def _shutdown_session(self, session: _PtySession) -> Optional[int]:
+        """Cierre ordenado como el de una terminal real: SIGHUP, luego SIGTERM, luego SIGKILL (EGM-77)."""
         proc = session.process
 
         if session.paused and proc.poll() is None and session.pgid > 1:
@@ -544,40 +554,47 @@ class PosixPtyHostConnector:
                 pass
             session.paused = False
 
+        # Descendientes antes de senalar: los que se desligan del grupo (setsid) o quedan huerfanos tras
+        # morir el lider ya no se encontrarian despues.
+        descendants: List[psutil.Process] = []
+        try:
+            descendants = psutil.Process(session.pid).children(recursive=True)
+        except (psutil.Error, OSError):
+            descendants = []
+
         if proc.poll() is None:
-            sent_term = False
-            if session.pgid > 1:
+            for sig, grace in ((signal.SIGHUP, 0.4), (signal.SIGTERM, 0.5)):
+                if not self._signal_group(session, sig):
+                    break
                 try:
-                    os.killpg(session.pgid, signal.SIGTERM)
-                    sent_term = True
-                except (ProcessLookupError, OSError):
-                    sent_term = False
-            if not sent_term:
+                    proc.wait(timeout=grace)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if proc.poll() is None:
+                self._signal_group(session, signal.SIGKILL)
                 try:
-                    proc.terminate()
-                except OSError:
+                    proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
                     pass
 
+        # Nadie debe sobrevivir al panel: lo que siga vivo del grupo o de los descendientes capturados.
+        if session.pgid > 1:
             try:
-                proc.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                if proc.poll() is None:
-                    sent_kill = False
-                    if session.pgid > 1:
-                        try:
-                            os.killpg(session.pgid, signal.SIGKILL)
-                            sent_kill = True
-                        except (ProcessLookupError, OSError):
-                            sent_kill = False
-                    if not sent_kill:
-                        try:
-                            proc.kill()
-                        except OSError:
-                            pass
-                    try:
-                        proc.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        pass
+                os.killpg(session.pgid, 0)
+            except (ProcessLookupError, OSError):
+                pass
+            else:
+                try:
+                    os.killpg(session.pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+        for child in descendants:
+            try:
+                if child.is_running():
+                    child.kill()
+            except (psutil.Error, OSError):
+                pass
 
         # Dejar al lector drenar EOF/EIO tras morir el esclavo antes de cerrar el master_fd.
         thread = session.reader_thread
@@ -1133,7 +1150,6 @@ class PosixPtyHostConnector:
                 "since_seq": since_seq,
                 "next_seq": since_seq,
                 "truncated": False,
-                "chunks": [],
                 "text": "",
             }
 

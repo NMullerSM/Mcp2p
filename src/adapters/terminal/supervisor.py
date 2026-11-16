@@ -130,7 +130,6 @@ class SafeTerminalHostSupervisor:
                 base.setdefault("since_seq", since_seq)
                 base.setdefault("next_seq", since_seq)
                 base.setdefault("truncated", False)
-                base.setdefault("chunks", [])
                 base.setdefault("text", "")
         else:
             fn = getattr(self._fallback, method_name)
