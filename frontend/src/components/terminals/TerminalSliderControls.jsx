@@ -644,6 +644,8 @@ function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePa
 
 export function TerminalSliderControls({
   status,
+  autoRelay,
+  onToggleAutoRelay,
   catalog,
   maxPanes,
   hardMaxPanes = HARD_MAX_PANES,
@@ -694,6 +696,72 @@ export function TerminalSliderControls({
         copiedKey={copiedKey}
         onCopy={onCopy}
       />
+
+      {/* Auto-Relay: reenvio automatico entre terminales (apagado por defecto) */}
+      {autoRelay && (
+        <section data-testid="auto-relay-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <h4 style={sectionTitle}>Auto-Relay</h4>
+          <button
+            type="button"
+            data-testid="auto-relay-toggle"
+            aria-pressed={autoRelay.enabled ? 'true' : 'false'}
+            disabled={!autoRelay.available || autoRelay.busy}
+            onClick={onToggleAutoRelay}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '10px',
+              padding: '8px 12px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              borderRadius: 'var(--radius-md)',
+              border: `1px solid ${autoRelay.enabled ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
+              backgroundColor: autoRelay.enabled ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-subtle)',
+              color: autoRelay.enabled ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              cursor: !autoRelay.available || autoRelay.busy ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <span>Auto-Relay: {autoRelay.enabled ? 'ON' : 'OFF'}</span>
+            <span
+              aria-hidden="true"
+              style={{
+                width: '30px',
+                height: '16px',
+                borderRadius: '999px',
+                position: 'relative',
+                backgroundColor: autoRelay.enabled ? 'var(--accent-primary)' : 'var(--border-strong, var(--border-subtle))',
+                transition: 'background-color 0.2s ease'
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '2px',
+                  left: autoRelay.enabled ? '16px' : '2px',
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: '#fff',
+                  transition: 'left 0.2s ease'
+                }}
+              />
+            </span>
+          </button>
+          <p style={{ ...mutedText, margin: 0 }}>
+            Cuando una tarjeta cambia de responsable, avisa a la terminal del agente si está libre. Respeta el
+            cooldown de tecleo humano y el Loop Breaker.
+          </p>
+          {autoRelay.warning && (
+            <p
+              data-testid="auto-relay-gate0c-note"
+              style={{ ...mutedText, margin: 0, color: 'var(--accent-warning)' }}
+            >
+              {autoRelay.warning} Configúrala en Configuración → Terminales &amp; MCP → Firma humana.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Estado general del enjambre */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>

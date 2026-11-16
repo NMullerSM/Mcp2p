@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import React from 'react';
-import { ViewSliderProvider, ViewSliderContent, useViewSlider } from './ViewSlider';
+import { ViewSliderProvider, ViewSliderContent, ViewSliderTrigger, useViewSlider } from './ViewSlider';
 
 afterEach(cleanup);
 
@@ -192,5 +192,42 @@ describe('ViewSlider', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('ViewSliderTrigger (boton en la barra superior)', () => {
+  function WithTrigger({ suspended = false }) {
+    return (
+      <ViewSliderProvider viewKey="a" suspended={suspended}>
+        <div data-testid="toolbar"><ViewSliderTrigger /></div>
+        <ViewSliderContent title="Panel de prueba" data-testid="demo-slider">
+          <button type="button" data-testid="demo-action">Accion</button>
+        </ViewSliderContent>
+      </ViewSliderProvider>
+    );
+  }
+
+  it('reemplaza la pestana pegada al borde: hay un solo view-slider-tab y vive en la barra', () => {
+    render(<WithTrigger />);
+    expect(screen.getAllByTestId('view-slider-tab')).toHaveLength(1);
+    expect(screen.getByTestId('toolbar').contains(tab())).toBe(true);
+    expect(screen.getByTestId('demo-slider').querySelector('.mcp-view-slider-tab')).toBeNull();
+    expect(tab().getAttribute('aria-controls')).toBe(screen.getByTestId('view-slider-panel').id);
+  });
+
+  it('abre y cierra el panel, y devuelve el foco al boton al cerrar con Esc', () => {
+    render(<WithTrigger />);
+    expect(isOpen()).toBe(false);
+    fireEvent.click(tab());
+    expect(isOpen()).toBe(true);
+    expect(tab().getAttribute('aria-label')).toBe('Cerrar panel lateral: Panel de prueba');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(isOpen()).toBe(false);
+    expect(document.activeElement).toBe(tab());
+  });
+
+  it('se oculta mientras la vista esta suspendida (detalle de tarjeta abierto)', () => {
+    render(<WithTrigger suspended />);
+    expect(tab().style.visibility).toBe('hidden');
   });
 });

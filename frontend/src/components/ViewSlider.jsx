@@ -49,6 +49,12 @@ export function ViewSliderProvider({
   }
   const [registry, setRegistry] = useState({}); // id -> { title, subtitle, hasContent, testId }
   const [bodyEl, setBodyEl] = useState(null);
+  // Boton de apertura: si una vista monta <ViewSliderTrigger> (p. ej. en su barra superior) el
+  // host NO dibuja la pestana pegada al borde; sin trigger externo queda la pestana de siempre.
+  const [triggerCount, setTriggerCount] = useState(0);
+  const panelId = useId();
+  const tabRef = useRef(null);
+  const triggerRef = useRef(null);
 
   const isOpen = !suspended && openForView === viewKey;
 
@@ -70,16 +76,25 @@ export function ViewSliderProvider({
       return next;
     });
   }, []);
-
-  const value = useMemo(
-    () => ({ isOpen, open, close, toggle, register, unregister, bodyEl }),
-    [isOpen, open, close, toggle, register, unregister, bodyEl]
-  );
+  const registerTrigger = useCallback(() => {
+    setTriggerCount(n => n + 1);
+    return () => setTriggerCount(n => Math.max(0, n - 1));
+  }, []);
 
   // El titulo y el testid los manda el ultimo contenido registrado.
   const metas = Object.values(registry);
   const meta = metas.length ? metas[metas.length - 1] : null;
   const hasContent = metas.some(m => m.hasContent);
+  const panelTitle = meta?.title || 'Herramientas de la vista';
+
+  const value = useMemo(
+    () => ({
+      isOpen, open, close, toggle, register, unregister, bodyEl,
+      registerTrigger, panelId, triggerRef, suspended, panelTitle
+    }),
+    [isOpen, open, close, toggle, register, unregister, bodyEl,
+      registerTrigger, panelId, suspended, panelTitle]
+  );
 
   return (
     <ViewSliderContext.Provider value={value}>
@@ -93,6 +108,10 @@ export function ViewSliderProvider({
         hasContent={hasContent}
         width={width}
         bodyRef={setBodyEl}
+        panelId={panelId}
+        tabRef={tabRef}
+        triggerRef={triggerRef}
+        externalTrigger={triggerCount > 0}
       />
     </ViewSliderContext.Provider>
   );
@@ -108,6 +127,37 @@ export function useViewSlider() {
       toggle: ctx?.toggle ?? (() => {})
     }),
     [ctx]
+  );
+}
+
+/**
+ * Boton compacto que abre/cierra el slider de la vista activa. Se monta donde la vista quiera
+ * (p. ej. al final de la barra superior, junto a la busqueda). Mientras haya uno montado, el
+ * host no dibuja la pestana pegada al borde derecho.
+ */
+export function ViewSliderTrigger({ className = '' }) {
+  const ctx = useContext(ViewSliderContext);
+  const registerTrigger = ctx?.registerTrigger;
+  useEffect(() => (registerTrigger ? registerTrigger() : undefined), [registerTrigger]);
+  if (!ctx) return null;
+  const label = ctx.isOpen
+    ? `Cerrar panel lateral: ${ctx.panelTitle}`
+    : `Abrir panel lateral: ${ctx.panelTitle}`;
+  return (
+    <button
+      ref={ctx.triggerRef}
+      type="button"
+      className={`mcp-view-slider-trigger ${className}`.trim()}
+      data-testid="view-slider-tab"
+      aria-label={label}
+      aria-expanded={ctx.isOpen}
+      aria-controls={ctx.panelId}
+      title={label}
+      onClick={ctx.toggle}
+      style={{ visibility: ctx.suspended ? 'hidden' : 'visible' }}
+    >
+      <ChevronLeft size={16} strokeWidth={2.6} className="mcp-view-slider-chevron" />
+    </button>
   );
 }
 
@@ -132,9 +182,10 @@ export function ViewSliderContent({ title, subtitle, 'data-testid': testId, chil
   return createPortal(children, ctx.bodyEl);
 }
 
-function ViewSliderHost({ isOpen, suspended, onClose, onToggle, meta, hasContent, width, bodyRef }) {
-  const panelId = useId();
-  const tabRef = useRef(null);
+function ViewSliderHost({
+  isOpen, suspended, onClose, onToggle, meta, hasContent, width, bodyRef,
+  panelId, tabRef, triggerRef, externalTrigger
+}) {
   const closeBtnRef = useRef(null);
   const panelRef = useRef(null);
   const scrollRef = useRef(null);
@@ -165,7 +216,7 @@ function ViewSliderHost({ isOpen, suspended, onClose, onToggle, meta, hasContent
     } else if (wasOpenRef.current) {
       const active = document.activeElement;
       if (!active || active === document.body || panelRef.current?.contains(active)) {
-        tabRef.current?.focus();
+        (triggerRef.current || tabRef.current)?.focus();
       }
     }
     wasOpenRef.current = isOpen;
@@ -228,19 +279,21 @@ function ViewSliderHost({ isOpen, suspended, onClose, onToggle, meta, hasContent
         data-state={isOpen ? 'open' : 'closed'}
         style={{ width, visibility: suspended ? 'hidden' : 'visible' }}
       >
-        <button
-          ref={tabRef}
-          type="button"
-          className="mcp-view-slider-tab"
-          data-testid="view-slider-tab"
-          aria-label={tabLabel}
-          aria-expanded={isOpen}
-          aria-controls={panelId}
-          title={tabLabel}
-          onClick={onToggle}
-        >
-          <ChevronLeft size={14} className="mcp-view-slider-chevron" />
-        </button>
+        {!externalTrigger && (
+          <button
+            ref={tabRef}
+            type="button"
+            className="mcp-view-slider-tab"
+            data-testid="view-slider-tab"
+            aria-label={tabLabel}
+            aria-expanded={isOpen}
+            aria-controls={panelId}
+            title={tabLabel}
+            onClick={onToggle}
+          >
+            <ChevronLeft size={14} className="mcp-view-slider-chevron" />
+          </button>
+        )}
         <aside
           id={panelId}
           ref={panelRef}

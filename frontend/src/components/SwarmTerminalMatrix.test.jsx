@@ -39,6 +39,32 @@ async function openCli(cliId, paneId) {
   return screen.findByTestId(`terminal-pane-${paneId}`);
 }
 
+describe('SwarmTerminalMatrix: panel vacio clicable y Auto-Relay en el slider', () => {
+  it('el panel vacio es un boton "Agregar terminal" que abre el slider lateral', async () => {
+    const api = makeMatrixApi();
+    renderMatrix(api);
+    await waitFor(() => expect(api.pty_get_matrix_status).toHaveBeenCalledTimes(1));
+
+    const slot = screen.getByTestId('terminal-pane-empty-0');
+    expect(slot.tagName).toBe('BUTTON');
+    expect(slot.getAttribute('aria-label')).toBe('Agregar terminal');
+    expect(screen.getByTestId('terminals-slider').getAttribute('data-state')).toBe('closed');
+
+    fireEvent.click(slot);
+    expect(screen.getByTestId('terminals-slider').getAttribute('data-state')).toBe('open');
+  });
+
+  it('el toggle de Auto-Relay vive dentro del panel del slider y ya no hay barra de controles en la vista', async () => {
+    const api = makeMatrixApi();
+    renderMatrix(api);
+    const toggle = await screen.findByTestId('auto-relay-toggle');
+
+    expect(screen.queryByTestId('matrix-controls-bar')).toBeNull();
+    expect(within(screen.getByTestId('view-slider-panel')).getByTestId('auto-relay-toggle')).toBe(toggle);
+    expect(screen.getByTestId('matrix-grid').contains(toggle)).toBe(false);
+  });
+});
+
 describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
   it('sin terminales muestra un unico panel vacio con una invitacion minima y sin el encabezado antiguo', async () => {
     const api = makeMatrixApi();
@@ -48,7 +74,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     const grid = screen.getByTestId('matrix-grid');
     expect(grid.getAttribute('data-layout')).toBe('1x1');
     expect(screen.getAllByTestId(/^terminal-pane-empty-/)).toHaveLength(1);
-    expect(screen.getByTestId('matrix-empty-hint').textContent).toMatch(/pestaña lateral/);
+    expect(screen.getByTestId('matrix-empty-hint').textContent).toMatch(/Agregar terminal/);
 
     // Nada del chrome antiguo en la pantalla.
     expect(grid.textContent).not.toMatch(/Swarm Terminal Matrix|Actualizar|Degradado|Libre|Iniciar|Foco/);
@@ -670,7 +696,7 @@ describe('SwarmTerminalMatrix: errores con causa y accion (sin "degradado" gener
 
     // Nada de tarjetas dentro de paneles: no hay terminal abierta y el panel sigue vacio.
     expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull();
-    expect(screen.getByTestId('terminal-pane-empty-0').textContent).toMatch(/pestaña lateral/);
+    expect(screen.getByTestId('terminal-pane-empty-0').textContent).toMatch(/Agregar terminal/);
     // Aviso discreto fuera del slider.
     expect(screen.getByTestId('matrix-notice').getAttribute('data-code')).toBe(res.code);
   });

@@ -7,7 +7,7 @@ import { BranchConsensusView } from './BranchConsensusView';
 import { HumanApprovalsView } from './HumanApprovalsView';
 import { SwarmTerminalMatrix } from './SwarmTerminalMatrix';
 import { CardDetailModal } from './Modals';
-import { ViewSliderProvider } from './ViewSlider';
+import { ViewSliderProvider, ViewSliderTrigger } from './ViewSlider';
 import { KanbanSliderTools } from './KanbanSliderTools';
 import { useProjectPulse } from '../hooks/useProjectPulse';
 import { useSigningKeyGuard } from '../hooks/useSigningKeyGuard';
@@ -465,6 +465,8 @@ export function ProjectWorkspace({
           )}
         </div>
 
+        {/* Boton del slider lateral: a la derecha de la busqueda, en la misma fila */}
+        <ViewSliderTrigger />
       </div>
 
       {/* Main Workspace View Content (el patrón de Vista Dual/Split fue retirado: el

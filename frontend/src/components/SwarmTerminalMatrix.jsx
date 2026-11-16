@@ -1072,6 +1072,13 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       >
         <TerminalSliderControls
           status={matrixStatus}
+          autoRelay={{
+            enabled: Boolean(matrixStatus.autoRelayEnabled),
+            busy: Boolean(matrixStatus.autoRelayBusy),
+            available: Boolean(api?.pty_set_auto_relay),
+            warning: matrixStatus.autoRelayWarning
+          }}
+          onToggleAutoRelay={() => void handleToggleAutoRelay()}
           statusNotice={statusNotice}
           catalog={catalog}
           maxPanes={maxPanes}
@@ -1107,55 +1114,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       </ViewSliderContent>
       )}
 
-      {/* Barra superior discreta de Auto-Relay y aviso de Loop Breaker (EGM-87) */}
-      <div
-        data-testid="matrix-controls-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '8px',
-          padding: '0 2px 8px',
-          flexShrink: 0
-        }}
-      >
-        <button
-          type="button"
-          data-testid="auto-relay-toggle"
-          aria-pressed={matrixStatus.autoRelayEnabled ? 'true' : 'false'}
-          disabled={!api?.pty_set_auto_relay || matrixStatus.autoRelayBusy}
-          onClick={() => void handleToggleAutoRelay()}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 10px',
-            fontSize: '11.5px',
-            fontWeight: 600,
-            borderRadius: 'var(--radius-md)',
-            border: `1px solid ${matrixStatus.autoRelayEnabled ? 'rgba(16, 185, 129, 0.45)' : 'var(--border-subtle)'}`,
-            backgroundColor: matrixStatus.autoRelayEnabled ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-surface)',
-            color: matrixStatus.autoRelayEnabled ? '#34d399' : 'var(--text-secondary)',
-            cursor: !api?.pty_set_auto_relay || matrixStatus.autoRelayBusy ? 'not-allowed' : 'pointer'
-          }}
-        >
-          <span>Auto-Relay: {matrixStatus.autoRelayEnabled ? 'ON' : 'OFF'}</span>
-        </button>
-
-        {matrixStatus.autoRelayWarning && (
-          <span
-            data-testid="auto-relay-gate0c-note"
-            style={{
-              fontSize: '11px',
-              color: 'var(--accent-warning)',
-              lineHeight: 1.3
-            }}
-          >
-            {matrixStatus.autoRelayWarning}
-          </span>
-        )}
-      </div>
-
+      {/* El Auto-Relay vive ahora en el slider lateral (seccion 'Auto-Relay'); aqui solo queda
+          el aviso de Loop Breaker cuando se dispara (EGM-87). */}
       {trippedCases.length > 0 && (
         <div
           role="alert"
@@ -1246,7 +1206,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               />
             ))}
             {Array.from({ length: emptySlots }, (_, i) => (
-              <EmptyTerminalSlot key={`empty-${i}`} index={i} showHint={noOpenTerminals && i === 0} />
+              <EmptyTerminalSlot key={`empty-${i}`} index={i} showHint={noOpenTerminals && i === 0} onAdd={openSlider} />
             ))}
           </>
         )}

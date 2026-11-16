@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import { Plus } from 'lucide-react';
 import { CliLogo } from './CliLogo';
 import { acquireTerminal, attachTerminal, detachTerminal } from './terminalRegistry';
 import './terminal.css';
@@ -134,40 +135,44 @@ export function handleTerminalKey(term, ev) {
  * Hueco vacio de la cuadricula: solo la superficie negra. `showHint` (unico caso: no hay
  * NINGUNA terminal) deja una invitacion minima y discreta.
  */
-export function EmptyTerminalSlot({ index, showHint = false }) {
+export function EmptyTerminalSlot({ index, showHint = false, onAdd }) {
+  const clickable = typeof onAdd === 'function';
+  const Tag = clickable ? 'button' : 'section';
   return (
-    <section
+    <Tag
+      type={clickable ? 'button' : undefined}
+      onClick={clickable ? onAdd : undefined}
       data-testid={`terminal-pane-empty-${index}`}
-      aria-label="Panel vacío"
+      aria-label={clickable ? 'Agregar terminal' : 'Panel vacío'}
+      title={clickable ? 'Agregar terminal' : undefined}
+      className={clickable ? 'mcp-terminal-empty-slot is-clickable' : 'mcp-terminal-empty-slot'}
       style={{
         position: 'relative',
         minHeight: 0,
         backgroundColor: TERMINAL_BG,
         border: `1px solid ${TERMINAL_BORDER}`,
         borderRadius: 'var(--radius-md)',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        padding: 0,
+        font: 'inherit'
       }}
     >
-      {showHint && (
+      {showHint ? (
         <span
           data-testid="matrix-empty-hint"
-          style={{
-            position: 'absolute',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -50%)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: '11px',
-            color: TERMINAL_DIM,
-            opacity: 0.7,
-            textAlign: 'center',
-            padding: '0 16px'
-          }}
+          className="mcp-terminal-empty-add is-prominent"
         >
-          Abre una terminal desde la pestaña lateral →
+          <Plus size={16} aria-hidden="true" />
+          <span>Agregar terminal</span>
         </span>
+      ) : (
+        clickable && (
+          <span className="mcp-terminal-empty-add" aria-hidden="true">
+            <Plus size={16} />
+          </span>
+        )
       )}
-    </section>
+    </Tag>
   );
 }
 
