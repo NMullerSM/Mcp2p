@@ -60,10 +60,10 @@ def _wait_text(bridge: ApiBridge, pane: Any, needle: str, timeout: float = 5.0) 
     raise AssertionError(f"no aparecio {needle!r}: {acc!r}")
 
 
-def test_new_methods_are_exposed_by_the_public_js_facade(bridge: ApiBridge) -> None:
-    facade = bridge.as_public_js_api()
-    for name in ("pty_list_cli_catalog", "pty_set_cli_path", "pty_set_max_panes", "pty_spawn_pane"):
-        assert callable(getattr(facade, name))
+def test_new_methods_are_exposed_by_the_public_js_functions(bridge: ApiBridge) -> None:
+    exposed = {fn.__name__ for fn in bridge.public_js_functions()}
+    assert {"pty_list_cli_catalog", "pty_set_cli_path", "pty_set_max_panes", "pty_spawn_pane",
+            "reset_loop_breaker"} <= exposed
 
 
 def test_list_cli_catalog_reports_installed_state_without_executing(bridge: ApiBridge, tmp_path: Path) -> None:

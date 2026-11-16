@@ -334,6 +334,19 @@ class EmbeddedMcpHub:
         with self._lock:
             return self._url
 
+    def relay_orchestrator(self) -> Optional[Any]:
+        """`SwarmRelayOrchestrator` del Hub en marcha (para reiniciar el Loop Breaker); None si esta parado."""
+        with self._lock:
+            server = self._server
+        handler = getattr(server, "mcp2p_handler", None) if server is not None else None
+        getter = getattr(handler, "_get_relay_orchestrator", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
     def is_running(self) -> bool:
         with self._lock:
             return bool(

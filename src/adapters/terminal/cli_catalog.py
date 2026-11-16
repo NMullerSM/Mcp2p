@@ -636,6 +636,21 @@ class CliCatalogService:
             return None
         return value if isinstance(value, str) and value else None
 
+    def check_binary_path(self, cli_id: Any, path: Any) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Valida (sin persistir) la ruta elegida para un CLI; `(ruta_limpia, error)`."""
+        spec = self.get_spec(cli_id)
+        if spec is None:
+            return None, {"success": False, "code": "CLI_PROFILE_UNKNOWN", "message": "CLI desconocido en el catalogo."}
+        try:
+            clean = validate_user_binary_path(path)
+        except CatalogValidationError as exc:
+            return None, {"success": False, "code": "INVALID_PATH", "message": str(exc)}
+        if not os.path.isfile(clean):
+            return None, {"success": False, "code": "PATH_NOT_FOUND", "message": "La ruta no es un archivo existente."}
+        if not is_executable_file(clean):
+            return None, {"success": False, "code": "PATH_NOT_EXECUTABLE", "message": "El archivo no es ejecutable."}
+        return clean, None
+
     def set_binary_path(self, cli_id: Any, path: Any) -> Dict[str, Any]:
         """Valida y persiste la ruta de un CLI; `path` vacio la borra."""
         spec = self.get_spec(cli_id)
@@ -650,14 +665,9 @@ class CliCatalogService:
                 return {"success": False, "code": "SETTINGS_UNAVAILABLE", "message": str(exc)}
             return {"success": True, "code": "OK", "cli_id": spec.id, "configured_path": None,
                     "message": "Ruta configurada eliminada."}
-        try:
-            clean = validate_user_binary_path(path)
-        except CatalogValidationError as exc:
-            return {"success": False, "code": "INVALID_PATH", "message": str(exc)}
-        if not os.path.isfile(clean):
-            return {"success": False, "code": "PATH_NOT_FOUND", "message": "La ruta no es un archivo existente."}
-        if not is_executable_file(clean):
-            return {"success": False, "code": "PATH_NOT_EXECUTABLE", "message": "El archivo no es ejecutable."}
+        clean, error = self.check_binary_path(spec.id, path)
+        if error is not None or clean is None:
+            return error or {"success": False, "code": "INVALID_PATH", "message": "Ruta invalida."}
         try:
             self._settings.set_extension_setting(SETTINGS_NAMESPACE, self._setting_key(spec.id), clean)
         except Exception as exc:

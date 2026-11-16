@@ -10,15 +10,14 @@ import inspect
 import logging
 import subprocess
 import threading
-import types
-import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.a2a.bus import A2ABus
 from src.adapters.outbound.extension_gate import ExtensionSecurityGate
 from src.app.auto_updater import AutoUpdateManager
 from src.app.identity import local_node_uuid
+from src.app.native_confirm import NativeConfirmationService
 from src.app.paths import get_bundle_dir, get_user_data_dir
 from src.app.ui_adapters import (
     CollabMeshUIAdapter,
@@ -40,47 +39,49 @@ logger = logging.getLogger("mcp2p.api_bridge")
 
 DEFAULT_SIGNALING_URL = ""
 
-_PUBLIC_FACADE_TARGETS: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 _FACADE_INTERNAL_METHODS: frozenset[str] = frozenset({
-    "as_public_js_api",
+    "public_js_functions",
     "set_window",
     "set_transport",
     "ensure_local_node_registered",
 })
 
 
-def _make_public_rpc_wrapper(method_name: str, doc: Optional[str]) -> Any:
-    def _rpc(facade_self: Any, *args: Any, **kwargs: Any) -> Any:
-        target = _PUBLIC_FACADE_TARGETS[facade_self]
-        return getattr(target, method_name)(*args, **kwargs)
+class InertJsApi:
+    """Valor para `create_window(js_api=...)` que no expone NADA (EGM-73).
 
-    _rpc.__name__ = method_name
-    _rpc.__qualname__ = f"PublicJsApiFacade.{method_name}"
-    _rpc.__doc__ = doc
-    return _rpc
-
-
-class PublicJsApiFacade:
-    """Fachada JS de superficie mínima para `window.pywebview.api` (EGM-58).
-
-    Expone únicamente métodos RPC públicos de primer nivel de `ApiBridge`, sin
-    guardar atributos de instancia que apunten a `bridge` ni a objetos internos
-    (`core_kernel`, `db`, `crypto`, `extension_gate`, sub-adaptadores UI), evitando
-    que `inject_pywebview` o `js_bridge_call`/`get_nested_attribute` alcancen
-    miembros privados o `metodo.__self__`.
+    `js_api=None` no basta: `webview.util.get_nested_attribute(None, "__class__.__init__")` sigue resolviendo
+    (`getattr(None, "__class__")` no es None) y deja invocar con argumentos JSON cualquier invocable alcanzable
+    por `getattr` desde `NoneType`. Aqui todo `getattr` da `None`, asi que PyWebView corta el recorrido y
+    responde "Function ... does not exist"; `dir()` esta vacio, asi que tampoco anuncia funciones.
     """
 
-    def __init__(self, bridge: "ApiBridge") -> None:
-        _PUBLIC_FACADE_TARGETS[self] = bridge
-        bridge_cls = type(bridge)
-        for name, _ in inspect.getmembers(bridge_cls):
-            if name.startswith("_") or name in _FACADE_INTERNAL_METHODS:
-                continue
-            member = getattr(bridge, name, None)
-            if member is None or not callable(member):
-                continue
-            fn = _make_public_rpc_wrapper(name, getattr(member, "__doc__", None))
-            setattr(self, name, types.MethodType(fn, self))
+    __slots__ = ()
+
+    def __getattribute__(self, name: str) -> Any:
+        return None
+
+    def __dir__(self) -> List[str]:
+        return []
+
+
+def _make_public_rpc(method_name: str, bound: Callable[..., Any]) -> Callable[..., Any]:
+    """Funcion plana que PyWebView registra con `window.expose` bajo `method_name` (EGM-58/EGM-73).
+
+    Es una funcion de nivel de modulo (sus `__globals__` son los de este modulo y no los de los
+    sub-adaptadores) y PyWebView la resuelve por NOMBRE EXACTO en `window._functions`: con `js_api=None`
+    una ruta como `pty_x.__globals__.__setitem__` ya no recorre ningun objeto.
+    """
+
+    def _rpc(*args: Any, **kwargs: Any) -> Any:
+        return bound(*args, **kwargs)
+
+    _rpc.__name__ = method_name
+    _rpc.__qualname__ = method_name
+    _rpc.__doc__ = getattr(bound, "__doc__", None)
+    # `expose` calcula los nombres de parametros con `inspect.getfullargspec`, que respeta `__signature__`.
+    _rpc.__signature__ = inspect.signature(bound)  # type: ignore[attr-defined]
+    return _rpc
 
 
 class ApiBridge:
@@ -114,6 +115,8 @@ class ApiBridge:
         self.transport: P2PTransport = transport or NullTransportAdapter()
         self._updater = AutoUpdateManager(get_bundle_dir(), get_user_data_dir())
         self._window: Optional[Any] = None
+        # Dialogo nativo de confirmacion (EGM-74): el JS no puede pulsarlo.
+        self.confirmations = NativeConfirmationService(lambda: self._window)
         self._retry_locks: Dict[str, threading.Lock] = {}
         self._retry_locks_guard = threading.Lock()
         self.active_project_uuid: Optional[str] = None
@@ -723,6 +726,25 @@ class ApiBridge:
     def _close_terminal_matrix(self) -> None:
         self.extensions_ui.close_terminal_matrix()
 
-    def as_public_js_api(self) -> PublicJsApiFacade:
-        """Retorna una fachada JS plana y segura para `webview.create_window(..., js_api=...)` (EGM-58)."""
-        return PublicJsApiFacade(self)
+    def reset_loop_breaker(
+        self, project_uuid: str = "", card_id: str = "", session_id: str = ""
+    ) -> Dict[str, Any]:
+        return self.extensions_ui.reset_loop_breaker(
+            project_uuid=project_uuid, card_id=card_id, session_id=session_id
+        )
+
+    def public_js_functions(self) -> List[Callable[..., Any]]:
+        """Funciones planas para `window.expose(...)`; la ventana se crea con `js_api=None` (EGM-73).
+
+        Solo los metodos publicos de primer nivel de `ApiBridge`: nada privado, ningun objeto anidado y
+        ningun `__self__`/`__globals__` alcanzable por nombre desde el JS.
+        """
+        functions: List[Callable[..., Any]] = []
+        for name, _ in inspect.getmembers(type(self)):
+            if name.startswith("_") or name in _FACADE_INTERNAL_METHODS:
+                continue
+            member = getattr(self, name, None)
+            if member is None or not callable(member):
+                continue
+            functions.append(_make_public_rpc(name, member))
+        return functions

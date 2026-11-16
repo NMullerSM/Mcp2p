@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import List
 
+import pytest
+
 from src.storage.db import DatabaseManager
 
 # Directorios temporales creados por los helpers de este módulo durante la
@@ -36,3 +38,12 @@ def pytest_sessionfinish(session, exitstatus):
     módulo (make_test_db() y otros) una vez finalizada la sesión de pruebas."""
     for d in _TMP_DIRS:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _auto_confirm_native_dialogs(monkeypatch):
+    """Sin ventana no hay dialogo nativo (EGM-74): las pruebas que no lo ejercitan lo dan por aceptado.
+
+    Las que SI prueban la confirmacion (`tests/test_egm74_native_confirmation.py`) quitan esta variable.
+    """
+    monkeypatch.setenv("MCP2P_TEST_AUTO_CONFIRM", "1")

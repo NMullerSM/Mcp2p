@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -747,10 +748,32 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             logger.warning("pty_list_cli_catalog fallo: %s", exc)
             return _fail("INTERNAL_ERROR", f"No se pudo leer el catalogo de CLIs: {exc}")
 
+    def _confirm_native(self, title: str, message: str) -> Optional[Dict[str, Any]]:
+        """Dialogo nativo (EGM-74); `None` si se acepto, si no la respuesta de error lista para devolver."""
+        confirmations = getattr(self._bridge, "confirmations", None)
+        if confirmations is None:
+            return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion nativa; la accion se rechaza.")
+        return confirmations.confirm(title, message)
+
     def pty_set_cli_path(self, cli_id: Any, path: Any) -> Dict[str, Any]:
-        """Fija (o borra con cadena vacia) la ruta del binario de un CLI del catalogo."""
+        """Fija (o borra con cadena vacia) la ruta del binario de un CLI del catalogo.
+
+        Fijar una ruta persiste un ejecutable que el panel lanzara: exige confirmacion NATIVA con la ruta exacta.
+        """
         try:
-            return self._catalog_service().set_binary_path(cli_id, path)
+            svc = self._catalog_service()
+            if isinstance(path, str) and path != "":
+                clean, error = svc.check_binary_path(cli_id, path)
+                if error is not None or clean is None:
+                    return error or _fail("INVALID_PATH", "Ruta invalida.")
+                declined = self._confirm_native(
+                    "Configurar el ejecutable de un CLI",
+                    f"El CLI '{cli_id}' se lanzara desde ahora con este ejecutable:\n\n{clean}\n\n"
+                    "Acepte solo si reconoce esa ruta.",
+                )
+                if declined is not None:
+                    return {**declined, "cli_id": cli_id}
+            return svc.set_binary_path(cli_id, path)
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
@@ -922,6 +945,17 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 return _fail("INSTALL_TOKEN_INVALID",
                              "Token de confirmacion invalido o ya usado; prepare la instalacion de nuevo.",
                              cli_id=spec.id)
+            # El token es anti-accidente (lo valida el mismo puente al que llama el JS); la barrera real es el
+            # dialogo NATIVO con el comando exacto (EGM-74). Con el token ya gastado, rechazar obliga a preparar de nuevo.
+            declined = self._confirm_native(
+                f"Instalar {spec.display_name}",
+                f"Se ejecutara en una terminal visible ({target_pane}):\n\n{option.command}\n\n"
+                + ("ATENCION: es un script descargado de Internet y ejecutado en su shell.\n\n"
+                   if option.downloads_script else "")
+                + "Acepte solo si reconoce este comando.",
+            )
+            if declined is not None:
+                return {**declined, "cli_id": spec.id}
 
             wrapper = (
                 f"{option.command}; rc=$?; echo; "
@@ -1045,6 +1079,22 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             resolved_cwd, cwd_error = self._validate_cwd(cwd)
             if cwd_error is not None:
                 return {**cwd_error, "degraded": False, "pane_id": norm_pane_id}
+
+            if command is not None:
+                # Un comando propio ejecuta CUALQUIER cosa: confirmacion NATIVA con el argv exacto (EGM-74).
+                try:
+                    shown = shlex.join(shlex.split(command)) if isinstance(command, str) else shlex.join(list(command))
+                except ValueError:
+                    return _fail("INVALID_ARGUMENT", "command invalido (comillas sin cerrar).",
+                                 degraded=False, pane_id=norm_pane_id)
+                declined = self._confirm_native(
+                    "Abrir un panel con un comando propio",
+                    f"Se ejecutara en {norm_pane_id}"
+                    + (f" (carpeta {resolved_cwd})" if resolved_cwd else "")
+                    + f":\n\n{shown}\n\nAcepte solo si reconoce este comando.",
+                )
+                if declined is not None:
+                    return {**declined, "degraded": False, "pane_id": norm_pane_id}
 
             if not isinstance(resume, bool):
                 return _fail("INVALID_ARGUMENT", "resume debe ser booleano.", degraded=False, pane_id=norm_pane_id)
@@ -1247,6 +1297,33 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             return res
         except Exception as exc:
             return {"success": False, "error": str(exc)}
+
+    def reset_loop_breaker(self, project_uuid: Any = "", card_id: Any = "", session_id: Any = "") -> Dict[str, Any]:
+        """Reinicia el Loop Breaker de una tarjeta/sesion tras intervencion humana (EGM-72), con dialogo nativo."""
+        try:
+            values = {"project_uuid": project_uuid, "card_id": card_id, "session_id": session_id}
+            for name, value in values.items():
+                if not isinstance(value, str) or len(value) > 200 or has_control_chars(value):
+                    return _fail("INVALID_ARGUMENT", f"{name} debe ser texto corto.")
+            if not (card_id.strip() or session_id.strip()):
+                return _fail("INVALID_ARGUMENT", "Indique card_id o session_id.")
+            hub = self._embedded_hub
+            relay = hub.relay_orchestrator() if hub is not None else None
+            if relay is None:
+                return _fail("RELAY_UNAVAILABLE", "El Hub embebido no esta en marcha; no hay Loop Breaker que reiniciar.")
+            declined = self._confirm_native(
+                "Reiniciar el Loop Breaker",
+                f"Se reanudara el relevo automatico entre agentes para:\n\n"
+                f"proyecto: {project_uuid or '(cualquiera)'}\ntarjeta: {card_id or '-'}\nsesion: {session_id or '-'}\n\n"
+                "El freno se activo porque los agentes se devolvian el trabajo sin converger. Acepte solo si reviso el caso.",
+            )
+            if declined is not None:
+                return declined
+            ok = relay.reset_loop_breaker(project_uuid=project_uuid, card_id=card_id, session_id=session_id)
+            return {"success": bool(ok), "code": "OK" if ok else "INVALID_ARGUMENT",
+                    "message": "Loop Breaker reiniciado." if ok else "No se pudo derivar la clave del caso."}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
 
     def close_terminal_matrix(self) -> None:
         """Detiene limpiamente el EmbeddedMcpHub y revoca tokens de paneles activos."""

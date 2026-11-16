@@ -273,16 +273,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         ui_theme = "dark"
     bg_color = "#f8fafc" if ui_theme == "light" else "#0f1013"
 
+    from src.app.api_bridge import InertJsApi
+
     window = webview.create_window(
         title="MCP²P — Agent Consensus & Governance",
         url=target_url,
-        js_api=api.as_public_js_api(),
+        js_api=InertJsApi(),  # EGM-73: sin objeto js_api util; las funciones se registran por nombre con window.expose
         width=1280,
         height=840,
         min_size=(960, 600),
         background_color=bg_color,
         text_select=True
     )
+    window.expose(*api.public_js_functions())
     if hasattr(api, "set_window"):
         api.set_window(window)
     api._updater.set_window(window)

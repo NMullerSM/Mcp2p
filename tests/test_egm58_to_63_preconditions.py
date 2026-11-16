@@ -17,7 +17,7 @@ from src.adapters.outbound.extension_gate import (
     NullAgentTerminalConnector,
 )
 from src.app import main as app_main
-from src.app.api_bridge import ApiBridge, PublicJsApiFacade
+from src.app.api_bridge import ApiBridge, InertJsApi
 from src.core.events import DomainEventBus
 from src.core.factory import ApplicationFactory
 from src.core.ports.connectors import AgentTerminalPort
@@ -26,127 +26,96 @@ from src.mcp.tools import MCPToolsHandler
 from src.storage.db import DatabaseManager
 
 
-def _pywebview_get_functions(obj: Any) -> Dict[str, Any]:
-    """Replica exacta del algoritmo de descubrimiento de `webview.util.inject_pywebview` (6.2.1)."""
-    import inspect
-
-    exposed_objects: list[int] = []
-
-    def get_functions(target: object, base_name: str = "", functions: dict[str, Any] | None = None):
-        obj_id = id(target)
-        if obj_id in exposed_objects:
-            return functions
-        exposed_objects.append(obj_id)
-
-        if functions is None:
-            functions = {}
-
-        for name in dir(target):
-            full_name = f"{base_name}.{name}" if base_name else name
-            if name.startswith("_"):
-                continue
-            attr = getattr(target, name)
-            if not getattr(attr, "_serializable", True):
-                continue
-            if inspect.ismethod(attr) or inspect.isfunction(attr):
-                functions[full_name] = list(inspect.getfullargspec(attr).args)[1:]
-            elif inspect.isclass(attr) or (
-                isinstance(attr, object) and not callable(attr) and hasattr(attr, "__module__")
-            ):
-                get_functions(attr, full_name, functions)
-        return functions
-
-    return get_functions(obj)
-
-
-def _pywebview_get_nested_attribute(obj: object, attr_str: str) -> Any:
-    """Replica exacta de `get_nested_attribute` en `webview.util.js_bridge_call` (6.2.1)."""
-    for attr in attr_str.split("."):
-        obj = getattr(obj, attr, None)
-        if obj is None:
-            return None
-    return obj
-
-
 # =========================================================================
-# EGM-58: PublicJsApiFacade y cableado en app/main.py
+# EGM-58 / EGM-73: funciones planas con `window.expose` y `js_api=None`
 # =========================================================================
 
 
-def test_egm58_public_js_api_facade_blocks_internal_traversal(tmp_path: Path) -> None:
+def _expose_on_mock_window(functions: Any):
+    """Registra `functions` con el `Window.expose` REAL del SDK sobre una ventana simulada."""
+    import threading
+    from unittest.mock import MagicMock
+
+    from webview.window import Window
+
+    window = MagicMock()
+    window._js_api = InertJsApi()
+    window._functions = {}
+    window._expose_lock = threading.Lock()
+    Window.expose(window, *functions)
+    return window
+
+
+def test_egm58_public_js_functions_block_internal_traversal(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    import webview.util as wutil
+
     db = DatabaseManager(str(tmp_path / "egm58.db"))
     try:
         api = ApiBridge(db_manager=db)
-        facade = api.as_public_js_api()
+        functions = api.public_js_functions()
+        by_name = {fn.__name__: fn for fn in functions}
 
-        assert isinstance(facade, PublicJsApiFacade)
-        assert facade.get_system_info()["active_node"] == api.get_system_info()["active_node"]
-        assert facade.list_projects()["success"] is True
-        assert facade.get_kanban_board()["success"] is True
+        assert by_name["get_system_info"]()["active_node"] == api.get_system_info()["active_node"]
+        assert by_name["list_projects"]()["success"] is True
+        # Llamadas posicionales (como PyWebView) y por nombre
+        assert by_name["create_project"]("ProjPos", "", "", False, 24)["success"] is True
+        assert by_name["create_project"](name="ProjKw")["success"] is True
+        assert by_name["list_projects"].__doc__ == api.list_projects.__doc__
 
-        # Llamadas posicionales (como PyWebView `Array.prototype.slice.call(arguments)`) y kwargs
-        created_pos = facade.create_project("ProjPos", "", "", False, 24)
-        assert created_pos["success"] is True
-        created_kw = facade.create_project(name="ProjKw")
-        assert created_kw["success"] is True
+        for internal in ("public_js_functions", "set_window", "set_transport", "ensure_local_node_registered"):
+            assert internal not in by_name
+        assert not [n for n in by_name if n.startswith("_") or "." in n]
 
-        # Metadatos y __self__ seguros (apunta a facade, nunca a ApiBridge)
-        assert facade.list_projects.__name__ == "list_projects"
-        assert facade.list_projects.__doc__ == api.list_projects.__doc__
-        assert facade.list_projects.__self__ is facade
-        assert facade.list_projects.__self__ is not api
+        window = _expose_on_mock_window(functions)
+        # Los nombres de parametros llegan al JS (el SDK usa getfullargspec)
+        import inspect
 
-        # Descubrimiento tipo inject_pywebview: solo métodos planos de primer nivel, sin nested
-        discovered = _pywebview_get_functions(facade)
-        for expected in ("get_system_info", "list_projects", "get_kanban_board", "create_project"):
-            assert expected in discovered
-        for internal in ("as_public_js_api", "set_window", "set_transport", "ensure_local_node_registered"):
-            assert internal not in discovered
-        assert all("." not in fn_name for fn_name in discovered), (
-            f"Se descubrieron rutas anidadas inesperadas: {[n for n in discovered if '.' in n]}"
-        )
+        assert inspect.getfullargspec(by_name["create_project"]).args[:3] == ["name", "code_repo_url", "gov_repo_url"]
+        assert set(window._functions) == set(by_name)
 
-        # Recorrido tipo js_bridge_call/get_nested_attribute (no filtra '_')
-        forbidden_paths = (
-            "_bridge",
-            "_bridge.core_kernel",
-            "db",
-            "core_kernel",
-            "crypto",
-            "extension_gate",
-            "system_ui",
-            "kanban_ui",
-            "tribunal_ui",
+        # El recorrido real de `js_bridge_call` solo resuelve por nombre EXACTO: ninguna ruta con puntos,
+        # dunder ni atributo interno (EGM-73: `pty_*.__func__.__globals__.__setitem__` ya no es alcanzable).
+        from src.app.ui_adapters import extensions_lab_ui
+
+        marker = object()
+        sentinel_before = getattr(extensions_lab_ui, "DEFAULT_SIGNALING_URL", marker)
+        evaluated: list = []
+        window.evaluate_js.side_effect = lambda code: evaluated.append(code)
+        hostile = (
+            "pty_spawn_pane.__func__.__globals__.__setitem__",
+            "pty_spawn_pane.__globals__.__setitem__",
+            "pty_spawn_pane.__closure__",
             "list_projects.__self__.core_kernel",
-            "list_projects.__self__.db",
-            "list_projects.__self__.crypto",
-            "list_projects.__self__.extension_gate",
-            "list_projects.__self__._bridge",
-            "list_projects.__wrapped__",
-            "list_projects.__wrapped__.__self__",
-            "as_public_js_api",
+            "__builtins__.__setitem__",
+            "__class__.__init__",
+            "_rpc",
+            "core_kernel",
+            "db.get_connection",
+            "public_js_functions",
             "set_window",
-            "set_transport",
-            "ensure_local_node_registered",
         )
-        for path in forbidden_paths:
-            assert _pywebview_get_nested_attribute(facade, path) is None, (
-                f"Ruta interna alcanzable desde PublicJsApiFacade: {path}"
-            )
+        for idx, path in enumerate(hostile):
+            wutil.js_bridge_call(window, path, ["DEFAULT_SIGNALING_URL", "http://evil"], f"id{idx}")
+        time.sleep(0.3)
+        assert evaluated == [], f"se ejecuto una ruta hostil: {evaluated[:1]}"
+        assert getattr(extensions_lab_ui, "DEFAULT_SIGNALING_URL", marker) == sentinel_before
+        import src.app.api_bridge as api_bridge_mod
 
-        # La referencia en WeakKeyDictionary se libera cuando desaparece la fachada
-        import gc
-        from src.app.api_bridge import _PUBLIC_FACADE_TARGETS
+        assert api_bridge_mod.DEFAULT_SIGNALING_URL == ""
 
-        assert facade in _PUBLIC_FACADE_TARGETS
-        del facade
-        gc.collect()
-        assert len(_PUBLIC_FACADE_TARGETS) == 0
+        # Una llamada legitima por nombre exacto SI se ejecuta y devuelve el resultado
+        done = threading.Event()
+        window.evaluate_js.side_effect = lambda code: (evaluated.append(code), done.set())
+        wutil.js_bridge_call(window, "list_projects", [], "ok1")
+        assert done.wait(10) and '"success": true' in evaluated[-1].replace("\\", "")
     finally:
         db.close()
 
 
-def test_egm58_main_passes_public_js_api_facade_to_webview_create_window(
+def test_egm58_main_creates_window_without_js_api_and_exposes_plain_functions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: Dict[str, Any] = {}
@@ -179,8 +148,11 @@ def test_egm58_main_passes_public_js_api_facade_to_webview_create_window(
         def get_system_info(self) -> Dict[str, Any]:
             return {"active_node": "n1", "wal_mode": True}
 
-        def as_public_js_api(self) -> PublicJsApiFacade:
-            return PublicJsApiFacade(self)  # type: ignore[arg-type]
+        def public_js_functions(self) -> list:
+            def list_projects() -> Dict[str, Any]:
+                return {"success": True}
+
+            return [list_projects]
 
     class _DummyNetwork:
         def start_listening(self, *args: Any, **kwargs: Any) -> bool:
@@ -202,9 +174,13 @@ def test_egm58_main_passes_public_js_api_facade_to_webview_create_window(
     dummy_bridge = _DummyBridge()
     dummy_kernel = _DummyKernel()
 
+    class _FakeWindow:
+        def expose(self, *functions: Any) -> None:
+            captured["exposed"] = [fn.__name__ for fn in functions]
+
     def _fake_create_window(**kwargs: Any) -> object:
         captured["create_window_kwargs"] = kwargs
-        return object()
+        return _FakeWindow()
 
     fake_webview = types.ModuleType("webview")
     fake_webview.create_window = _fake_create_window  # type: ignore[attr-defined]
@@ -222,9 +198,9 @@ def test_egm58_main_passes_public_js_api_facade_to_webview_create_window(
     try:
         rc = app_main.main(["--db-path", str(tmp_path / "egm58_main.db")])
         assert rc == 0
-        js_api = captured["create_window_kwargs"]["js_api"]
-        assert isinstance(js_api, PublicJsApiFacade)
-        assert js_api is not dummy_bridge
+        # EGM-73: la ventana recibe un js_api inerte (nada alcanzable); las funciones se registran por nombre
+        assert isinstance(captured["create_window_kwargs"]["js_api"], InertJsApi)
+        assert captured["exposed"] == ["list_projects"]
     finally:
         dummy_bridge.db.close()
 
@@ -496,3 +472,24 @@ def test_egm63_pyproject_declares_pty_deps_and_editable_cli_works() -> None:
     )
     assert cli_res.returncode == 0, cli_res.stderr
     assert "--mcp-server" in cli_res.stdout
+
+
+def test_egm73_js_api_none_would_still_expose_nonetype_attributes() -> None:
+    """Por que `main.py` usa `InertJsApi` y no `js_api=None`: con None el SDK aun resuelve `__class__.__init__`."""
+    import time
+    from unittest.mock import MagicMock
+
+    import webview.util as wutil
+
+    def _reaches(js_api: Any) -> bool:
+        window = MagicMock()
+        window._js_api = js_api
+        window._functions = {}
+        evaluated: list = []
+        window.evaluate_js.side_effect = lambda code: evaluated.append(code)
+        wutil.js_bridge_call(window, "__class__.__init__", [], "x1")
+        time.sleep(0.2)
+        return bool(evaluated)
+
+    assert _reaches(None) is True  # el hueco medido
+    assert _reaches(InertJsApi()) is False

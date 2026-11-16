@@ -172,14 +172,17 @@ def test_real_gui_boots_without_csp_or_js_errors() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _exposed_functions(js_api: Any) -> Dict[str, List[str]]:
-    """Ejecuta `webview.util.inject_pywebview` (el SDK real) sobre una ventana simulada."""
+def _exposed_functions(functions: Any) -> Dict[str, List[str]]:
+    """`Window.expose` + `webview.util.inject_pywebview` (el SDK real) sobre una ventana simulada con `js_api=None`."""
     import webview.util as wutil
+    from webview.window import Window
+
+    from src.app.api_bridge import InertJsApi
 
     scripts: List[str] = []
     finished = threading.Event()
     window = MagicMock()
-    window._js_api = js_api
+    window._js_api = InertJsApi()
     window._functions = {}
     window._expose_lock = threading.Lock()
     window.uid = "master"
@@ -191,6 +194,8 @@ def _exposed_functions(js_api: Any) -> Dict[str, List[str]]:
 
     window.run_js.side_effect = _run_js
     window.events.loaded.set.side_effect = finished.set
+    Window.expose(window, *functions)
+    window.events.loaded.is_set.return_value = False
     wutil.inject_pywebview("gtk", window)
     assert finished.wait(timeout=20), "PyWebView no termino de inyectar la API"
     marker = '[{"func":'
@@ -208,7 +213,7 @@ def test_pywebview_sdk_exposes_the_public_api_to_js() -> None:
 
     bridge = ApiBridge(db_manager=make_test_db())
     try:
-        exposed = _exposed_functions(bridge.as_public_js_api())
+        exposed = _exposed_functions(bridge.public_js_functions())
     finally:
         bridge._close_terminal_matrix()
         bridge.core_kernel.close()
@@ -226,7 +231,7 @@ def test_pywebview_sdk_exposes_the_public_api_to_js() -> None:
 
     # Superficie minima: nada privado, nada interno y ningun objeto anidado.
     assert not [n for n in exposed if n.startswith("_") or "." in n]
-    for internal in ("as_public_js_api", "set_window", "set_transport", "ensure_local_node_registered"):
+    for internal in ("public_js_functions", "set_window", "set_transport", "ensure_local_node_registered"):
         assert internal not in exposed
     # Los argumentos de los metodos nuevos llegan al JS (no solo el nombre)
     assert "pty_install_cli" in exposed
