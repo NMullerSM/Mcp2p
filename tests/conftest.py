@@ -49,6 +49,13 @@ def _hermetic_home(tmp_path_factory):
     de sesion aisla tambien `~/.gemini`, `~/.local/bin` y demas rutas de usuario.
     """
     home = tmp_path_factory.mktemp("home")
+    # Sin un ~/.gitconfig propio, git no puede deducir una identidad en un runner de CI y los
+    # `git commit` de las pruebas fallan con "Author identity unknown" (codigo 128).
+    (home / ".gitconfig").write_text(
+        "[user]\n\tname = MCP2P Test\n\temail = test@mcp2p.local\n"
+        "[init]\n\tdefaultBranch = main\n",
+        encoding="utf-8",
+    )
     mp = pytest.MonkeyPatch()
     mp.setenv("HOME", str(home))
     mp.setenv("USERPROFILE", str(home))
