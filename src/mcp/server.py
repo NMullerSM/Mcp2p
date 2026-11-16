@@ -1015,10 +1015,18 @@ def run_mcp_server(
 
 
 def main() -> None:
+    from src.mcp.stdio_proxy import run_stdio_hub_proxy, should_use_hub_proxy
+
     parser = argparse.ArgumentParser(description="MCP2P: Servidor Local Model Context Protocol")
     parser.add_argument("--db-path", type=str, default=None, help="Ruta a la base de datos SQLite")
     add_transport_arguments(parser)
     args = parser.parse_args()
+
+    if args.transport == "stdio":
+        proxy_cfg = should_use_hub_proxy()
+        if proxy_cfg is not None:
+            run_stdio_hub_proxy(proxy_cfg[0], proxy_cfg[1])
+            return
 
     server = create_mcp_server(db_path=args.db_path, transport=args.transport)
     run_mcp_server(server, transport=args.transport, host=args.host, port=args.port)

@@ -202,16 +202,26 @@ def test_codex_receives_only_the_env_var_name_in_argv(lab) -> None:
 
 
 @posix_only
-def test_agy_is_reported_unsupported_and_nothing_is_written(lab) -> None:
+def test_agy_uses_stdio_env_proxy_without_writing_session_token_to_disk(
+    lab, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bridge, home, store = lab["bridge"], lab["home"], lab["store"]
+    monkeypatch.setenv("HOME", str(home))
     _install_fake(home, "agy")
     res = bridge.pty_spawn_pane(1, "antigravity", "implementer", None, 100, 28, True, str(lab["tmp"]))
     assert res["success"] is True
-    assert res["mcp_injection"]["status"] == "unsupported"
+    assert res["mcp_injection"]["status"] == "injected"
+    assert res["mcp_injection"]["method"] == "stdio_env_proxy"
     assert res["mcp_injection"]["verified"] is True
     out = _wait_result(home, "agy")
     assert "mode" not in out and out["argv"] == []
+    # Ningun token por sesion se escribe en runtime_dir ni en ~/.gemini/config/mcp_config.json
     assert not store.base_dir.exists() or list(store.base_dir.iterdir()) == []
+    agy_cfg = home / ".gemini" / "config" / "mcp_config.json"
+    assert agy_cfg.exists()
+    cfg_text = agy_cfg.read_text(encoding="utf-8")
+    assert "MCP2P_SESSION_TOKEN" not in cfg_text
+    assert "MCP2P_HUB_URL" not in cfg_text
 
 
 @posix_only

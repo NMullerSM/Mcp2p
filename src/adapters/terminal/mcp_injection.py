@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +81,63 @@ def _substitute(template: str, *, config_file: Optional[str], hub_url: str) -> s
     if config_file is not None:
         out = out.replace("{mcp_config_file}", config_file)
     return out
+
+
+def ensure_agy_mcp_registered(
+    config_path: Optional[Path] = None,
+    *,
+    python_executable: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Registra de forma idempotente la entrada stdio estatica de `mcp2p` para Antigravity (`agy`)."""
+    target = Path(config_path) if config_path is not None else (Path.home() / ".gemini" / "config" / "mcp_config.json")
+    existed = target.exists()
+    data: Dict[str, Any] = {}
+    if existed:
+        try:
+            raw_text = target.read_text(encoding="utf-8")
+            parsed = json.loads(raw_text)
+        except (OSError, ValueError):
+            return {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
+        if not isinstance(parsed, dict):
+            return {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
+        data = dict(parsed)
+
+    servers = data.get("mcpServers")
+    if servers is None:
+        servers = {}
+    elif not isinstance(servers, dict):
+        return {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
+    else:
+        servers = dict(servers)
+
+    existing_entry = servers.get(MCP_SERVER_NAME)
+    if isinstance(existing_entry, dict) and existing_entry:
+        return {"registered": True, "already_present": True, "path": str(target)}
+
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
+    entry: Dict[str, Any] = {
+        "command": python_executable or sys.executable,
+        "args": ["-m", "src.mcp.server"],
+    }
+    if root.exists():
+        entry["cwd"] = str(root)
+        entry["env"] = {"PYTHONPATH": str(root)}
+
+    servers[MCP_SERVER_NAME] = entry
+    data["mcpServers"] = servers
+
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if not existed:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(serialized)
+    else:
+        target.write_text(serialized, encoding="utf-8")
+
+    return {"registered": True, "already_present": False, "path": str(target)}
 
 
 def _default_base_dir() -> Path:
@@ -147,6 +205,14 @@ class PaneMcpConfigStore:
         verified = bool(mcp.get("verified")) and spec.source == "repo"
         if method == "unsupported":
             return McpInjection("unsupported", method, verified, str(mcp.get("note", "")))
+        if method == "stdio_env_proxy":
+            if spec.source != "repo":
+                return McpInjection("not_applicable", method, verified, "este CLI no recibe configuracion MCP del host")
+            try:
+                ensure_agy_mcp_registered()
+            except Exception as exc:
+                logger.warning("No se pudo registrar mcp2p en mcp_config.json de Antigravity: %s", exc)
+            return McpInjection("injected", "stdio_env_proxy", verified, "stdio_hub_proxy")
         if method not in ("flag", "env") or spec.source != "repo":
             return McpInjection("not_applicable", method, verified, "este CLI no recibe configuracion MCP del host")
         if not hub_url or not token:

@@ -333,9 +333,9 @@
       },
       "launch_flags": [],
       "mcp": {
-        "method": "unsupported",
+        "method": "stdio_env_proxy",
         "verified": true,
-        "note": "Verificado con el binario local (1.5.4): agy solo lee MCP de ~/.gemini/config/mcp_config.json (global y persistente) o de plugins instalados; no hay flag ni variable de sesion. Inyectar ahi dejaria el token del panel en disco y compartido entre sesiones, asi que NO se inyecta: conecte el Hub a mano."
+        "note": "Usa ~/.gemini/config/mcp_config.json (stdio estático sin tokens) + proxy automático por entorno MCP2P_HUB_URL/MCP2P_SESSION_TOKEN al Hub de la sesión."
       },
       "resume": {
         "argv": ["--continue"],

@@ -62,8 +62,8 @@ _SCRIPT_METHODS = frozenset({"curl_sh", "powershell_irm"})
 INSTALL_METHODS = tuple(_INSTALL_PATTERNS)
 # `flag` y `env` son los unicos metodos que el host inyecta al lanzar un panel (EGM-70). `subcommand` y
 # `config_file` se conservan como metadato para catalogos de usuario; `unsupported` marca un CLI verificado
-# que no admite configuracion MCP de sesion.
-_MCP_METHODS = frozenset({"flag", "subcommand", "config_file", "env", "none", "unsupported"})
+# que no admite configuracion MCP de sesion; `stdio_env_proxy` usa config stdio estatica + proxy por entorno.
+_MCP_METHODS = frozenset({"flag", "subcommand", "config_file", "env", "none", "unsupported", "stdio_env_proxy"})
 # Formatos del archivo de configuracion MCP por panel (los renderiza `mcp_injection.py`).
 MCP_CONFIG_FORMATS = frozenset({"none", "claude_mcp_json", "opencode_json", "gemini_settings_json"})
 # Marcadores permitidos en `mcp.argv` / `mcp.env`. NO existe un marcador de token: el token del panel no
@@ -367,7 +367,7 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
         raise CatalogValidationError(f"{where}.mcp: method=flag exige argv (sin env).")
     if mcp_method == "env" and (not mcp_env or mcp_argv):
         raise CatalogValidationError(f"{where}.mcp: method=env exige env (sin argv).")
-    if mcp_method in ("none", "unsupported") and (mcp_argv or mcp_env):
+    if mcp_method in ("none", "unsupported", "stdio_env_proxy") and (mcp_argv or mcp_env):
         raise CatalogValidationError(f"{where}.mcp: method={mcp_method} no admite argv ni env.")
     mcp: Dict[str, Any] = {
         "method": mcp_method,

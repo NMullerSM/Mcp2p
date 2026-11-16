@@ -1032,6 +1032,13 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 cleaned["success"] = False
                 cleaned["cli_id"] = spec.id
                 return cleaned
+            if spec.id == "antigravity":
+                try:
+                    from src.adapters.terminal.mcp_injection import ensure_agy_mcp_registered
+
+                    ensure_agy_mcp_registered()
+                except Exception:
+                    pass
             return {
                 "success": True,
                 "code": "INSTALL_STARTED",
