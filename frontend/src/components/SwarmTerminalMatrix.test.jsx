@@ -727,4 +727,69 @@ describe('SwarmTerminalMatrix en el espacio de trabajo', () => {
     rerender(<>{header('terminals')}{workspace}</>);
     expect(screen.getByTestId('tab-terminals').getAttribute('aria-pressed')).toBe('true');
   });
+
+  it('cambiar de pestana NO desmonta las terminales: se ocultan, siguen vivas y el sondeo continua despacio', async () => {
+    const api = {
+      ...makeMatrixApi(),
+      get_kanban_board: vi.fn(async () => ({ success: true, cards: [] })),
+      get_okf_tags_index: vi.fn(async () => ({ success: true, tags: {} })),
+      subscribe_project_events: vi.fn(async () => ({ success: true })),
+      poll_project_events: vi.fn(async () => ({ success: true, events: [] }))
+    };
+    const workspace = (activeTab) => (
+      <ProjectWorkspace
+        project={PROJECT}
+        activeTab={activeTab}
+        onTabChange={vi.fn()}
+        onBack={vi.fn()}
+        onNewTask={vi.fn()}
+        api={api}
+      />
+    );
+    const { rerender } = render(workspace('terminals'));
+    await openCli('claude', 'pane_1');
+    await waitFor(() => expect(termOf('pane_1').output).toContain('Agente listo'));
+    const instance = termOf('pane_1');
+    expect(screen.getByTestId('terminals-view-host').getAttribute('data-active')).toBe('true');
+
+    // A otra vista: oculta, no desmontada. El slider es el de la vista activa, no el de terminales.
+    rerender(workspace('kanban'));
+    const host = screen.getByTestId('terminals-view-host');
+    expect(host.getAttribute('data-active')).toBe('false');
+    expect(host.style.display).toBe('none');
+    expect(host.contains(screen.getByTestId('terminal-pane-pane_1'))).toBe(true);
+    expect(instance.disposed).toBe(false);
+    expect(screen.queryByTestId('terminals-slider-controls')).toBeNull();
+
+    // Sigue sondeando (a ritmo lento) mientras esta oculta, sin volver a pedir desde el principio.
+    const before = api.pty_poll_output.mock.calls.length;
+    await waitFor(() => expect(api.pty_poll_output.mock.calls.length).toBeGreaterThan(before), { timeout: 3000 });
+    api.pty_poll_output.mock.calls.slice(before).forEach(([, seq]) => expect(seq).toBeGreaterThan(0));
+
+    // Y al volver es la MISMA instancia, con su contenido, sin duplicar la salida.
+    rerender(workspace('terminals'));
+    expect(screen.getByTestId('terminals-view-host').style.display).toBe('block');
+    expect(await screen.findByTestId('terminals-slider-controls')).toBeTruthy();
+    expect(Terminal.instances).toHaveLength(1);
+    expect(termOf('pane_1')).toBe(instance);
+    expect(instance.disposed).toBe(false);
+    expect(instance.output.match(/Agente listo/g)).toHaveLength(1);
+    // Al reactivar se vuelve a pedir el estado actual del enjambre (pty_get_matrix_status).
+    await waitFor(() => expect(api.pty_get_matrix_status.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('la vista de terminales no se monta hasta que se abre por primera vez', async () => {
+    const api = {
+      ...makeMatrixApi(),
+      get_kanban_board: vi.fn(async () => ({ success: true, cards: [] })),
+      get_okf_tags_index: vi.fn(async () => ({ success: true, tags: {} })),
+      subscribe_project_events: vi.fn(async () => ({ success: true })),
+      poll_project_events: vi.fn(async () => ({ success: true, events: [] }))
+    };
+    render(
+      <ProjectWorkspace project={PROJECT} activeTab="kanban" onTabChange={vi.fn()} onBack={vi.fn()} onNewTask={vi.fn()} api={api} />
+    );
+    expect(screen.queryByTestId('terminals-view-host')).toBeNull();
+    expect(api.pty_get_matrix_status).not.toHaveBeenCalled();
+  });
 });

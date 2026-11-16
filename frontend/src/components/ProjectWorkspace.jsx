@@ -41,7 +41,7 @@ const SEARCH_META_BY_TAB = {
     ariaLabel: 'Buscar en Colaboradores'
   },
   terminals: {
-    placeholder: 'Buscar en Swarm Matrix (panel, perfil CLI, rol, salida)...',
+    placeholder: 'Buscar en Swarm Matrix (panel, perfil CLI, rol, carpeta)...',
     ariaLabel: 'Buscar en Swarm Matrix'
   }
 };
@@ -69,6 +69,11 @@ export function ProjectWorkspace({
   const normalizedTab = activeTab === 'branches' ? 'changes' : activeTab;
   const [tabSearches, setTabSearches] = useState({});
   const searchQuery = tabSearches[normalizedTab] || '';
+  // La vista de terminales se monta la primera vez que se abre y ya no se desmonta mientras
+  // dure el espacio de trabajo (ajuste de estado durante el render, patron oficial de React).
+  const terminalsActive = normalizedTab === 'terminals';
+  const [terminalsMounted, setTerminalsMounted] = useState(terminalsActive);
+  if (terminalsActive && !terminalsMounted) setTerminalsMounted(true);
   const setSearchQuery = useCallback((val) => {
     setTabSearches(prev => ({ ...prev, [normalizedTab]: val }));
   }, [normalizedTab]);
@@ -369,7 +374,7 @@ export function ProjectWorkspace({
       );
     }
     if (normalizedTab === 'terminals') {
-      return <SwarmTerminalMatrix api={api} project={project} searchQuery={searchQuery} />;
+      return null; // la vista de terminales se monta aparte y se mantiene viva (ver abajo)
     }
     return <CollaboratorsView project={project} api={api} searchQuery={searchQuery} />;
   };
@@ -467,6 +472,24 @@ export function ProjectWorkspace({
           ver ViewSlider.jsx) */}
       <div style={{ flex: 1, overflow: 'hidden', padding: '14px 18px', minHeight: 0 }}>
         {renderPrimaryView()}
+        {/* Las terminales NO se desmontan al cambiar de pestana: se ocultan. Reconstruirlas
+            obligaria a repetir la salida desde el principio y, con el ring buffer del backend ya
+            truncado, se perderia la entrada a pantalla alterna de los TUI (pantalla corrupta).
+            Mientras esta oculta, la vista sondea despacio y no registra su slider. */}
+        {terminalsMounted && (
+          <div
+            data-testid="terminals-view-host"
+            data-active={terminalsActive ? 'true' : 'false'}
+            style={{ display: terminalsActive ? 'block' : 'none', height: '100%', width: '100%', minHeight: 0 }}
+          >
+            <SwarmTerminalMatrix
+              api={api}
+              project={project}
+              searchQuery={tabSearches.terminals || ''}
+              active={terminalsActive}
+            />
+          </div>
+        )}
       </div>
 
       {/* Modal de Detalle de Tarjeta & Criterios de Aceptación (HITL) */}
