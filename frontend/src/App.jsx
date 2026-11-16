@@ -46,7 +46,7 @@ export default function App() {
 
   // Modals & Drawers state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('p2p');
+  const [settingsTab, setSettingsTab] = useState('github');
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
@@ -370,7 +370,7 @@ export default function App() {
     }
   };
 
-  const handleOpenSettings = (tab = 'p2p') => {
+  const handleOpenSettings = (tab = 'github') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   };

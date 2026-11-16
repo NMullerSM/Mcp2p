@@ -108,15 +108,22 @@ describe('SigningKeySection', () => {
     await waitFor(() => expect(screen.getByTestId('signing-key-state').textContent).toBe('Cifrada y bloqueada'));
   });
 
-  it('aparece al final de la pestaña GitHub Auth de Configuración', async () => {
+  it('aparece en la pestaña Terminales & MCP de Configuración y no en GitHub Auth', async () => {
     const api = {
       ...makeApi(status(false, false)),
       get_system_info: vi.fn(() => Promise.resolve({ success: true, active_node: 'n1' })),
       get_github_status: vi.fn(() => Promise.resolve({ success: true, github: { authenticated: false } })),
       get_signaling_server_url: vi.fn(() => Promise.resolve(''))
     };
-    render(
+    const { rerender } = render(
       <SettingsDrawer isOpen={true} onClose={vi.fn()} api={api} activeProject={null} projectsList={[]} initialTab="github" />
+    );
+    // GitHub Auth ya no lleva la firma humana: pertenece a la seccion de terminales.
+    await screen.findByText('Autenticación Dual de GitHub');
+    expect(screen.queryByTestId('signing-key-state')).toBeNull();
+
+    rerender(
+      <SettingsDrawer isOpen={true} onClose={vi.fn()} api={api} activeProject={null} projectsList={[]} initialTab="mcp" />
     );
     expect((await screen.findByTestId('signing-key-state')).textContent).toBe('Sin cifrar');
   });

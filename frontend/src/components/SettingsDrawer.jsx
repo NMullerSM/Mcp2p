@@ -46,7 +46,7 @@ export function SettingsDrawer({
   api,
   activeProject,
   projectsList,
-  initialTab = 'p2p',
+  initialTab = 'github',
   onGithubStatusChange,
   onNavigateWorkspaceTab
 }) {
@@ -698,9 +698,9 @@ export function SettingsDrawer({
             { id: 'github', label: 'GitHub Auth', icon: Github },
             { id: 'p2p', label: 'Enlace P2P', icon: Share2 },
             { id: 'okf_viewer', label: 'Visor OKF', icon: FolderTree },
-            { id: 'okf_lab', label: 'Laboratorio OKF & Puertos', icon: FlaskConical },
-            { id: 'mcp', label: 'Agentes MCP', icon: Terminal },
-            { id: 'manual', label: 'Atajos & Manual', icon: BookOpen }
+            { id: 'okf_lab', label: 'Lab OKF & Puertos', icon: FlaskConical },
+            { id: 'mcp', label: 'Terminales & MCP', icon: Terminal },
+            { id: 'manual', label: 'Atajos', icon: BookOpen }
           ].map(tab => {
             const Icon = tab.icon;
             const isSelected = activeTab === tab.id;
@@ -1318,6 +1318,16 @@ export function SettingsDrawer({
                   }}
                 />
               </div>
+
+              {/* Firma humana (Gate 0c): condiciona el Auto-Relay y las aprobaciones de las terminales */}
+              <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid var(--border-subtle)' }}>
+                <h4 style={{ fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Terminales: firma humana y Auto-Relay</h4>
+                <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                  El Auto-Relay de las terminales (se activa desde el panel lateral de Terminales) solo despacha
+                  mensajes entre agentes si tu clave Ed25519 está cifrada. Aquí la fijas, la desbloqueas o la bloqueas.
+                </p>
+                <SigningKeySection api={api} />
+              </div>
             </div>
           )}
 
@@ -1583,8 +1593,6 @@ export function SettingsDrawer({
                 </button>
               </div>
 
-              {/* Firma humana: cifrado opcional de la clave Ed25519 (Gate 0c / EGM-53) */}
-              <SigningKeySection api={api} />
             </div>
           )}
 
