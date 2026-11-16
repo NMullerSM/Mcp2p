@@ -379,3 +379,43 @@ describe('Ruta del binario de cada CLI', () => {
     expect(screen.queryByTestId('cli-path-toggle-custom_shell')).toBeNull();
   });
 });
+
+describe('Confirmacion nativa rechazada (CONFIRMATION_DECLINED)', () => {
+  const DECLINED = { success: false, degraded: false, code: 'CONFIRMATION_DECLINED', message: 'Rechazaste el diálogo de confirmación.' };
+
+  async function expectDiscreetDeclinedNotice() {
+    const notice = await screen.findByTestId('matrix-notice');
+    expect(notice.getAttribute('data-code')).toBe('CONFIRMATION_DECLINED');
+    expect(notice.textContent).toMatch(/Cancelaste la confirmación/);
+    // Es informativo, no un error: ningun panel se abre.
+    expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull();
+  }
+
+  it('al rechazar la instalacion se muestra un aviso discreto y no se abre ningun panel', async () => {
+    const { api } = installApi({ pty_install_cli: vi.fn(async () => DECLINED) });
+    renderMatrix(api);
+    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('install-confirm-btn'));
+    await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledTimes(1));
+    await expectDiscreetDeclinedNotice();
+    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+  });
+
+  it('al rechazar fijar la ruta de un binario se muestra el aviso', async () => {
+    const { api } = installApi({ pty_set_cli_path: vi.fn(async () => DECLINED) });
+    renderMatrix(api);
+    fireEvent.click(await screen.findByTestId('cli-path-toggle-claude'));
+    fireEvent.change(screen.getByTestId('cli-path-input-claude'), { target: { value: '/opt/claude' } });
+    fireEvent.click(screen.getByTestId('cli-path-save-claude'));
+    await waitFor(() => expect(api.pty_set_cli_path).toHaveBeenCalled());
+    await expectDiscreetDeclinedNotice();
+  });
+
+  it('al rechazar un shell con comando propio se muestra el aviso', async () => {
+    const { api } = installApi({ pty_spawn_pane: vi.fn(async () => DECLINED) });
+    renderMatrix(api);
+    fireEvent.click(await screen.findByTestId('cli-open-custom_shell'));
+    await waitFor(() => expect(api.pty_spawn_pane).toHaveBeenCalled());
+    await expectDiscreetDeclinedNotice();
+  });
+});

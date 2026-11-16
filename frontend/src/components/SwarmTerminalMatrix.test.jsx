@@ -301,6 +301,24 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     expect(screen.getByTestId('pane-status-pane_1').textContent).toBe('Activo');
   });
 
+  it('la carpeta de trabajo que devuelve pty_get_matrix_status (cwd de la sesion) manda sobre la recordada', async () => {
+    const api = makeMatrixApi({
+      pty_get_matrix_status: vi.fn(async () => ({
+        success: true, degraded: false, hub_url: null, hub_running: false, panes: [],
+        sessions: [{
+          pane_id: 'pane_1', session_id: 'pane_1-sess9', cli_profile: 'gemini', role: 'reviewer',
+          node_uuid: 'n1', pid: 77, alive: true, paused: false, rss_mb: 12, cols: 90, rows: 30, cwd: '/desde/el/backend'
+        }]
+      }))
+    });
+    renderMatrix(api);
+    const pane = await screen.findByTestId('terminal-pane-pane_1');
+    expect(within(pane).getByTestId('pane-cwd-pane_1').textContent).toBe('/desde/el/backend');
+    // La terminal nace con el tamano real de la sesion viva.
+    expect(termOf('pane_1').cols).toBe(90);
+    expect(termOf('pane_1').rows).toBe(30);
+  });
+
   it('al reconectar a una sesion viva la misma instancia de xterm sigue y el sondeo continua desde su seq (sin repetir la salida)', async () => {
     const polls = [];
     const pollFn = vi.fn(async (paneId, sinceSeq = 0) => {

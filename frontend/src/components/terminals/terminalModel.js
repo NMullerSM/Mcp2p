@@ -343,6 +343,14 @@ export function describeTerminalError(res, context = {}) {
     case 'INVALID_ARGUMENT':
     case 'INVALID_PANE_ID':
       return { ...base, title: 'Argumento no válido', message: backendMessage };
+    case 'CONFIRMATION_DECLINED':
+      return {
+        ...base,
+        tone: 'info',
+        title: 'Cancelaste la confirmación',
+        message: backendMessage || 'El diálogo de confirmación se rechazó, así que no se hizo ningún cambio.',
+        hint: 'Vuelve a intentarlo cuando quieras continuar y acepta el diálogo de confirmación.'
+      };
     case 'PTY_SPAWN_FAILED':
       return {
         ...base,

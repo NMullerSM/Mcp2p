@@ -311,7 +311,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
             next[paneId] = {
               ...base,
               kind: remembered?.kind || base.kind,
-              cwd: base.cwd ?? remembered?.cwd ?? null,
+              cwd: s.cwd || base.cwd || remembered?.cwd || null,
               cliProfile: s.cli_profile || r?.cli_profile || base.cliProfile,
               role: s.role || r?.role || base.role,
               cols: s.cols || base.cols,

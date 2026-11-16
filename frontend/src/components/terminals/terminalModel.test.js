@@ -164,6 +164,22 @@ describe('describeTerminalError', () => {
   });
 });
 
+describe('CONFIRMATION_DECLINED (dialogo nativo rechazado)', () => {
+  it('es un aviso informativo sin acciones ni tono de error', () => {
+    const e = describeTerminalError({ success: false, code: 'CONFIRMATION_DECLINED', message: 'Cancelaste la instalacion.' });
+    expect(e.code).toBe('CONFIRMATION_DECLINED');
+    expect(e.tone).toBe('info');
+    expect(e.title).toMatch(/Cancelaste/);
+    expect(e.message).toBe('Cancelaste la instalacion.');
+    expect(e.hint).toMatch(/confirmación/);
+    expect(e.actions).toEqual([]);
+  });
+
+  it('sin mensaje del backend usa uno propio', () => {
+    expect(describeTerminalError({ code: 'CONFIRMATION_DECLINED' }).message).toMatch(/ningún cambio/);
+  });
+});
+
 describe('reglas de instalacion', () => {
   const ok = { id: 'claude', installed: false, kind: 'agent_cli', verified: true, install: { available: true, verified: true } };
 
