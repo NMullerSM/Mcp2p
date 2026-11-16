@@ -56,6 +56,7 @@ def test_null_connector_and_real_host_agree_on_win32(monkeypatch: pytest.MonkeyP
     _assert_unsupported(PosixPtyHostConnector(max_panes=2).spawn_session(pane_id=1, cli_profile="claude"))
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="en Windows el codigo correcto es TERMINAL_PLATFORM_UNSUPPORTED")
 def test_off_windows_the_generic_degraded_code_is_unchanged() -> None:
     res = NullAgentTerminalConnector().spawn_session(pane_id=1)
     assert res["code"] == "TERMINAL_ADAPTER_DEGRADED"
@@ -78,7 +79,10 @@ def test_bridge_pty_methods_report_unsupported_platform_on_win32(monkeypatch: py
         _assert_unsupported(bridge.pty_prepare_install("claude"))
         _assert_unsupported(bridge.pty_install_cli("claude", "tok"))
         # shutil.which toma una rama win32 (ctypes/_winapi) que no existe aqui: se aisla del SO simulado.
-        bridge.core_kernel.terminal_connector.primary.catalog_service._which = lambda name: None
+        # En Windows real el primario es el Null (sin catalog_service): solo se aisla si existe.
+        catalog_service = getattr(bridge.core_kernel.terminal_connector.primary, "catalog_service", None)
+        if catalog_service is not None:
+            catalog_service._which = lambda name: None
         listing = bridge.pty_list_cli_catalog()
         assert listing["success"] is True and listing["terminal_platform_supported"] is False
         assert listing["platform"] == "win32"

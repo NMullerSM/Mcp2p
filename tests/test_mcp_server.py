@@ -13,14 +13,18 @@ from src.mcp.server import create_mcp_server
 
 @pytest.fixture
 def mcp_handler():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Windows no puede borrar un .db con conexiones abiertas (pool + ancla): se cierra la BD antes.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "test_mcp.db"
         db = DatabaseManager(str(db_path))
-        # Registrar nodo de prueba
-        db.register_or_update_node("node_alpha", "Alice", "agent_alpha", reviewer_sla_hours=48)
-        db.register_or_update_node("node_beta", "Bob", "agent_beta", reviewer_sla_hours=72)
-        handler = MCPToolsHandler(db_manager=db)
-        yield handler, db
+        try:
+            # Registrar nodo de prueba
+            db.register_or_update_node("node_alpha", "Alice", "agent_alpha", reviewer_sla_hours=48)
+            db.register_or_update_node("node_beta", "Bob", "agent_beta", reviewer_sla_hours=72)
+            handler = MCPToolsHandler(db_manager=db)
+            yield handler, db
+        finally:
+            db.close()
 
 
 def test_mcp_list_projects(mcp_handler):

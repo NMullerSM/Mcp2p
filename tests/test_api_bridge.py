@@ -17,11 +17,15 @@ from conftest import make_test_db, register_tmp_dir
 
 @pytest.fixture
 def bridge():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Windows no puede borrar un .db con conexiones abiertas (pool + ancla): se cierra la BD antes.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "test_bridge.db"
         db = DatabaseManager(str(db_path))
-        bridge_instance = ApiBridge(db_manager=db)
-        yield bridge_instance
+        try:
+            bridge_instance = ApiBridge(db_manager=db)
+            yield bridge_instance
+        finally:
+            db.close()
 
 
 def two_linked_bridges():

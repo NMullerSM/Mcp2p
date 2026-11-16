@@ -10,13 +10,17 @@ from src.storage.db import DatabaseManager
 
 @pytest.fixture
 def temp_db():
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Windows no puede borrar un .db con conexiones abiertas (pool + ancla): se cierra la BD antes.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "test_mcp2p.db"
         db = DatabaseManager(str(db_path))
-        # Registrar nodos de prueba
-        db.register_or_update_node("node_alpha", "Alice", "agent_alpha", reviewer_sla_hours=24)
-        db.register_or_update_node("node_beta", "Bob", "agent_beta", reviewer_sla_hours=48)
-        yield db
+        try:
+            # Registrar nodos de prueba
+            db.register_or_update_node("node_alpha", "Alice", "agent_alpha", reviewer_sla_hours=24)
+            db.register_or_update_node("node_beta", "Bob", "agent_beta", reviewer_sla_hours=48)
+            yield db
+        finally:
+            db.close()
 
 
 def test_schema_initialization(temp_db):

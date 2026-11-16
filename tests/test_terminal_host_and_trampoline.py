@@ -67,6 +67,7 @@ def _wait_for_output(
 # =========================================================================
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="valida el conector POSIX y sus codigos; Windows se cubre en test_terminal_windows_degradation")
 def test_factory_create_terminal_host_and_kernel_integration(tmp_path: Path) -> None:
     host = ApplicationFactory.create_terminal_host()
     try:
@@ -201,6 +202,7 @@ def test_ring_buffer_thread_safety() -> None:
 # =========================================================================
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="valida el conector POSIX y sus codigos; Windows se cubre en test_terminal_windows_degradation")
 def test_pane_id_normalization_and_validation() -> None:
     assert set(CLI_PROFILES.keys()) == {"claude", "gemini", "codex", "opencode", "antigravity", "custom_shell"}
     assert CLI_PROFILES["antigravity"] == ["agy"]
@@ -545,6 +547,7 @@ class _StubTerminalPrimary:
         self.closed = True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="valida el conector POSIX y sus codigos; Windows se cubre en test_terminal_windows_degradation")
 def test_supervisor_circuit_breaker_opens_falls_back_and_recovers() -> None:
     now = [100.0]
     primary = _StubTerminalPrimary()
