@@ -120,6 +120,35 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     api.pty_write_input.mock.calls.forEach((call) => expect(call[2]).toBe(true));
   });
 
+  it('teclear deprisa: una sola escritura en vuelo por panel y el texto llega en orden (EGM-80)', async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const written = [];
+    const api = makeMatrixApi({
+      pty_write_input: vi.fn(async (_paneId, data) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // El puente real no garantiza orden entre llamadas: la primera es la mas lenta.
+        await new Promise((r) => setTimeout(r, written.length === 0 ? 20 : 1));
+        written.push(data);
+        inFlight -= 1;
+        return { success: true };
+      })
+    });
+    renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    const term = termOf('pane_1');
+    const text = 'echo abcdefghij\r';
+    for (const ch of text) term.emitData(ch);
+    await waitFor(() => expect(written.join('')).toBe(text));
+    expect(maxInFlight).toBe(1);
+    expect(api.pty_write_input.mock.calls.length).toBeLessThan(text.length);
+    api.pty_write_input.mock.calls.forEach((call) => {
+      expect(call[0]).toBe('pane_1');
+      expect(call[2]).toBe(true);
+    });
+  });
+
   it('no envia nada al PTY de un proceso terminado', async () => {
     const api = makeMatrixApi({
       pty_poll_output: vi.fn(async () => ({

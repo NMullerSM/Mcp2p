@@ -3,6 +3,7 @@ import { ExternalLink, X } from 'lucide-react';
 import { ViewSliderContent, useViewSlider } from './ViewSlider';
 import { EmptyTerminalSlot, TerminalPane } from './terminals/TerminalPane';
 import { createPanePoller } from './terminals/panePoller';
+import { createInputSender } from './terminals/inputSender';
 import {
   acquireTerminal,
   disposeTerminal,
@@ -225,6 +226,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   const activeRef = useRef(active);
   activeRef.current = active;
   const pollersRef = useRef({});
+  // Un emisor de entrada por panel: una sola llamada pty_write_input en vuelo y lo tecleado
+  // mientras tanto sale agrupado en la siguiente, en orden (EGM-80: cada llamada del puente
+  // corre en su propio hilo de Python y dos solapadas pueden llegar al PTY al reves).
+  const inputSendersRef = useRef({});
   const launchingRef = useRef(false);
   const installTokenRef = useRef(null);
   const installingRef = useRef(false);
@@ -542,7 +547,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   // ---- Acciones sobre terminales ------------------------------------------------------
 
   const markPaneOpened = useCallback((paneId, patch) => {
-    // Sesion nueva en este panel: terminal limpia y lectura desde el principio.
+    // Sesion nueva en este panel: terminal limpia, lectura desde el principio y sin entrada pendiente.
+    inputSendersRef.current[paneId]?.clear();
+    delete inputSendersRef.current[paneId];
     disposeTerminal(paneId);
     const entry = acquireTerminal(paneId, {
       sessionId: patch.sessionId || '',
@@ -654,6 +661,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     } catch {
       // Limpiar estado visual aunque el proceso ya haya salido
     }
+    inputSendersRef.current[paneId]?.clear();
+    delete inputSendersRef.current[paneId];
     disposeTerminal(paneId);
     if (!mountedRef.current) return;
     forgetPaneSession(paneId);
@@ -672,21 +681,34 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     }
   }, [api]);
 
-  const sendPaneInput = useCallback(async (paneId, payload) => {
-    if (!api?.pty_write_input || !payload) return;
+  const showNoticeRef = useRef(showNotice);
+  showNoticeRef.current = showNotice;
+
+  const sendPaneInput = useCallback((paneId, payload) => {
+    if (!api?.pty_write_input || !payload) return Promise.resolve();
     // Teclear = actividad: sondeo rapido para ver el eco enseguida.
     const entry = getTerminalEntry(paneId);
     if (entry) entry.lastActivityAt = Date.now();
     pollersRef.current[paneId]?.wake();
-    try {
-      const res = await api.pty_write_input(paneId, payload, true);
-      if (mountedRef.current && res && res.success === false && (res.message || res.error)) {
-        showNotice({ ...res, code: res.code || 'PTY_WRITE_FAILED' });
-      }
-    } catch (err) {
-      if (mountedRef.current) showNotice({ code: 'PTY_WRITE_FAILED', message: err?.message || String(err) });
+    let sender = inputSendersRef.current[paneId];
+    if (!sender) {
+      sender = createInputSender({
+        send: (chunk) => apiRef.current.pty_write_input(paneId, chunk, true),
+        onResult: (res) => {
+          if (mountedRef.current && res && res.success === false && (res.message || res.error)) {
+            showNoticeRef.current({ ...res, code: res.code || 'PTY_WRITE_FAILED' });
+          }
+        },
+        onError: (err) => {
+          if (mountedRef.current) {
+            showNoticeRef.current({ code: 'PTY_WRITE_FAILED', message: err?.message || String(err) });
+          }
+        }
+      });
+      inputSendersRef.current[paneId] = sender;
     }
-  }, [api, showNotice]);
+    return sender.push(payload);
+  }, [api]);
 
   const handleSetMaxPanes = useCallback(async (value) => {
     if (!api?.pty_set_max_panes) return;
