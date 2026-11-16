@@ -142,3 +142,40 @@ def test_egm83_legitimate_rfc_sessions_and_unattributed_events_do_not_trip() -> 
     finally:
         orch.close()
         db.close()
+
+
+# ---------------------------------------------------------------------------------------------
+# EGM-84: el empaquetado no reutiliza un frontend/dist viejo
+# ---------------------------------------------------------------------------------------------
+
+
+def _load_build_desktop():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("build_desktop_under_test", ROOT / "build_desktop.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_egm84_package_always_rebuilds_existing_frontend_dist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bd = _load_build_desktop()
+    (tmp_path / "frontend" / "dist").mkdir(parents=True)
+    (tmp_path / "frontend" / "node_modules").mkdir()
+    (tmp_path / "frontend" / "dist" / "index.html").write_text("<html>vieja</html>", encoding="utf-8")
+    calls: list = []
+    monkeypatch.setattr(bd.shutil, "which", lambda name: "/usr/bin/npm")
+    monkeypatch.setattr(bd.subprocess, "check_call", lambda cmd, cwd=None: calls.append((cmd, cwd)))
+    bd.ensure_frontend_built(str(tmp_path))
+    assert calls == [(["/usr/bin/npm", "run", "build"], str(tmp_path / "frontend"))]
+
+
+def test_egm84_without_npm_uses_existing_dist_or_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bd = _load_build_desktop()
+    monkeypatch.setattr(bd.shutil, "which", lambda name: None)
+    monkeypatch.setattr(bd.subprocess, "check_call", lambda *a, **k: pytest.fail("no debe llamar a npm"))
+    with pytest.raises(SystemExit):
+        bd.ensure_frontend_built(str(tmp_path))
+    (tmp_path / "frontend" / "dist").mkdir(parents=True)
+    (tmp_path / "frontend" / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+    bd.ensure_frontend_built(str(tmp_path))  # aviso, sin excepcion

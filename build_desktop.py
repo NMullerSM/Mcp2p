@@ -10,6 +10,28 @@ import argparse
 import shutil
 
 
+def ensure_frontend_built(base_dir):
+    """Recompila SIEMPRE `frontend/dist` antes de empaquetar (EGM-84).
+
+    Antes solo se compilaba si faltaba `dist/index.html`: una compilacion local con un `dist` viejo
+    (p. ej. anterior a xterm) empaquetaba esa interfaz sin avisar. Sin npm en el PATH se usa el `dist`
+    existente con un aviso; sin npm ni `dist`, la compilacion falla.
+    """
+    frontend_dir = os.path.join(base_dir, "frontend")
+    index_html = os.path.join(frontend_dir, "dist", "index.html")
+    npm_cmd = shutil.which("npm.cmd" if sys.platform == "win32" else "npm") or shutil.which("npm")
+    if npm_cmd is None:
+        if os.path.exists(index_html):
+            print("[MCP2P] AVISO: npm no esta en el PATH; se empaqueta el frontend/dist existente (puede estar desactualizado).")
+            return
+        raise SystemExit("[MCP2P] npm no esta en el PATH y no hay frontend/dist: no se puede empaquetar la interfaz.")
+    if not os.path.isdir(os.path.join(frontend_dir, "node_modules")):
+        print("[MCP2P] Instalando dependencias del frontend (npm ci)...")
+        subprocess.check_call([npm_cmd, "ci", "--no-audit"], cwd=frontend_dir)
+    print("[MCP2P] Compilando frontend en React + Vite...")
+    subprocess.check_call([npm_cmd, "run", "build"], cwd=frontend_dir)
+
+
 def build():
     parser = argparse.ArgumentParser(description="Compilador MCP2P Desktop — PyWebView + React 18")
     parser.add_argument("--onefile", action="store_true", help="Genera un único archivo ejecutable autocontenido")
@@ -25,10 +47,7 @@ def build():
     frontend_dist = os.path.join(base_dir, "frontend", "dist")
     ui_fallback_dir = os.path.join(base_dir, "src", "ui")
 
-    if not os.path.exists(os.path.join(frontend_dist, "index.html")):
-        print("[MCP2P] Compilando frontend en React + Vite...")
-        npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-        subprocess.check_call([npm_cmd, "run", "build"], cwd=os.path.join(base_dir, "frontend"))
+    ensure_frontend_built(base_dir)
 
     is_windows = sys.platform == "win32"
     platform_dir = "windows" if is_windows else "linux"
