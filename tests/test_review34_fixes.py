@@ -12,10 +12,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# SIGQUIT/SIGPIPE no existen en Windows: el modulo debe poder importarse ahi (las pruebas se saltan).
 _SIG_BITS = {
-    "SIGINT": signal.SIGINT,
-    "SIGQUIT": signal.SIGQUIT,
-    "SIGPIPE": signal.SIGPIPE,
+    name: getattr(signal, name)
+    for name in ("SIGINT", "SIGQUIT", "SIGPIPE")
+    if hasattr(signal, name)
 }
 
 
