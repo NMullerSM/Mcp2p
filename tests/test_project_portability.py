@@ -366,7 +366,8 @@ def test_windows_origin_paths_are_rewritten_for_this_machine(tmp_path: Path) -> 
     try:
         for row in conn.execute("SELECT * FROM projects;"):
             for fld in ("base_path", "code_repo_path", "gov_repo_path"):
-                assert row[fld].startswith(str(dest_ws)) and "\\" not in row[fld] and "C:" not in row[fld]
+                # El destino usa los separadores de ESTE sistema; lo que no debe quedar es la ruta de origen (C:\\Users\\Ana).
+                assert Path(row[fld]).is_relative_to(dest_ws) and "Ana" not in row[fld] and "mcp2p\\workspace" not in row[fld]
     finally:
         conn.close()
     assert any(c["old"].startswith("C:\\Users\\Ana") for c in res["rewritten_paths"])

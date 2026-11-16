@@ -86,6 +86,7 @@ def test_cli_catalog_and_pane_store_support_antigravity_stdio_env_proxy(tmp_path
     assert spec.mcp["verified"] is True
 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))  # Path.home() usa USERPROFILE en Windows
     store = PaneMcpConfigStore(tmp_path / "pane-store")
     inj = store.prepare(
         spec,

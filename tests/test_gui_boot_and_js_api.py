@@ -79,17 +79,14 @@ def test_check_passes_on_clean_boot_and_kills_the_process_tree() -> None:
     import time as _t
     deadline = _t.monotonic() + 5
     alive = True
+    import psutil  # multiplataforma: os.kill(pid, 0) no existe en Windows
+
     while _t.monotonic() < deadline:
         try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            alive = False
-            break
-        try:  # un zombie aun responde a kill(0): comprobar su estado real
-            if "Z" in Path(f"/proc/{child_pid}/stat").read_text().split(") ")[-1][:2]:
+            if psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE:  # un zombie aun responde
                 alive = False
                 break
-        except OSError:
+        except psutil.NoSuchProcess:
             alive = False
             break
         _t.sleep(0.1)

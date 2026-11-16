@@ -255,7 +255,7 @@ def test_resolution_order_path_local_bin_candidate_and_configured_priority(tmp_p
     # 2) ~/.local/bin gana a las candidatas
     local = _make_exec(home / ".local" / "bin" / "claude")
     res = svc.resolve("claude")
-    assert res.source == "local_bin" and res.path == str(local)
+    assert res.source == "local_bin" and os.path.normpath(res.path) == os.path.normpath(str(local))
 
     # 3) PATH gana a ~/.local/bin
     on_path = _make_exec(tmp_path / "bin" / "claude")
@@ -267,7 +267,7 @@ def test_resolution_order_path_local_bin_candidate_and_configured_priority(tmp_p
     out = svc_path.set_binary_path("claude", str(mine))
     assert out["success"] is True
     res = svc_path.resolve("claude")
-    assert res.source == "configured" and res.path == str(mine)
+    assert res.source == "configured" and os.path.normpath(res.path) == os.path.normpath(str(mine))
 
 
 def test_invalid_configured_path_falls_back_and_is_flagged(tmp_path: Path) -> None:
@@ -295,7 +295,7 @@ def test_resolution_ignores_non_executable_and_relative_which_results(tmp_path: 
 def test_alias_binary_is_found_for_antigravity(tmp_path: Path) -> None:
     agy = _make_exec(tmp_path / "bin" / "agy")
     svc = _service(tmp_path, which=lambda n: str(agy) if n == "agy" else None)
-    assert svc.resolve("antigravity").path == str(agy)
+    assert os.path.normpath(svc.resolve("antigravity").path) == os.path.normpath(str(agy))
     assert svc.build_launch("antigravity")[0] == [str(agy)]
 
 

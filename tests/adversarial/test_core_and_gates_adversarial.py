@@ -376,7 +376,9 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
     term_resp = terminal.spawn_session()
     assert term_resp["success"] is False
     assert term_resp["degraded"] is True
-    assert term_resp["code"] == "TERMINAL_ADAPTER_DEGRADED"
+    assert term_resp["code"] == (
+        "TERMINAL_PLATFORM_UNSUPPORTED" if sys.platform == "win32" else "TERMINAL_ADAPTER_DEGRADED"
+    )
     assert term_resp.get("manual_command")
     assert isinstance(term_resp.get("mcp_config"), dict)
 
