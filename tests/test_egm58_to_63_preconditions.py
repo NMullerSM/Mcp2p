@@ -403,6 +403,7 @@ def test_egm61_streamable_http_works_when_stdout_and_stderr_are_none(
 # =========================================================================
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="en Windows el Null responde TERMINAL_PLATFORM_UNSUPPORTED (test_terminal_windows_degradation)")
 def test_egm62_null_agent_terminal_connector_contract_and_safe_degradation() -> None:
     gate = ExtensionSecurityGate()
     terminal = NullAgentTerminalConnector(gate)
@@ -463,8 +464,10 @@ def test_egm63_pyproject_declares_pty_deps_and_editable_cli_works() -> None:
     assert import_res.returncode == 0, import_res.stderr
     assert "ok" in import_res.stdout
 
-    mcp2p_bin = Path(sys.executable).parent / "mcp2p"
-    assert mcp2p_bin.exists(), f"No se encontró ejecutable editable en {mcp2p_bin}"
+    exe_dir = Path(sys.executable).parent
+    candidates = [exe_dir / "mcp2p", exe_dir / "mcp2p.exe", exe_dir / "Scripts" / "mcp2p.exe"]  # Windows: Scripts\\mcp2p.exe
+    mcp2p_bin = next((c for c in candidates if c.exists()), candidates[0])
+    assert mcp2p_bin.exists(), f"No se encontró ejecutable editable en {candidates}"
     cli_res = subprocess.run(
         [str(mcp2p_bin), "--help"],
         cwd=str(root),

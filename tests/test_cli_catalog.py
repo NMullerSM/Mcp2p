@@ -250,7 +250,7 @@ def test_resolution_order_path_local_bin_candidate_and_configured_priority(tmp_p
         _make_exec(home / ".config" / "Claude" / "claude-code" / ver / "abc123" / "claude")
     res = svc.resolve("claude")
     assert res.found and res.source == "candidate"
-    assert "/2.10.0/" in res.path and res.version == "2.10.0"
+    assert "/2.10.0/" in Path(res.path).as_posix() and res.version == "2.10.0"
 
     # 2) ~/.local/bin gana a las candidatas
     local = _make_exec(home / ".local" / "bin" / "claude")
@@ -280,6 +280,7 @@ def test_invalid_configured_path_falls_back_and_is_flagged(tmp_path: Path) -> No
     assert res.configured_path_valid is False and res.configured_path == str(tmp_path / "ya-no-existe")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="en Windows no hay bit ejecutable: la extension decide")
 def test_resolution_ignores_non_executable_and_relative_which_results(tmp_path: Path) -> None:
     plain = tmp_path / "bin" / "claude"
     plain.parent.mkdir(parents=True)
@@ -325,6 +326,7 @@ def test_set_binary_path_rejects_unsafe_paths(tmp_path: Path, bad: Any) -> None:
     assert settings.data == {}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="en Windows no hay bit ejecutable: la extension decide")
 def test_set_binary_path_requires_existing_executable_file_and_known_cli(tmp_path: Path) -> None:
     settings = _MemorySettings()
     svc = _service(tmp_path, settings=settings)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import json
 import stat
 from pathlib import Path
@@ -21,7 +22,8 @@ def test_ensure_agy_mcp_registered_creates_static_stdio_entry(tmp_path: Path) ->
 
     assert res == {"registered": True, "already_present": False, "path": str(cfg_path)}
     assert cfg_path.is_file()
-    assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows no tiene modos POSIX
+        assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
 
     raw = cfg_path.read_text(encoding="utf-8")
     assert "MCP2P_SESSION_TOKEN" not in raw

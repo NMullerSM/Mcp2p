@@ -12,6 +12,7 @@ Cubre:
 
 from __future__ import annotations
 
+import sys
 import json
 import time
 from pathlib import Path
@@ -331,7 +332,10 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
     pre_unlock_resp = terminal.spawn_session()
     assert pre_unlock_resp["success"] is False
     assert pre_unlock_resp["degraded"] is True
-    assert pre_unlock_resp["code"] == "TERMINAL_ADAPTER_DEGRADED"
+    # En Windows no hay conector PTY: el codigo es TERMINAL_PLATFORM_UNSUPPORTED (ver test_terminal_windows_degradation).
+    assert pre_unlock_resp["code"] == (
+        "TERMINAL_PLATFORM_UNSUPPORTED" if sys.platform == "win32" else "TERMINAL_ADAPTER_DEGRADED"
+    )
     assert pre_unlock_resp.get("manual_command")
     assert isinstance(pre_unlock_resp.get("mcp_config"), dict)
 

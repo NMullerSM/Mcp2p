@@ -300,8 +300,9 @@ def test_store_writes_private_files_and_cleans_up(tmp_path: Path) -> None:
     inj = store.prepare(spec, session_id="pane_1-abc", hub_url="http://127.0.0.1:1234/mcp", token="TOK-SECRET")
     assert inj.status == "injected" and inj.argv[0] == "--mcp-config"
     cfg = Path(inj.argv[1])
-    assert stat.S_IMODE(cfg.stat().st_mode) == 0o600 and stat.S_IMODE(cfg.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(store.base_dir.stat().st_mode) == 0o700
+    if sys.platform != "win32":  # Windows no tiene modos POSIX
+        assert stat.S_IMODE(cfg.stat().st_mode) == 0o600 and stat.S_IMODE(cfg.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(store.base_dir.stat().st_mode) == 0o700
     assert json.loads(cfg.read_text())["mcpServers"]["mcp2p"]["headers"]["Authorization"] == "Bearer TOK-SECRET"
     assert "TOK-SECRET" not in json.dumps(inj.argv) and "TOK-SECRET" not in json.dumps(inj.public())
     assert store.cleanup("pane_1-abc") is True and not cfg.parent.exists()

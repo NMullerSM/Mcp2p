@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import sys
 import sqlite3
 import stat
 import threading
@@ -181,7 +182,7 @@ def test_export_excludes_secrets_by_default_and_leaves_no_trace(tmp_path: Path) 
     assert PAT.encode() not in blob and URL_TOKEN.encode() not in blob and b"SECRETKEYMATERIAL" not in blob
     assert PAT.encode() not in out.read_bytes()
     assert not any(n.endswith("/.env") or n.endswith("/id_rsa") or "/node_modules/" in n or n.endswith("/link") for n in names)
-    assert "workspace/" + src["p1"]["code_repo_path"].split("/workspace/")[1] + "/run.sh" in names
+    assert "workspace/" + src["p1"]["code_repo_path"].replace("\\", "/").split("/workspace/")[1] + "/run.sh" in names
 
     assert manifest["format"] == "mcp2p-portable-project" and manifest["format_version"] == 1
     assert manifest["source_workspace_root"] == str(src["ws"])
@@ -343,7 +344,7 @@ def test_windows_origin_paths_are_rewritten_for_this_machine(tmp_path: Path) -> 
         try:
             with conn:
                 for row in conn.execute("SELECT project_uuid, base_path, code_repo_path, gov_repo_path FROM projects;").fetchall():
-                    rel = lambda p: p.split("/workspace/")[1].replace("/", "\\")
+                    rel = lambda p: p.replace("\\", "/").split("/workspace/")[1].replace("/", "\\")
                     conn.execute(
                         "UPDATE projects SET base_path=?, code_repo_path=?, gov_repo_path=? WHERE project_uuid=?;",
                         (f"{win_root}\\{rel(row[1])}", f"{win_root}\\{rel(row[2])}", f"{win_root}\\{rel(row[3])}", row[0]),
@@ -721,7 +722,8 @@ def test_secrets_in_package_need_explicit_flag_on_import_too(tmp_path: Path) -> 
                                include_secrets=True, identity_dir=home2)
     key = home2 / "node_identity.key"
     assert res2["identity_files_installed"] == [str(key)] and key.is_file()
-    assert stat.S_IMODE(key.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows no tiene modos POSIX
+        assert stat.S_IMODE(key.stat().st_mode) == 0o600
     conn = sqlite3.connect(str(tmp_path / "n2" / "db.sqlite"))
     try:
         assert conn.execute("SELECT value FROM app_settings WHERE key='github_pat_token';").fetchone()[0] == PAT

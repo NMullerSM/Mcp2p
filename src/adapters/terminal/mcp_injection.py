@@ -83,6 +83,17 @@ def _substitute(template: str, *, config_file: Optional[str], hub_url: str) -> s
     return out
 
 
+def _restrict_to_owner(fd: int, path: Path) -> None:
+    """Deja el archivo en 0600. Windows no tiene `os.fchmod`: ahi el archivo hereda la ACL del perfil del usuario."""
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def ensure_agy_mcp_registered(
     config_path: Optional[Path] = None,
     *,
@@ -131,7 +142,7 @@ def ensure_agy_mcp_registered(
     serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     if not existed:
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        os.fchmod(fd, 0o600)
+        _restrict_to_owner(fd, target)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(serialized)
     else:
@@ -232,7 +243,7 @@ class PaneMcpConfigStore:
                 os.chmod(session_dir, 0o700)
                 target = session_dir / CONFIG_FILENAME
                 fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-                os.fchmod(fd, 0o600)
+                _restrict_to_owner(fd, target)
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     json.dump(payload, fh)
             except (OSError, FileExistsError) as exc:

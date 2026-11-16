@@ -67,7 +67,7 @@ def test_frozen_paths_simulation(monkeypatch):
 
 
 def test_api_bridge_auto_update_endpoints():
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         test_db = os.path.join(tmp_dir, "test_api_updater.db")
         db = DatabaseManager(test_db)
         bridge = ApiBridge(db_manager=db)
@@ -238,7 +238,7 @@ def test_linux_relaunch_script_preserves_db_and_workspace_across_rm_rf(monkeypat
 
 
 def test_get_install_mode_dev_mode():
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         test_db = os.path.join(tmp_dir, "test_install_mode.db")
         db = DatabaseManager(test_db)
         bridge = ApiBridge(db_manager=db)

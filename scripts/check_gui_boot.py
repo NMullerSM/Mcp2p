@@ -72,8 +72,37 @@ def find_forbidden(log: str) -> List[str]:
     return hits
 
 
+def _kill_tree_without_killpg(proc: "subprocess.Popen[str]") -> None:
+    """Windows no tiene grupos de procesos POSIX: se recorre el arbol con psutil."""
+    import psutil
+
+    try:
+        parent = psutil.Process(proc.pid)
+    except psutil.NoSuchProcess:
+        return
+    victims = parent.children(recursive=True) + [parent]
+    for p in victims:
+        try:
+            p.terminate()
+        except psutil.Error:
+            pass
+    _, alive = psutil.wait_procs(victims, timeout=5)
+    for p in alive:
+        try:
+            p.kill()
+        except psutil.Error:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _kill_tree(proc: "subprocess.Popen[str]") -> None:
     if proc.poll() is not None:
+        return
+    if not hasattr(os, "killpg"):
+        _kill_tree_without_killpg(proc)
         return
     try:
         os.killpg(proc.pid, signal.SIGTERM)

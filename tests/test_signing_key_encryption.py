@@ -6,6 +6,7 @@ proceso GUI con una frase que nunca se persiste.
 
 from __future__ import annotations
 
+import sys
 import base64
 import stat
 from pathlib import Path
@@ -59,7 +60,8 @@ def test_set_passphrase_migrates_and_removes_plain_pem(key_path):
     assert not key_path.exists(), "el PEM en claro debe borrarse tras migrar"
     enc = mgr.encrypted_key_path
     assert enc.exists()
-    assert stat.S_IMODE(enc.stat().st_mode) == 0o600
+    if sys.platform != "win32":  # Windows no tiene modos POSIX
+        assert stat.S_IMODE(enc.stat().st_mode) == 0o600
     blob = enc.read_bytes()
     assert base64.urlsafe_b64encode(seed) not in blob and seed not in blob
     assert b"PRIVATE KEY" not in blob
