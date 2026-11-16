@@ -149,7 +149,12 @@ class KanbanGovernanceService:
         self._emit(
             "kanban.card_created",
             project_uuid,
-            {"card_id": card_id, "actor_kind": actor.kind if actor else "system"},
+            {
+                "card_id": card_id,
+                "actor_kind": actor.kind if actor else "system",
+                "actor_node": actor.node_uuid if actor else "",
+                "assignee_node_uuid": card.get("assignee_node_uuid") or "",
+            },
         )
         return {"success": True, "card": card}
 
@@ -191,7 +196,12 @@ class KanbanGovernanceService:
         self._emit(
             "kanban.card_updated",
             project_uuid,
-            {"card_id": card_id, "status": card.get("status"), "actor_node": actor.node_uuid},
+            {
+                "card_id": card_id,
+                "status": card.get("status"),
+                "actor_node": actor.node_uuid,
+                "assignee_node_uuid": card.get("assignee_node_uuid") or "",
+            },
         )
         return {"success": True, "card": card}
 
@@ -259,7 +269,7 @@ class KanbanGovernanceService:
         self._emit(
             "kanban.lease_claimed",
             project_uuid,
-            {"card_id": card_id, "node_uuid": actor.node_uuid},
+            {"card_id": card_id, "node_uuid": actor.node_uuid, "actor_node": actor.node_uuid},
         )
         return {"success": True, "card": card}
 
@@ -329,7 +339,12 @@ class KanbanGovernanceService:
         self._emit(
             "kanban.lease_released",
             project_uuid,
-            {"card_id": card_id, "status": target_status, "node_uuid": actor.node_uuid},
+            {
+                "card_id": card_id,
+                "status": target_status,
+                "node_uuid": actor.node_uuid,
+                "actor_node": actor.node_uuid,
+            },
         )
 
         result: Dict[str, Any] = {"success": True, "card": updated}

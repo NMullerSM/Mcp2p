@@ -236,6 +236,56 @@ class SafeTerminalHostSupervisor:
     def poll_output(self, pane_id: Any = 1, since_seq: int = 0) -> Dict[str, Any]:
         return self._guard_dict("poll_output", pane_id, since_seq=since_seq)
 
+    def get_pane_activity(self, pane_id: Any, *, min_silence_s: float = 1.5) -> Dict[str, Any]:
+        circuit_state = self._state()
+        if circuit_state == "open" or not self._safe_primary_available():
+            return {
+                "pane_id": str(pane_id),
+                "state": "degraded",
+                "source": "supervisor_fallback",
+                "idle": False,
+                "supervisor_fallback": True,
+                "circuit_state": circuit_state,
+            }
+        try:
+            fn = getattr(self._primary, "get_pane_activity", None)
+            if not callable(fn):
+                return {
+                    "pane_id": str(pane_id),
+                    "state": "degraded",
+                    "source": "supervisor_fallback",
+                    "idle": False,
+                    "supervisor_fallback": True,
+                    "circuit_state": circuit_state,
+                }
+            res = dict(fn(pane_id, min_silence_s=min_silence_s))
+        except Exception as exc:
+            self._record_failure(exc)
+            return {
+                "pane_id": str(pane_id),
+                "state": "degraded",
+                "source": "supervisor_fallback",
+                "idle": False,
+                "supervisor_fallback": True,
+                "circuit_state": self._state(),
+            }
+        self._record_success()
+        return res
+
+    def is_pane_idle(self, pane_id: Any, *, min_silence_s: float = 1.5) -> bool:
+        if self._state() == "open" or not self._safe_primary_available():
+            return False
+        try:
+            fn = getattr(self._primary, "is_pane_idle", None)
+            if not callable(fn):
+                return False
+            res = bool(fn(pane_id, min_silence_s=min_silence_s))
+        except Exception as exc:
+            self._record_failure(exc)
+            return False
+        self._record_success()
+        return res
+
     def close_session(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return self._guard_dict("close_session", *args, **kwargs)
 

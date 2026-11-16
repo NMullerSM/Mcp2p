@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -262,6 +263,74 @@ class PtyOutputRingBuffer:
             }
 
 
+_OSC_7501_PREFIX = b"\x1b]7501;"
+_OSC_7501_MAX_PENDING = 512
+_OSC_7501_STATUS_MAP: Dict[str, str] = {
+    "idle": "idle",
+    "working": "working",
+    "blocked": "blocked",
+    "permission": "blocked",
+    "done": "done",
+    "error": "error",
+}
+
+
+class _Osc7501Parser:
+    """Parser incremental de secuencias OSC 7501 (\\x1b]7501;<payload>\\x07 o \\x1b\\\\)."""
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+
+    def feed(self, chunk: bytes) -> List[str]:
+        if not chunk:
+            return []
+        self._buf.extend(chunk)
+        statuses: List[str] = []
+
+        while self._buf:
+            start = self._buf.find(_OSC_7501_PREFIX)
+            if start == -1:
+                # Conservar solo el sufijo más largo que pueda ser prefijo de "\x1b]7501;".
+                max_prefix = len(_OSC_7501_PREFIX) - 1
+                kept = b""
+                for k in range(min(len(self._buf), max_prefix), 0, -1):
+                    tail = bytes(self._buf[-k:])
+                    if _OSC_7501_PREFIX.startswith(tail):
+                        kept = tail
+                        break
+                self._buf.clear()
+                if kept:
+                    self._buf.extend(kept)
+                break
+
+            if start > 0:
+                del self._buf[:start]
+
+            body_start = len(_OSC_7501_PREFIX)
+            bel_idx = self._buf.find(b"\x07", body_start)
+            st_idx = self._buf.find(b"\x1b\\", body_start)
+
+            if bel_idx != -1 and (st_idx == -1 or bel_idx < st_idx):
+                term_idx, term_len = bel_idx, 1
+            elif st_idx != -1:
+                term_idx, term_len = st_idx, 2
+            else:
+                if len(self._buf) > _OSC_7501_MAX_PENDING:
+                    del self._buf[:body_start]
+                    continue
+                break
+
+            raw_payload = bytes(self._buf[body_start:term_idx])
+            del self._buf[: term_idx + term_len]
+
+            token = raw_payload.decode("utf-8", errors="replace").split(";", 1)[0].strip().lower()
+            mapped = _OSC_7501_STATUS_MAP.get(token)
+            if mapped is not None:
+                statuses.append(mapped)
+
+        return statuses
+
+
 @dataclass
 class _PtySession:
     pane_id: str
@@ -286,6 +355,11 @@ class _PtySession:
     reader_thread: Optional[threading.Thread] = None
     cwd: Optional[str] = None
     mcp_injection: Dict[str, Any] = field(default_factory=dict)
+    last_output_at: float = field(default_factory=time.monotonic)
+    last_input_at: float = 0.0
+    osc_status: Optional[str] = None
+    osc_status_at: float = 0.0
+    osc_parser: _Osc7501Parser = field(default_factory=_Osc7501Parser, repr=False)
 
     def is_alive(self) -> bool:
         return self.process.poll() is None
@@ -513,6 +587,11 @@ class PosixPtyHostConnector:
                     if not chunk:
                         eof = True
                         break
+                    now = time.monotonic()
+                    session.last_output_at = now
+                    for status in session.osc_parser.feed(chunk):
+                        session.osc_status = status
+                        session.osc_status_at = now
                     session.buffer.append(chunk)
 
                 if eof:
@@ -612,8 +691,108 @@ class PosixPtyHostConnector:
         return proc.poll()
 
     @staticmethod
-    def _serialize_session(session: _PtySession) -> Dict[str, Any]:
+    def _compute_session_activity(
+        session: Optional[_PtySession],
+        *,
+        pane_id: str = "",
+        min_silence_s: float = 1.5,
+    ) -> Dict[str, Any]:
+        norm_pane = session.pane_id if session is not None else pane_id
+        if session is None or not session.is_alive():
+            return {
+                "pane_id": norm_pane,
+                "state": "exited",
+                "source": "process_state",
+                "idle": False,
+                "osc_status": session.osc_status if session is not None else None,
+                "silence_s": 0.0,
+                "min_silence_s": float(min_silence_s),
+            }
+
+        if session.paused:
+            return {
+                "pane_id": norm_pane,
+                "state": "paused",
+                "source": "process_state",
+                "idle": False,
+                "osc_status": session.osc_status,
+                "silence_s": round(max(0.0, time.monotonic() - session.last_output_at), 3),
+                "min_silence_s": float(min_silence_s),
+            }
+
+        now = time.monotonic()
+        silence_s = max(0.0, now - session.last_output_at)
+        osc_status = session.osc_status
+        osc_age = now - session.osc_status_at if osc_status is not None else float("inf")
+        after_last_input = session.osc_status_at >= session.last_input_at
+
+        if osc_status in ("idle", "done") and after_last_input and (osc_age <= 30.0 or session.last_input_at > 0.0):
+            return {
+                "pane_id": norm_pane,
+                "state": osc_status,
+                "source": "osc7501",
+                "idle": True,
+                "osc_status": osc_status,
+                "silence_s": round(silence_s, 3),
+                "min_silence_s": float(min_silence_s),
+            }
+
+        if osc_status in ("working", "blocked") and after_last_input and (osc_age < min_silence_s or silence_s < 30.0):
+            return {
+                "pane_id": norm_pane,
+                "state": osc_status,
+                "source": "osc7501",
+                "idle": False,
+                "osc_status": osc_status,
+                "silence_s": round(silence_s, 3),
+                "min_silence_s": float(min_silence_s),
+            }
+
+        if osc_status == "error" and after_last_input and osc_age <= 30.0:
+            return {
+                "pane_id": norm_pane,
+                "state": "error",
+                "source": "osc7501",
+                "idle": False,
+                "osc_status": osc_status,
+                "silence_s": round(silence_s, 3),
+                "min_silence_s": float(min_silence_s),
+            }
+
+        if silence_s >= min_silence_s:
+            return {
+                "pane_id": norm_pane,
+                "state": "idle",
+                "source": "silence_heuristic",
+                "idle": True,
+                "osc_status": osc_status,
+                "silence_s": round(silence_s, 3),
+                "min_silence_s": float(min_silence_s),
+            }
+
+        return {
+            "pane_id": norm_pane,
+            "state": "working",
+            "source": "silence_heuristic",
+            "idle": False,
+            "osc_status": osc_status,
+            "silence_s": round(silence_s, 3),
+            "min_silence_s": float(min_silence_s),
+        }
+
+    def get_pane_activity(self, pane_id: Any, *, min_silence_s: float = 1.5) -> Dict[str, Any]:
+        norm_pane, _ = self._normalize_pane(pane_id)
+        with self._lock:
+            session = self._sessions.get(norm_pane)
+        return self._compute_session_activity(session, pane_id=norm_pane, min_silence_s=min_silence_s)
+
+    def is_pane_idle(self, pane_id: Any, *, min_silence_s: float = 1.5) -> bool:
+        return bool(self.get_pane_activity(pane_id, min_silence_s=min_silence_s).get("idle", False))
+
+    @classmethod
+    def _serialize_session(cls, session: _PtySession) -> Dict[str, Any]:
         alive = session.is_alive()
+        activity = cls._compute_session_activity(session)
         return {
             "pane_id": session.pane_id,
             "session_id": session.session_id,
@@ -623,6 +802,9 @@ class PosixPtyHostConnector:
             "pid": session.pid,
             "alive": alive,
             "paused": session.paused,
+            "activity_state": activity["state"],
+            "activity_source": activity["source"],
+            "idle": activity["idle"],
             "rss_mb": _read_process_rss_mb(session.pid) if alive else 0.0,
             "cols": session.cols,
             "rows": session.rows,
@@ -1028,6 +1210,9 @@ class PosixPtyHostConnector:
                     if not wlist:
                         raise TimeoutError(f"Timeout escribiendo en PTY {norm_pane}")
 
+        if total_written > 0:
+            session.last_input_at = time.monotonic()
+
         return {
             "success": True,
             "pane_id": norm_pane,
@@ -1146,6 +1331,9 @@ class PosixPtyHostConnector:
                 "alive": False,
                 "exit_code": None,
                 "paused": False,
+                "activity_state": "exited",
+                "activity_source": "process_state",
+                "idle": False,
                 "rss_mb": 0.0,
                 "since_seq": since_seq,
                 "next_seq": since_seq,
@@ -1156,6 +1344,7 @@ class PosixPtyHostConnector:
         delta = session.buffer.poll_since(since_seq)
         alive = session.is_alive()
         exit_code = session.exit_code()
+        activity = self._compute_session_activity(session)
         rss_mb = _read_process_rss_mb(session.pid) if alive else 0.0
         return {
             "success": True,
@@ -1164,6 +1353,9 @@ class PosixPtyHostConnector:
             "alive": alive,
             "exit_code": exit_code,
             "paused": session.paused,
+            "activity_state": activity["state"],
+            "activity_source": activity["source"],
+            "idle": activity["idle"],
             "rss_mb": rss_mb,
             **delta,
         }

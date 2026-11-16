@@ -61,6 +61,8 @@ class SwarmRelayOrchestrator:
         human_cooldown_seconds: float = 5.0,
         max_relay_rounds: int = 6,
         clock: Optional[Callable[[], float]] = None,
+        auto_relay_enabled: bool = False,
+        idle_wait_timeout_s: float = 0.0,
     ) -> None:
         self._lock = threading.RLock()
         self._conditions: Dict[str, threading.Condition] = {}
@@ -75,6 +77,8 @@ class SwarmRelayOrchestrator:
         self.max_relay_rounds = max(1, int(max_relay_rounds))
         self._clock_explicit = clock is not None
         self._clock: Callable[[], float] = clock or time.time
+        self._auto_relay_enabled = bool(auto_relay_enabled)
+        self._idle_wait_timeout_s = max(0.0, float(idle_wait_timeout_s))
         self._closed = False
 
         self._dedup_order: Dict[str, Deque[str]] = {}
@@ -85,6 +89,8 @@ class SwarmRelayOrchestrator:
         self._relay_last_sender: Dict[str, str] = {}
         self._dropped_oldest_total = 0
         self._deferred_dispatches: Deque[Dict[str, Any]] = deque(maxlen=512)
+        self._active_waiters: Dict[str, int] = defaultdict(int)
+        self._pending_idle_dispatches: Deque[Dict[str, Any]] = deque(maxlen=512)
 
         if self._event_bus is not None:
             self._event_bus.subscribe("*", self._on_domain_event)
@@ -440,32 +446,40 @@ class SwarmRelayOrchestrator:
 
             deadline = time.monotonic() + (timeout_ms / 1000.0)
             cond = self._get_condition_locked(target)
-            while not self._closed:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return {
-                        "success": True,
-                        "has_assignment": False,
-                        "assignment": None,
-                        "timed_out": True,
-                    }
-                cond.wait(timeout=remaining)
-                if self._closed:
-                    return {
-                        "success": True,
-                        "has_assignment": False,
-                        "assignment": None,
-                        "timed_out": False,
-                        "closed": True,
-                    }
-                item = self._pop_matching_locked(target, project_uuid)
-                if item is not None:
-                    return {
-                        "success": True,
-                        "has_assignment": True,
-                        "assignment": item,
-                        "timed_out": False,
-                    }
+            self._active_waiters[target] += 1
+            try:
+                while not self._closed:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return {
+                            "success": True,
+                            "has_assignment": False,
+                            "assignment": None,
+                            "timed_out": True,
+                        }
+                    cond.wait(timeout=remaining)
+                    if self._closed:
+                        return {
+                            "success": True,
+                            "has_assignment": False,
+                            "assignment": None,
+                            "timed_out": False,
+                            "closed": True,
+                        }
+                    item = self._pop_matching_locked(target, project_uuid)
+                    if item is not None:
+                        return {
+                            "success": True,
+                            "has_assignment": True,
+                            "assignment": item,
+                            "timed_out": False,
+                        }
+            finally:
+                remaining_waiters = self._active_waiters.get(target, 1) - 1
+                if remaining_waiters <= 0:
+                    self._active_waiters.pop(target, None)
+                else:
+                    self._active_waiters[target] = remaining_waiters
 
             return {
                 "success": True,
@@ -732,6 +746,273 @@ class SwarmRelayOrchestrator:
         }
 
     # ------------------------------------------------------------------
+    # Auto-Relay controlado y mensajería directa entre nodos/paneles
+    # ------------------------------------------------------------------
+
+    def set_auto_relay_enabled(self, enabled: bool) -> Dict[str, Any]:
+        """Activa o desactiva el Auto-Relay controlado hacia paneles PTY."""
+        with self._lock:
+            self._auto_relay_enabled = bool(enabled)
+        return self.get_auto_relay_status()
+
+    def get_auto_relay_status(self) -> Dict[str, Any]:
+        """Devuelve el estado actual de Auto-Relay, Gate 0c y Loop Breakers disparados."""
+        with self._lock:
+            return {
+                "success": True,
+                "auto_relay_enabled": self._auto_relay_enabled,
+                "key_encrypted": self._is_key_encrypted(),
+                "deferred_count": len(self._deferred_dispatches),
+                "pending_idle_count": len(self._pending_idle_dispatches),
+                "tripped_cases": sorted(
+                    k for k, v in self._loop_breaker_states.items() if v == "LOOP_BREAKER_TRIPPED"
+                ),
+            }
+
+    def _resolve_target_node_from_pane(self, pane_id: int | str) -> str:
+        if self.pane_registry is None:
+            return ""
+        get_pane_fn = getattr(self.pane_registry, "get_pane", None)
+        if not callable(get_pane_fn):
+            return ""
+        pane = get_pane_fn(pane_id)
+        if pane is None:
+            return ""
+        if isinstance(pane, dict):
+            if str(pane.get("status") or "active").lower() == "closed":
+                return ""
+            return str(pane.get("node_uuid") or "").strip()
+        if str(getattr(pane, "status", "active") or "active").lower() == "closed":
+            return ""
+        return str(getattr(pane, "node_uuid", "") or "").strip()
+
+    def _find_active_pane_for_node(self, node_uuid: str) -> Optional[Dict[str, Any]]:
+        if self.pane_registry is None or not node_uuid:
+            return None
+        list_panes_fn = getattr(self.pane_registry, "list_panes", None)
+        if not callable(list_panes_fn):
+            return None
+        for raw in list_panes_fn() or []:
+            pane = dict(raw) if isinstance(raw, dict) else (
+                raw.to_dict(include_token=False) if hasattr(raw, "to_dict") else None
+            )
+            if not pane:
+                continue
+            if str(pane.get("status") or "active").lower() == "closed":
+                continue
+            if str(pane.get("node_uuid") or "").strip() == node_uuid:
+                return pane
+        return None
+
+    @staticmethod
+    def _sanitize_single_line(text: str, *, max_len: int = 240) -> str:
+        cleaned = " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split())
+        if len(cleaned) > max_len:
+            return cleaned[: max_len - 3] + "..."
+        return cleaned
+
+    def _build_auto_dispatch_prompt(self, assignment: Dict[str, Any]) -> str:
+        sender = self._extract_sender_node(assignment) or "swarm"
+        direct_msg = assignment.get("message")
+        if direct_msg is None and isinstance(assignment.get("payload"), dict):
+            direct_msg = assignment["payload"].get("message")
+        if direct_msg:
+            body = self._sanitize_single_line(str(direct_msg), max_len=200)
+            return f"[MCP2P Direct from {sender}] {body}"
+        kind = self._sanitize_single_line(
+            str(assignment.get("event_type") or assignment.get("kind") or "ASSIGNMENT"),
+            max_len=64,
+        )
+        card_id = self._sanitize_single_line(str(assignment.get("card_id") or "-"), max_len=64)
+        return f"[MCP2P Relay: {kind}] card={card_id} -> ejecuta await_next_assignment()"
+
+    def _maybe_auto_dispatch(self, target_node_uuid: str, assignment: Dict[str, Any]) -> None:
+        target = (target_node_uuid or "").strip()
+        if not target or target == "*":
+            return
+
+        with self._lock:
+            if self._closed or not self._auto_relay_enabled:
+                return
+            if self._active_waiters.get(target, 0) > 0:
+                return
+
+        sender = self._extract_sender_node(assignment)
+        if sender and sender == target:
+            return
+
+        pane = self._find_active_pane_for_node(target)
+        if pane is None:
+            return
+        pane_id = pane.get("pane_id")
+        if pane_id is None:
+            return
+
+        prompt_line = self._build_auto_dispatch_prompt(assignment)
+        prompt_text = f"{prompt_line}\r"
+        project_uuid = self._extract_nested_str(assignment, "project_uuid")
+        card_id = self._extract_nested_str(assignment, "card_id")
+        session_id = self._extract_nested_str(assignment, "session_id", "dispute_id")
+
+        is_idle_fn = (
+            getattr(self.terminal_connector, "is_pane_idle", None)
+            if self.terminal_connector is not None
+            else None
+        )
+        if callable(is_idle_fn) and not is_idle_fn(pane_id):
+            with self._lock:
+                self._pending_idle_dispatches.append(
+                    {
+                        "pane_id": pane_id,
+                        "target_node_uuid": target,
+                        "prompt_text": prompt_text,
+                        "project_uuid": project_uuid,
+                        "card_id": card_id,
+                        "session_id": session_id,
+                        "queued_at": self._clock(),
+                    }
+                )
+            return
+
+        self.dispatch_to_pane(
+            pane_id,
+            prompt_text,
+            project_uuid=project_uuid,
+            card_id=card_id,
+            session_id=session_id,
+        )
+
+    def flush_idle_dispatches(self) -> List[Dict[str, Any]]:
+        """Drena avisos pendientes en `_pending_idle_dispatches` cuando los paneles están idle."""
+        with self._lock:
+            pending = list(self._pending_idle_dispatches)
+            self._pending_idle_dispatches.clear()
+
+        is_idle_fn = (
+            getattr(self.terminal_connector, "is_pane_idle", None)
+            if self.terminal_connector is not None
+            else None
+        )
+        results: List[Dict[str, Any]] = []
+        still_busy: List[Dict[str, Any]] = []
+
+        for entry in pending:
+            pane_id = entry["pane_id"]
+            if callable(is_idle_fn) and not is_idle_fn(pane_id):
+                still_busy.append(entry)
+                continue
+            res = self.dispatch_to_pane(
+                pane_id,
+                entry["prompt_text"],
+                project_uuid=entry.get("project_uuid", ""),
+                card_id=entry.get("card_id", ""),
+                session_id=entry.get("session_id", ""),
+            )
+            results.append(res)
+
+        if still_busy:
+            with self._lock:
+                for item in reversed(still_busy):
+                    self._pending_idle_dispatches.appendleft(item)
+
+        return results
+
+    def send_direct_message(
+        self,
+        *,
+        project_uuid: str,
+        sender_node_uuid: str,
+        target_node_uuid: Optional[str] = None,
+        target_pane_id: Optional[str] = None,
+        message: str,
+        card_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Envía un mensaje directo a otro nodo/panel, registrándolo en A2ABus y encolándolo."""
+        resolved_target = (target_node_uuid or "").strip()
+        if not resolved_target and target_pane_id is not None:
+            resolved_target = self._resolve_target_node_from_pane(target_pane_id)
+
+        if not resolved_target:
+            return {
+                "success": False,
+                "code": "TARGET_NOT_FOUND",
+                "error": "No se pudo resolver target_node_uuid para el mensaje directo.",
+            }
+
+        message_uuid = str(uuid.uuid4())
+        assignment: Dict[str, Any] = {
+            "source": "direct_message",
+            "intent": "DIRECT_MESSAGE",
+            "kind": "DIRECT_MESSAGE",
+            "signal_type": "DIRECT_MESSAGE",
+            "project_uuid": project_uuid,
+            "sender_node_uuid": sender_node_uuid,
+            "target_node_uuid": resolved_target,
+            "message": message,
+            "message_uuid": message_uuid,
+            "payload": {
+                "message": message,
+                "target_node_uuid": resolved_target,
+                "sender_node_uuid": sender_node_uuid,
+            },
+        }
+        if card_id:
+            assignment["card_id"] = card_id
+        if session_id:
+            assignment["session_id"] = session_id
+
+        if self._bus is not None:
+            pub_fn = getattr(self._bus, "publish_informative", None)
+            send_fn = getattr(self._bus, "send_informative", None)
+            log_fn = getattr(self._bus, "log_a2a_message", None)
+            if callable(pub_fn):
+                pub_fn(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    signal_type="DIRECT_MESSAGE",
+                    data={
+                        "target_node_uuid": resolved_target,
+                        "message": message,
+                        "session_id": session_id,
+                    },
+                    card_id=card_id,
+                )
+            elif callable(send_fn):
+                packet = send_fn(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    signal_type="DIRECT_MESSAGE",
+                    data={
+                        "target_node_uuid": resolved_target,
+                        "message": message,
+                        "session_id": session_id,
+                    },
+                    card_id=card_id,
+                )
+                if isinstance(packet, dict) and packet.get("message_uuid"):
+                    assignment["message_uuid"] = str(packet["message_uuid"])
+            elif callable(log_fn):
+                log_fn(
+                    project_uuid=project_uuid,
+                    message_uuid=message_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    intent="DIRECT_MESSAGE",
+                    payload_rfc_yaml=message,
+                    card_id=card_id,
+                )
+
+        res = self.enqueue_assignment(resolved_target, assignment)
+        if res.get("queued") and not res.get("deduplicated"):
+            self._maybe_auto_dispatch(resolved_target, assignment)
+
+        return {
+            **res,
+            "target_node_uuid": resolved_target,
+            "message_uuid": assignment["message_uuid"],
+        }
+
+    # ------------------------------------------------------------------
     # Suscriptores de DomainEventBus y A2ABus
     # ------------------------------------------------------------------
 
@@ -756,6 +1037,13 @@ class SwarmRelayOrchestrator:
             {"payload": payload},
             allow_explicit_node_uuid=True,
         )
+        if event_type in ("kanban.card_updated", "kanban.card_created"):
+            assignee_node = str(payload.get("assignee_node_uuid") or "").strip()
+            actor_node = str(payload.get("actor_node") or payload.get("actor_node_uuid") or "").strip()
+            if assignee_node and assignee_node != actor_node:
+                explicit_target = assignee_node
+            elif assignee_node and assignee_node == actor_node and explicit_target == assignee_node:
+                explicit_target = None
         card_id = str(payload.get("card_id") or "")
         session_id = str(payload.get("session_id") or payload.get("dispute_id") or "")
 
@@ -789,6 +1077,8 @@ class SwarmRelayOrchestrator:
             assignment["assignment_key"] = str(payload["assignment_key"])
 
         res = self.enqueue_assignment(target, assignment)
+        if res.get("queued") and not res.get("deduplicated") and target != "*":
+            self._maybe_auto_dispatch(target, assignment)
         if not res.get("success") and res.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED":
             logger.warning(
                 "Loop Breaker activado en DomainEvent %s para %s: %s",
@@ -851,6 +1141,8 @@ class SwarmRelayOrchestrator:
             )
 
         res = self.enqueue_assignment(target, assignment)
+        if res.get("queued") and not res.get("deduplicated") and target != "*":
+            self._maybe_auto_dispatch(target, assignment)
         if not res.get("success") and res.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED":
             logger.warning(
                 "Loop Breaker activado en mensaje A2A %s para %s: %s",
