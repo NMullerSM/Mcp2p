@@ -36,6 +36,7 @@ from src.adapters.terminal.pty_host import (
 )
 from src.app.ui_adapters import _BaseUIAdapter
 from src.core.kernel import CoreKernel
+from src.core.services.kanban_swarm_adapter import KanbanSwarmAdapter
 from src.mcp.pane_registry import EmbeddedMcpHub, PaneRegistry
 from src.p2p.mesh_adapter import MultiPeerMeshConnector
 from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_platform_response
@@ -664,9 +665,53 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             elif isinstance(connector_status.get("sessions"), list):
                 sessions = [_strip_secret_fields(dict(s)) for s in connector_status["sessions"]]
 
+            activity_fn = getattr(terminal, "get_pane_activity", None)
+            session_by_pane: Dict[str, Dict[str, Any]] = {}
+            for s in sessions:
+                pid_key = s.get("pane_id")
+                if callable(activity_fn) and pid_key is not None and "activity_state" not in s:
+                    try:
+                        act = activity_fn(pid_key)
+                        if isinstance(act, dict):
+                            state = act.get("activity_state", act.get("state", "unknown"))
+                            s["activity_state"] = state
+                            s["activity_source"] = act.get("activity_source", act.get("source", ""))
+                            s["idle"] = bool(act.get("idle", state == "idle"))
+                    except Exception:
+                        pass
+                if "activity_state" in s and "idle" not in s:
+                    s["idle"] = s.get("activity_state") == "idle"
+                if pid_key is not None:
+                    session_by_pane[str(pid_key)] = s
+
+            panes: List[Dict[str, Any]] = []
+            for raw_pane in registry.list_panes():
+                p = dict(raw_pane)
+                match = session_by_pane.get(str(p.get("pane_id") or ""))
+                if match is not None:
+                    for key in ("activity_state", "activity_source", "idle", "mcp_injection"):
+                        if key in match and key not in p:
+                            p[key] = match[key]
+                panes.append(p)
+
             hub = self._embedded_hub
             hub_running = bool(hub.is_running()) if hub is not None else False
             hub_url = hub.url if (hub is not None and hub_running) else None
+
+            default_relay_status: Dict[str, Any] = {
+                "auto_relay_enabled": False,
+                "tripped_cases": [],
+                "deferred_count": 0,
+            }
+            relay_status: Dict[str, Any] = dict(default_relay_status)
+            if hub is not None and hub_running:
+                try:
+                    relay = hub.relay_orchestrator()
+                    if relay is not None:
+                        relay_status = dict(relay.get_auto_relay_status())
+                except Exception:
+                    relay_status = dict(default_relay_status)
+            auto_relay_enabled = bool(relay_status.get("auto_relay_enabled", False))
 
             manual_command: Optional[str] = None
             mcp_config: Optional[Dict[str, Any]] = None
@@ -685,7 +730,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "connector_status": connector_status,
                 "hub_url": hub_url,
                 "hub_running": hub_running,
-                "panes": registry.list_panes(),
+                "auto_relay_enabled": auto_relay_enabled,
+                "relay_status": relay_status,
+                "panes": panes,
                 "sessions": sessions,
                 "manual_command": manual_command,
                 "mcp_config": mcp_config,
@@ -699,6 +746,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "connector_status": {"available": False, "degraded": True, "mode": "error"},
                 "hub_url": None,
                 "hub_running": False,
+                "auto_relay_enabled": False,
+                "relay_status": {"auto_relay_enabled": False, "tripped_cases": [], "deferred_count": 0},
                 "panes": [],
                 "sessions": [],
                 "manual_command": instructions["manual_command"],
@@ -1320,6 +1369,56 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             ok = relay.reset_loop_breaker(project_uuid=project_uuid, card_id=card_id, session_id=session_id)
             return {"success": bool(ok), "code": "OK" if ok else "INVALID_ARGUMENT",
                     "message": "Loop Breaker reiniciado." if ok else "No se pudo derivar la clave del caso."}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_set_auto_relay(self, enabled: bool) -> Dict[str, Any]:
+        """Activa o desactiva el Auto-Relay del Hub embebido (con verificación Gate 0c)."""
+        try:
+            target_enabled = bool(enabled)
+            hub = self._embedded_hub
+            if target_enabled and (hub is None or not hub.is_running()):
+                self._ensure_hub_started()
+                hub = self._embedded_hub
+            relay = hub.relay_orchestrator() if hub is not None else None
+            if relay is None:
+                return _fail(
+                    "RELAY_UNAVAILABLE",
+                    "El Hub embebido no está en marcha o no pudo iniciar; Auto-Relay no disponible.",
+                )
+
+            key_encrypted = bool(getattr(self.crypto, "is_encrypted", False))
+            relay.set_auto_relay_enabled(target_enabled)
+            status = dict(relay.get_auto_relay_status())
+            effective_key_encrypted = bool(status.get("key_encrypted", key_encrypted))
+            if not key_encrypted:
+                effective_key_encrypted = False
+            result: Dict[str, Any] = {
+                "success": True,
+                **status,
+                "key_encrypted": effective_key_encrypted,
+            }
+            if target_enabled and not effective_key_encrypted:
+                result["warning"] = (
+                    "Gate 0c: la clave privada local no está cifrada; "
+                    "el despacho automático al PTY exige clave Ed25519 cifrada."
+                )
+            return result
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_get_kanban_swarm_snapshot(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        """Devuelve la proyección Kanban <-> Swarm de paneles activos y tarjetas asignadas."""
+        try:
+            target_uuid = self._resolve_project_uuid(project_uuid)
+            kernel = self.core_kernel
+            kanban_repo = getattr(kernel, "kanban_repo", None) if kernel is not None else None
+            adapter = KanbanSwarmAdapter(
+                kanban_repo=kanban_repo,
+                pane_registry=self._get_pane_registry(),
+                terminal_connector=self._get_terminal_connector(),
+            )
+            return adapter.list_swarm_panes(project_uuid=target_uuid)
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 

@@ -817,6 +817,59 @@ def create_mcp_server(
             timeout_ms=resolved_timeout,
         )
 
+    # 29. Herramienta: Descubrir Paneles del Enjambre
+    @server.tool()
+    def list_swarm_panes(
+        project_uuid: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+    ) -> str:
+        """
+        Lista los paneles activos del enjambre con su estado de actividad PTY,
+        tarjetas Kanban asignadas/reclamadas y estado de Auto-Relay.
+        """
+        resolved_proj = project_uuid if project_uuid is not None else projectUuid
+        return handler.list_swarm_panes(project_uuid=resolved_proj)
+
+    # 30. Herramienta: Enviar Mensaje Directo entre Paneles
+    @server.tool()
+    def send_pane_message(
+        project_uuid: Optional[str] = None,
+        target_node_uuid: Optional[str] = None,
+        target_pane_id: Optional[str] = None,
+        message: str = "",
+        card_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        node_uuid: Optional[str] = None,
+        session_token: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+        targetNodeUuid: Optional[str] = None,
+        targetPaneId: Optional[str] = None,
+        cardId: Optional[str] = None,
+        sessionId: Optional[str] = None,
+        nodeUuid: Optional[str] = None,
+        sessionToken: Optional[str] = None,
+    ) -> str:
+        """
+        Envía un mensaje directo a otro nodo o panel del enjambre (con validación EGM-22).
+        """
+        resolved_proj = (project_uuid if project_uuid is not None else projectUuid) or ""
+        resolved_target_node = target_node_uuid if target_node_uuid is not None else targetNodeUuid
+        resolved_target_pane = target_pane_id if target_pane_id is not None else targetPaneId
+        resolved_card = card_id if card_id is not None else cardId
+        resolved_session = session_id if session_id is not None else sessionId
+        resolved_node = node_uuid if node_uuid is not None else nodeUuid
+        resolved_token = session_token if session_token is not None else sessionToken
+        return handler.send_pane_message(
+            project_uuid=resolved_proj,
+            target_node_uuid=resolved_target_node,
+            target_pane_id=resolved_target_pane,
+            message=message,
+            card_id=resolved_card,
+            session_id=resolved_session,
+            node_uuid=resolved_node,
+            session_token=resolved_token,
+        )
+
     setattr(server, "mcp2p_handler", handler)
     setattr(server, "mcp2p_pane_registry", pane_registry)
     return server

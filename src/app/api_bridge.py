@@ -733,6 +733,12 @@ class ApiBridge:
             project_uuid=project_uuid, card_id=card_id, session_id=session_id
         )
 
+    def pty_set_auto_relay(self, enabled: bool) -> Dict[str, Any]:
+        return self.extensions_ui.pty_set_auto_relay(enabled=enabled)
+
+    def pty_get_kanban_swarm_snapshot(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        return self.extensions_ui.pty_get_kanban_swarm_snapshot(project_uuid=project_uuid)
+
     def public_js_functions(self) -> List[Callable[..., Any]]:
         """Funciones planas para `window.expose(...)`; la ventana se crea con `js_api=None` (EGM-73).
 

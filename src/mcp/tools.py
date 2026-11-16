@@ -19,6 +19,7 @@ from src.a2a.bus import A2ABus, A2AIntent
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
+from src.core.services.kanban_swarm_adapter import KanbanSwarmAdapter
 from src.core.services.swarm_relay_service import SwarmRelayOrchestrator, clamp_await_timeout_ms
 from src.mcp.pane_registry import (
     PaneRegistry,
@@ -122,6 +123,29 @@ class MCPToolsHandler:
         if self._relay_orchestrator is None and getattr(self.kernel, "relay_orchestrator", None) is None:
             self._get_relay_orchestrator()
 
+    def _resolve_kernel_connector(self, attr_name: str, port_name: str) -> Any:
+        val = getattr(self.kernel, attr_name, None)
+        if val is not None:
+            return val
+        get_conn = getattr(self.kernel, "get_connector", None)
+        if callable(get_conn):
+            try:
+                return get_conn(port_name)
+            except Exception:
+                return None
+        return None
+
+    def _get_kanban_swarm_adapter(self) -> KanbanSwarmAdapter:
+        """Construye un KanbanSwarmAdapter conectado al repositorio Kanban y terminal del kernel."""
+        return KanbanSwarmAdapter(
+            kanban_repo=getattr(self.kernel, "kanban_repo", None),
+            pane_registry=self.pane_registry,
+            terminal_connector=self._resolve_kernel_connector(
+                "terminal_connector",
+                CoreKernel.PORT_AGENT_TERMINAL,
+            ),
+        )
+
     def _get_relay_orchestrator(self) -> SwarmRelayOrchestrator:
         """Retorna el SwarmRelayOrchestrator inyectado, del kernel o uno propio (lazy)."""
         if self._relay_orchestrator is not None:
@@ -157,8 +181,14 @@ class MCPToolsHandler:
                 event_bus=ev_bus,
                 bus=a2a_bus,
                 pane_registry=self.pane_registry,
-                terminal_connector=getattr(self.kernel, "terminal_connector", None),
-                crypto=getattr(self.kernel, "crypto", None),
+                terminal_connector=self._resolve_kernel_connector(
+                    "terminal_connector",
+                    CoreKernel.PORT_AGENT_TERMINAL,
+                ),
+                crypto=self._resolve_kernel_connector(
+                    "crypto",
+                    CoreKernel.PORT_CRYPTO,
+                ),
             )
         elif (
             self.pane_registry is not None
@@ -1623,6 +1653,71 @@ class MCPToolsHandler:
                 timeout_ms=applied_timeout_ms,
             )
             res = {**res, "timeout_ms_applied": applied_timeout_ms}
+            return self._wrap_response(project_uuid, res)
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def list_swarm_panes(self, project_uuid: Optional[str] = None) -> str:
+        """Lista los paneles activos del enjambre con su actividad PTY, tarjetas Kanban y estado de Auto-Relay."""
+        try:
+            res = self._get_kanban_swarm_adapter().list_swarm_panes(project_uuid=project_uuid)
+            relay_status = self._get_relay_orchestrator().get_auto_relay_status()
+            res["auto_relay_enabled"] = bool(relay_status.get("auto_relay_enabled", False))
+            return self._wrap_response(project_uuid, res)
+        except Exception as e:
+            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+
+    def send_pane_message(
+        self,
+        project_uuid: str,
+        target_node_uuid: Optional[str] = None,
+        target_pane_id: Optional[str] = None,
+        message: str = "",
+        card_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        node_uuid: Optional[str] = None,
+        session_token: Optional[str] = None,
+    ) -> str:
+        """Envía un mensaje directo a otro panel o nodo del enjambre validando identidad (EGM-22)."""
+        resolved_node, err_code = self._resolve_authenticated_node_uuid(
+            node_uuid,
+            session_token=session_token,
+        )
+        if err_code is not None:
+            return self._auth_error_response(err_code)
+
+        if not isinstance(message, str) or not message.strip():
+            return self._wrap_response(
+                project_uuid,
+                {
+                    "success": False,
+                    "code": "EMPTY_MESSAGE",
+                    "error": "El mensaje directo no puede estar vacío.",
+                },
+            )
+
+        has_target_node = isinstance(target_node_uuid, str) and bool(target_node_uuid.strip())
+        has_target_pane = target_pane_id is not None and bool(str(target_pane_id).strip())
+        if not has_target_node and not has_target_pane:
+            return self._wrap_response(
+                project_uuid,
+                {
+                    "success": False,
+                    "code": "MISSING_TARGET",
+                    "error": "Debe especificar target_node_uuid o target_pane_id.",
+                },
+            )
+
+        try:
+            res = self._get_relay_orchestrator().send_direct_message(
+                project_uuid=project_uuid,
+                sender_node_uuid=(resolved_node or self.kernel.node_uuid),
+                target_node_uuid=target_node_uuid,
+                target_pane_id=target_pane_id,
+                message=message,
+                card_id=card_id,
+                session_id=session_id,
+            )
             return self._wrap_response(project_uuid, res)
         except Exception as e:
             return self._wrap_response(project_uuid, {"success": False, "error": str(e)})

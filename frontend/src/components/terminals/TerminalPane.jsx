@@ -11,6 +11,79 @@ const TERMINAL_BORDER = '#1e1f24';
 /** Debounce del redimensionado: el ResizeObserver dispara muchas veces mientras se arrastra. */
 export const RESIZE_DEBOUNCE_MS = 100;
 
+const MCP_BADGE_MAP = {
+  injected: {
+    label: 'MCP Hub',
+    color: '#34d399',
+    bg: 'rgba(16, 185, 129, 0.14)',
+    border: 'rgba(16, 185, 129, 0.35)'
+  },
+  unsupported: {
+    label: 'MCP manual',
+    color: '#fbbf24',
+    bg: 'rgba(245, 158, 11, 0.14)',
+    border: 'rgba(245, 158, 11, 0.35)'
+  },
+  skipped: {
+    label: 'Sin MCP',
+    color: '#9ca3af',
+    bg: 'rgba(156, 163, 175, 0.12)',
+    border: 'rgba(156, 163, 175, 0.28)'
+  }
+};
+
+const ACTIVITY_BADGE_MAP = {
+  idle: {
+    label: 'Libre',
+    color: '#34d399',
+    bg: 'rgba(16, 185, 129, 0.12)',
+    border: 'rgba(16, 185, 129, 0.3)'
+  },
+  working: {
+    label: 'Trabajando',
+    color: '#60a5fa',
+    bg: 'rgba(59, 130, 246, 0.14)',
+    border: 'rgba(59, 130, 246, 0.35)'
+  },
+  blocked: {
+    label: 'Permiso/Bloq',
+    color: '#f87171',
+    bg: 'rgba(239, 68, 68, 0.14)',
+    border: 'rgba(239, 68, 68, 0.35)'
+  },
+  done: {
+    label: 'Listo',
+    color: '#a78bfa',
+    bg: 'rgba(139, 92, 246, 0.14)',
+    border: 'rgba(139, 92, 246, 0.35)'
+  },
+  paused: {
+    label: 'Pausado',
+    color: '#fbbf24',
+    bg: 'rgba(245, 158, 11, 0.14)',
+    border: 'rgba(245, 158, 11, 0.35)'
+  }
+};
+
+function resolveMcpBadge(mcpInjection) {
+  if (!mcpInjection) return null;
+  const status = typeof mcpInjection === 'string' ? mcpInjection : mcpInjection.status;
+  const spec = MCP_BADGE_MAP[status];
+  if (!spec) return null;
+  const details = [];
+  if (typeof mcpInjection === 'object') {
+    if (typeof mcpInjection.verified === 'boolean') {
+      details.push(`verified=${mcpInjection.verified ? 'true' : 'false'}`);
+    }
+    if (mcpInjection.reason) details.push(String(mcpInjection.reason));
+  }
+  return {
+    ...spec,
+    status,
+    title: details.length ? `${spec.label} (${details.join(', ')})` : spec.label
+  };
+}
+
 async function copyToClipboard(text) {
   try {
     if (navigator?.clipboard?.writeText) {
@@ -209,6 +282,8 @@ export function TerminalPane({
   }, [focusToken]);
 
   const logoName = cli?.display_name || pane.cliProfile;
+  const mcpBadge = resolveMcpBadge(pane.mcpInjection);
+  const activityBadge = pane.activityState ? ACTIVITY_BADGE_MAP[pane.activityState] || null : null;
 
   return (
     <section
@@ -263,6 +338,60 @@ export function TerminalPane({
             }}
           >
             {pane.cwd}
+          </span>
+        )}
+        {(mcpBadge || activityBadge) && (
+          <span
+            style={{
+              marginLeft: 'auto',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '5px',
+              flexShrink: 0
+            }}
+          >
+            {mcpBadge && (
+              <span
+                data-testid={`pane-mcp-badge-${paneId}`}
+                data-mcp-status={mcpBadge.status}
+                title={mcpBadge.title}
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '9.5px',
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  color: mcpBadge.color,
+                  backgroundColor: mcpBadge.bg,
+                  border: `1px solid ${mcpBadge.border}`,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {mcpBadge.label}
+              </span>
+            )}
+            {activityBadge && (
+              <span
+                data-testid={`pane-activity-badge-${paneId}`}
+                data-activity-state={pane.activityState}
+                title={pane.activitySource ? `Actividad (${pane.activitySource})` : 'Actividad'}
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '9.5px',
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  padding: '1px 5px',
+                  borderRadius: '4px',
+                  color: activityBadge.color,
+                  backgroundColor: activityBadge.bg,
+                  border: `1px solid ${activityBadge.border}`,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {activityBadge.label}
+              </span>
+            )}
           </span>
         )}
       </div>

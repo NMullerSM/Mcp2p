@@ -840,3 +840,118 @@ describe('SwarmTerminalMatrix en el espacio de trabajo', () => {
     expect(api.pty_get_matrix_status).not.toHaveBeenCalled();
   });
 });
+
+describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87', () => {
+  it('renderiza badges mcpInjection (EGM-86) y activityState (idle / working) en TerminalPane', async () => {
+    const api = makeMatrixApi({
+      pty_get_matrix_status: vi.fn(async () => ({
+        success: true,
+        degraded: false,
+        hub_url: 'http://127.0.0.1:8765/mcp',
+        hub_running: true,
+        auto_relay_enabled: false,
+        relay_status: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 },
+        panes: [
+          { pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'claude', role: 'implementer', pid: 101 },
+          { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'gemini', role: 'reviewer', pid: 102 }
+        ],
+        sessions: [
+          {
+            pane_id: 'pane_1',
+            session_id: 's1',
+            alive: true,
+            paused: false,
+            cli_profile: 'claude',
+            role: 'implementer',
+            cwd: '/tmp/p1',
+            mcp_injection: { status: 'injected', verified: true, reason: 'config ok' },
+            activity_state: 'idle',
+            activity_source: 'osc_7501',
+            idle: true
+          },
+          {
+            pane_id: 'pane_2',
+            session_id: 's2',
+            alive: true,
+            paused: false,
+            cli_profile: 'gemini',
+            role: 'reviewer',
+            cwd: '/tmp/p2',
+            mcp_injection: { status: 'unsupported', verified: false, reason: 'manual' },
+            activity_state: 'working',
+            activity_source: 'osc_7501',
+            idle: false
+          }
+        ]
+      }))
+    });
+
+    renderMatrix(api);
+
+    const mcp1 = await screen.findByTestId('pane-mcp-badge-pane_1');
+    expect(mcp1.textContent).toBe('MCP Hub');
+    expect(mcp1.getAttribute('title')).toContain('verified=true');
+    expect(screen.getByTestId('pane-activity-badge-pane_1').textContent).toBe('Libre');
+
+    const mcp2 = screen.getByTestId('pane-mcp-badge-pane_2');
+    expect(mcp2.textContent).toBe('MCP manual');
+    expect(screen.getByTestId('pane-activity-badge-pane_2').textContent).toBe('Trabajando');
+  });
+
+  it('el toggle Auto-Relay invoca pty_set_auto_relay(true) y muestra nota Gate 0c si la clave no esta cifrada', async () => {
+    const pty_set_auto_relay = vi.fn(async (enabled) => ({
+      success: true,
+      auto_relay_enabled: Boolean(enabled),
+      key_encrypted: false,
+      deferred_count: 0,
+      tripped_cases: [],
+      warning: 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.'
+    }));
+    const api = makeMatrixApi({ pty_set_auto_relay });
+    renderMatrix(api);
+
+    const toggle = await screen.findByTestId('auto-relay-toggle');
+    expect(toggle.textContent).toContain('OFF');
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(toggle.textContent).toContain('ON'));
+    expect(screen.getByTestId('auto-relay-gate0c-note').textContent).toContain('Gate 0c');
+  });
+
+  it('muestra banner y boton reset-loop-breaker-btn (EGM-87) cuando relay_status.tripped_cases no esta vacio', async () => {
+    let tripped = ['card:card_99'];
+    const reset_loop_breaker = vi.fn(async () => {
+      tripped = [];
+      return { success: true, code: 'OK' };
+    });
+    const api = makeMatrixApi({
+      reset_loop_breaker,
+      pty_get_matrix_status: vi.fn(async () => ({
+        success: true,
+        degraded: false,
+        hub_url: 'http://127.0.0.1:8765/mcp',
+        hub_running: true,
+        auto_relay_enabled: true,
+        relay_status: {
+          auto_relay_enabled: true,
+          tripped_cases: tripped,
+          deferred_count: 0
+        },
+        panes: [],
+        sessions: []
+      }))
+    });
+
+    renderMatrix(api);
+
+    const banner = await screen.findByTestId('loop-breaker-banner');
+    expect(banner.textContent).toContain('card:card_99');
+
+    const resetBtn = screen.getByTestId('reset-loop-breaker-btn');
+    fireEvent.click(resetBtn);
+
+    await waitFor(() => expect(reset_loop_breaker).toHaveBeenCalledWith(PROJECT.project_uuid, 'card_99', ''));
+    await waitFor(() => expect(screen.queryByTestId('loop-breaker-banner')).toBeNull());
+  });
+});

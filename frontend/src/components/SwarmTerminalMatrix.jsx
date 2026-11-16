@@ -46,8 +46,50 @@ function createInitialPaneState(paneId) {
     nodeUuid: '',
     sessionId: '',
     registryStatus: '',
-    exitCode: null
+    exitCode: null,
+    mcpInjection: null,
+    activityState: null,
+    activitySource: ''
   };
+}
+
+function parseTrippedCase(rawCase, fallbackProjectUuid = '') {
+  if (rawCase && typeof rawCase === 'object') {
+    return {
+      label: rawCase.card_id || rawCase.session_id || rawCase.case_id || JSON.stringify(rawCase),
+      projectUuid: rawCase.project_uuid || fallbackProjectUuid || '',
+      cardId: rawCase.card_id || '',
+      sessionId: rawCase.session_id || ''
+    };
+  }
+  const text = String(rawCase || '').trim();
+  if (!text) {
+    return { label: '', projectUuid: fallbackProjectUuid || '', cardId: '', sessionId: '' };
+  }
+  if (text.startsWith('card:')) {
+    return { label: text, projectUuid: fallbackProjectUuid || '', cardId: text.slice(5), sessionId: '' };
+  }
+  if (text.startsWith('session:')) {
+    return { label: text, projectUuid: fallbackProjectUuid || '', cardId: '', sessionId: text.slice(8) };
+  }
+  const parts = text.split(':');
+  if (parts.length >= 3) {
+    return {
+      label: text,
+      projectUuid: parts[0] || fallbackProjectUuid || '',
+      cardId: parts[1] || '',
+      sessionId: parts[2] || ''
+    };
+  }
+  if (parts.length === 2) {
+    return {
+      label: text,
+      projectUuid: parts[0] || fallbackProjectUuid || '',
+      cardId: parts[1] || '',
+      sessionId: ''
+    };
+  }
+  return { label: text, projectUuid: fallbackProjectUuid || '', cardId: text, sessionId: '' };
 }
 
 function createInitialPanesMap() {
@@ -203,7 +245,11 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     hubRunning: false,
     manualCommand: null,
     mcpConfig: null,
-    loading: false
+    loading: false,
+    autoRelayEnabled: false,
+    autoRelayBusy: false,
+    autoRelayWarning: '',
+    relayStatus: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 }
   });
   const [catalog, setCatalog] = useState(INITIAL_CATALOG);
   const [notice, setNotice] = useState(null);
@@ -284,15 +330,30 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       const res = await api.pty_get_matrix_status();
       if (!mountedRef.current || !res) return;
 
-      setMatrixStatus({
+      const relayStatus = res.relay_status || {
+        auto_relay_enabled: Boolean(res.auto_relay_enabled),
+        tripped_cases: [],
+        deferred_count: 0
+      };
+      const autoRelayEnabled = Boolean(
+        res.auto_relay_enabled !== undefined ? res.auto_relay_enabled : relayStatus.auto_relay_enabled
+      );
+      setMatrixStatus((prev) => ({
+        ...prev,
         degraded: Boolean(res.degraded),
         platformUnsupported: Boolean(res.platform_unsupported) || res.code === 'TERMINAL_PLATFORM_UNSUPPORTED',
         hubUrl: res.hub_url || null,
         hubRunning: Boolean(res.hub_running),
         manualCommand: res.manual_command || null,
         mcpConfig: res.mcp_config || null,
-        loading: false
-      });
+        loading: false,
+        autoRelayEnabled,
+        autoRelayWarning:
+          autoRelayEnabled && relayStatus.key_encrypted === false
+            ? prev.autoRelayWarning || 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.'
+            : '',
+        relayStatus
+      }));
 
       const sessionMap = {};
       (res.sessions || []).forEach((s) => {
@@ -327,7 +388,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               rssMb: typeof s.rss_mb === 'number' ? s.rss_mb : base.rssMb,
               nodeUuid: s.node_uuid || r?.node_uuid || base.nodeUuid,
               sessionId: s.session_id || base.sessionId,
-              registryStatus: r?.status || base.registryStatus
+              registryStatus: r?.status || base.registryStatus,
+              mcpInjection: s.mcp_injection ?? r?.mcp_injection ?? base.mcpInjection ?? null,
+              activityState: s.activity_state ?? r?.activity_state ?? base.activityState ?? null,
+              activitySource: s.activity_source ?? r?.activity_source ?? base.activitySource ?? ''
             };
           } else if (cur.open && cur.alive) {
             next[paneId] = { ...cur, alive: false, paused: false, rssMb: 0 };
@@ -336,7 +400,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               ...cur,
               nodeUuid: r.node_uuid || cur.nodeUuid,
               pid: r.pid ?? cur.pid,
-              registryStatus: r.status || cur.registryStatus
+              registryStatus: r.status || cur.registryStatus,
+              mcpInjection: r.mcp_injection ?? cur.mcpInjection ?? null,
+              activityState: r.activity_state ?? cur.activityState ?? null,
+              activitySource: r.activity_source ?? cur.activitySource ?? ''
             };
           }
         });
@@ -429,17 +496,35 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
 
     const paused = Boolean(res.paused);
     const rssMb = stillAlive ? (typeof res.rss_mb === 'number' ? res.rss_mb : before.rssMb) : 0;
+    const activityState = res.activity_state !== undefined ? res.activity_state : before.activityState;
+    const activitySource = res.activity_source !== undefined ? res.activity_source : before.activitySource;
+    const mcpInjection = res.mcp_injection !== undefined ? res.mcp_injection : before.mcpInjection;
     // Solo se re-renderiza si cambia algo visible (un sondeo cada 30 ms no debe repintar el panel).
     const changed = before.alive !== stillAlive
       || before.paused !== paused
       || before.exitCode !== exitCode
+      || before.activityState !== activityState
+      || before.activitySource !== activitySource
+      || before.mcpInjection !== mcpInjection
       || Math.abs((before.rssMb || 0) - rssMb) >= 0.5
       || (rssMb === 0 && before.rssMb !== 0);
     if (changed) {
       setPanes((prev) => {
         const cur = prev[paneId];
         if (!cur || !cur.open) return prev;
-        return { ...prev, [paneId]: { ...cur, alive: stillAlive, paused, rssMb, exitCode } };
+        return {
+          ...prev,
+          [paneId]: {
+            ...cur,
+            alive: stillAlive,
+            paused,
+            rssMb,
+            exitCode,
+            activityState,
+            activitySource,
+            mcpInjection
+          }
+        };
       });
     }
 
@@ -615,7 +700,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         rssMb: typeof sess.rss_mb === 'number' ? sess.rss_mb : 0,
         nodeUuid: res.node_uuid || paneMeta.node_uuid || sess.node_uuid || '',
         sessionId: sess.session_id || '',
-        registryStatus: paneMeta.status || ''
+        registryStatus: paneMeta.status || '',
+        mcpInjection: res.mcp_injection ?? sess.mcp_injection ?? paneMeta.mcp_injection ?? null,
+        activityState: sess.activity_state ?? paneMeta.activity_state ?? null,
+        activitySource: sess.activity_source ?? paneMeta.activity_source ?? ''
       });
       setNotice(null);
       requestTerminalFocus(openedId);
@@ -848,6 +936,71 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     }
   }, [handlePrepareInstall]);
 
+  const handleToggleAutoRelay = useCallback(async () => {
+    if (!api?.pty_set_auto_relay || matrixStatus.autoRelayBusy) return;
+    const nextEnabled = !matrixStatus.autoRelayEnabled;
+    setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: true }));
+    try {
+      const res = await api.pty_set_auto_relay(nextEnabled);
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        showNotice(res);
+        setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: false }));
+        return;
+      }
+      const enabledVal = typeof res?.auto_relay_enabled === 'boolean' ? res.auto_relay_enabled : nextEnabled;
+      const keyEncrypted = res?.key_encrypted;
+      const gate0cNote = enabledVal && keyEncrypted === false
+        ? (res?.warning || 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.')
+        : '';
+      setMatrixStatus((prev) => ({
+        ...prev,
+        autoRelayEnabled: enabledVal,
+        autoRelayBusy: false,
+        autoRelayWarning: gate0cNote,
+        relayStatus: {
+          ...prev.relayStatus,
+          ...(res || {}),
+          auto_relay_enabled: enabledVal
+        }
+      }));
+    } catch (err) {
+      if (mountedRef.current) {
+        setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: false }));
+        showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
+      }
+    }
+  }, [api, matrixStatus.autoRelayBusy, matrixStatus.autoRelayEnabled, showNotice]);
+
+  const trippedCases = useMemo(() => {
+    const raw = matrixStatus.relayStatus?.tripped_cases;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item) => parseTrippedCase(item, project?.project_uuid || '')).filter((c) => c.label);
+  }, [matrixStatus.relayStatus?.tripped_cases, project?.project_uuid]);
+
+  const [resettingBreaker, setResettingBreaker] = useState(false);
+
+  const handleResetLoopBreaker = useCallback(async () => {
+    if (!api?.reset_loop_breaker || resettingBreaker || trippedCases.length === 0) return;
+    setResettingBreaker(true);
+    try {
+      const first = trippedCases[0];
+      const res = await api.reset_loop_breaker(first.projectUuid, first.cardId, first.sessionId);
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        showNotice(res);
+      } else {
+        await refreshMatrixStatus();
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
+      }
+    } finally {
+      if (mountedRef.current) setResettingBreaker(false);
+    }
+  }, [api, resettingBreaker, trippedCases, showNotice, refreshMatrixStatus]);
+
 
   // ---- Derivados para pintar ----------------------------------------------------------
 
@@ -952,6 +1105,99 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           pathEditRequest={pathEditRequest}
         />
       </ViewSliderContent>
+      )}
+
+      {/* Barra superior discreta de Auto-Relay y aviso de Loop Breaker (EGM-87) */}
+      <div
+        data-testid="matrix-controls-bar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '8px',
+          padding: '0 2px 8px',
+          flexShrink: 0
+        }}
+      >
+        <button
+          type="button"
+          data-testid="auto-relay-toggle"
+          aria-pressed={matrixStatus.autoRelayEnabled ? 'true' : 'false'}
+          disabled={!api?.pty_set_auto_relay || matrixStatus.autoRelayBusy}
+          onClick={() => void handleToggleAutoRelay()}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 10px',
+            fontSize: '11.5px',
+            fontWeight: 600,
+            borderRadius: 'var(--radius-md)',
+            border: `1px solid ${matrixStatus.autoRelayEnabled ? 'rgba(16, 185, 129, 0.45)' : 'var(--border-subtle)'}`,
+            backgroundColor: matrixStatus.autoRelayEnabled ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-surface)',
+            color: matrixStatus.autoRelayEnabled ? '#34d399' : 'var(--text-secondary)',
+            cursor: !api?.pty_set_auto_relay || matrixStatus.autoRelayBusy ? 'not-allowed' : 'pointer'
+          }}
+        >
+          <span>Auto-Relay: {matrixStatus.autoRelayEnabled ? 'ON' : 'OFF'}</span>
+        </button>
+
+        {matrixStatus.autoRelayWarning && (
+          <span
+            data-testid="auto-relay-gate0c-note"
+            style={{
+              fontSize: '11px',
+              color: 'var(--accent-warning)',
+              lineHeight: 1.3
+            }}
+          >
+            {matrixStatus.autoRelayWarning}
+          </span>
+        )}
+      </div>
+
+      {trippedCases.length > 0 && (
+        <div
+          role="alert"
+          data-testid="loop-breaker-banner"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px',
+            marginBottom: '8px',
+            padding: '7px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(239, 68, 68, 0.45)',
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            color: 'var(--text-primary)',
+            fontSize: '11.5px',
+            flexShrink: 0
+          }}
+        >
+          <span>
+            Loop Breaker activado en: <strong>{trippedCases.map((c) => c.label).join(', ')}</strong>
+          </span>
+          <button
+            type="button"
+            data-testid="reset-loop-breaker-btn"
+            disabled={resettingBreaker || !api?.reset_loop_breaker}
+            onClick={() => void handleResetLoopBreaker()}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11.5px',
+              fontWeight: 700,
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid rgba(239, 68, 68, 0.5)',
+              backgroundColor: 'rgba(239, 68, 68, 0.18)',
+              color: '#fca5a5',
+              cursor: resettingBreaker ? 'wait' : 'pointer'
+            }}
+          >
+            Reiniciar Loop Breaker
+          </button>
+        </div>
       )}
 
       <div
