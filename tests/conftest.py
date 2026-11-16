@@ -40,6 +40,24 @@ def pytest_sessionfinish(session, exitstatus):
         shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _hermetic_home(tmp_path_factory):
+    """La suite nunca debe leer ni escribir el HOME real del desarrollador.
+
+    `NodeCryptoManager()` resuelve `~/.mcp2p/node_identity.key` con `Path.home()`: si el dueño cifra su
+    clave real (Gate 0c) o ya hay una, 18 pruebas de firma fallaban con KEY_LOCKED. Un HOME temporal
+    de sesion aisla tambien `~/.gemini`, `~/.local/bin` y demas rutas de usuario.
+    """
+    home = tmp_path_factory.mktemp("home")
+    mp = pytest.MonkeyPatch()
+    mp.setenv("HOME", str(home))
+    mp.setenv("USERPROFILE", str(home))
+    try:
+        yield home
+    finally:
+        mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def _auto_confirm_native_dialogs(monkeypatch):
     """Sin ventana no hay dialogo nativo (EGM-74): las pruebas que no lo ejercitan lo dan por aceptado.

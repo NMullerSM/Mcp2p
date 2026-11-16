@@ -18,6 +18,8 @@ dependencies = [
     "mcp>=2.3,<3",
     # Importado directamente por src/mcp/server.py para el bind explícito de streamable-http.
     "uvicorn>=0.31.1",
+    # Importado directamente por src/mcp/stdio_proxy.py (cliente HTTP del proxy stdio -> Hub); mcp 2.x ya lo exige.
+    "httpx2>=2.10.0",
     "msgpack>=1.0.8",
     "cbor2>=5.6.0",
     "cryptography>=42.0.0",
