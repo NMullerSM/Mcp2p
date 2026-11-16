@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger("mcp2p.core.services.swarm_relay")
 
 _MAX_DEDUP_IDS_PER_NODE = 4096
+# Tope de cada cola pull (incluida la comodin `*`): al llenarse se descarta el elemento MAS ANTIGUO (EGM-72).
+MAX_QUEUE_DEPTH = 1024
+# Tope de colas distintas: el destino puede venir de un payload, no debe poder crear colas sin limite.
+MAX_TARGET_QUEUES = 256
 _IGNORED_INFORMATIVE_SIGNALS = frozenset({"HEARTBEAT", "PING", "PONG", "LEASE_CLAIMED"})
 _EXPLICIT_TARGET_KEYS = (
     "target_node_uuid",
@@ -64,6 +68,9 @@ class SwarmRelayOrchestrator:
         self._dedup_seen: Dict[str, Set[str]] = {}
         self._relay_rounds: Dict[Tuple[str, str], int] = defaultdict(int)
         self._loop_breaker_states: Dict[str, str] = {}
+        # Turnos del relevo en cola por (proyecto:tarjeta|sesion, par de nodos): {key: ultimo remitente}.
+        self._relay_last_sender: Dict[str, str] = {}
+        self._dropped_oldest_total = 0
         self._deferred_dispatches: Deque[Dict[str, Any]] = deque(maxlen=512)
 
         if self._event_bus is not None:
@@ -114,6 +121,25 @@ class SwarmRelayOrchestrator:
                 if isinstance(val, str) and val.strip():
                     return val.strip()
         return None
+
+    def _queue_for_locked(self, target: str) -> Optional[Deque[Dict[str, Any]]]:
+        """Cola del destino acotada en numero (`MAX_TARGET_QUEUES`); None si no cabe otra distinta."""
+        queue = self._queues.get(target)
+        if queue is not None:
+            return queue
+        if len(self._queues) >= MAX_TARGET_QUEUES:
+            for key in [k for k, q in self._queues.items() if not q and k != "*"]:
+                del self._queues[key]
+            if len(self._queues) >= MAX_TARGET_QUEUES:
+                return None
+        return self._queues[target]
+
+    @classmethod
+    def _extract_sender_node(cls, assignment: Dict[str, Any]) -> str:
+        """Remitente del evento (autenticado en el Hub); vacio si el evento no lo declara."""
+        return cls._extract_nested_str(
+            assignment, "sender_node_uuid", "actor_node_uuid", "from_node_uuid", "node_uuid", "claimed_by_node_uuid"
+        )
 
     @staticmethod
     def _extract_nested_str(assignment: Dict[str, Any], *keys: str) -> str:
@@ -257,13 +283,13 @@ class SwarmRelayOrchestrator:
             item.setdefault("project_uuid", project_uuid)
         card_id = self._extract_nested_str(item, "card_id")
         session_id = self._extract_nested_str(item, "session_id", "dispute_id")
-        assignment_key = self._extract_nested_str(item, "assignment_key")
         dedup_id = self._extract_nested_str(item, "dedup_key", "event_id", "message_uuid", "assignment_id")
-        loop_key = self._make_loop_key(
-            project_uuid=project_uuid,
-            card_id=card_id,
-            session_id=session_id,
-            assignment_key=assignment_key,
+        # EGM-72: el `assignment_key` que trae el payload lo controla el agente (rotarlo evadia el freno):
+        # la clave de ronda sale SOLO de la tarjeta/sesion y del par de nodos, derivados en el servidor.
+        sender = self._extract_sender_node(item)
+        base_key = self._make_loop_key(project_uuid=project_uuid, card_id=card_id, session_id=session_id)
+        loop_key = (
+            f"{base_key}|{'|'.join(sorted({sender, target}))}" if base_key is not None else None
         )
 
         with self._lock:
@@ -284,9 +310,14 @@ class SwarmRelayOrchestrator:
 
             rounds = 0
             if loop_key is not None:
-                if (
-                    loop_key in self._loop_breaker_states
-                    or self._relay_rounds[("relay", loop_key)] >= self.max_relay_rounds
+                # Una ronda es un CAMBIO DE SENTIDO entre los dos nodos (respuesta -> nuevo despacho); varios
+                # eventos seguidos del mismo remitente (ediciones legitimas) son un solo turno.
+                same_turn = (
+                    ("relay", loop_key) in self._relay_rounds
+                    and self._relay_last_sender.get(loop_key) == sender
+                )
+                if loop_key in self._loop_breaker_states or (
+                    not same_turn and self._relay_rounds[("relay", loop_key)] >= self.max_relay_rounds
                 ):
                     self._loop_breaker_states[loop_key] = "LOOP_BREAKER_TRIPPED"
                     rounds = self._relay_rounds[("relay", loop_key)]
@@ -304,13 +335,33 @@ class SwarmRelayOrchestrator:
                             f"(máximo {self.max_relay_rounds}); requiere intervención humana (HITL)."
                         ),
                     }
-                self._relay_rounds[("relay", loop_key)] += 1
+                if not same_turn:
+                    self._relay_rounds[("relay", loop_key)] += 1
+                    self._relay_last_sender[loop_key] = sender
                 rounds = self._relay_rounds[("relay", loop_key)]
                 item["relay_round"] = rounds
                 item["assignment_key"] = loop_key
 
-            self._queues[target].append(item)
-            queue_depth = len(self._queues[target])
+            queue = self._queue_for_locked(target)
+            if queue is None:
+                return {
+                    "success": False,
+                    "blocked": True,
+                    "code": "QUEUE_TARGET_LIMIT",
+                    "reason": f"Demasiados destinos distintos en cola (maximo {MAX_TARGET_QUEUES}).",
+                }
+            dropped = False
+            if len(queue) >= MAX_QUEUE_DEPTH:
+                queue.popleft()  # descarte documentado del mas antiguo
+                self._dropped_oldest_total += 1
+                dropped = True
+                if self._dropped_oldest_total == 1 or self._dropped_oldest_total % 1000 == 0:
+                    logger.warning(
+                        "Cola de relevo '%s' llena (%d): se descarta lo mas antiguo (%d descartados en total).",
+                        target, MAX_QUEUE_DEPTH, self._dropped_oldest_total,
+                    )
+            queue.append(item)
+            queue_depth = len(queue)
             self._notify_waiters_locked(target)
 
         return {
@@ -321,6 +372,7 @@ class SwarmRelayOrchestrator:
             "queue_depth": queue_depth,
             "rounds": rounds,
             "assignment_key": loop_key,
+            "dropped_oldest": dropped,
         }
 
     def await_next_assignment(
@@ -560,17 +612,32 @@ class SwarmRelayOrchestrator:
         if key is None:
             return {"status": "UNKNOWN", "relay_rounds": 0, "dispatch_rounds": 0}
         with self._lock:
-            relay_r = self._relay_rounds.get(("relay", key), 0)
-            disp_r = self._relay_rounds.get(("dispatch", key), 0)
-            status = self._loop_breaker_states.get(key, "ACTIVE")
+            keys = self._keys_for_locked(key)
+            relay_r = max([self._relay_rounds.get(("relay", k), 0) for k in keys] or [0])
+            disp_r = max([self._relay_rounds.get(("dispatch", k), 0) for k in keys] or [0])
+            tripped = [k for k in keys if self._loop_breaker_states.get(k) == "LOOP_BREAKER_TRIPPED"]
+            status = "LOOP_BREAKER_TRIPPED" if tripped else "ACTIVE"
             return {
                 "assignment_key": key,
                 "status": status,
                 "relay_rounds": relay_r,
                 "dispatch_rounds": disp_r,
-                "requires_hitl": status == "LOOP_BREAKER_TRIPPED",
+                "requires_hitl": bool(tripped),
+                "tripped_keys": tripped,
                 "max_relay_rounds": self.max_relay_rounds,
             }
+
+    def _keys_for_locked(self, base_key: str) -> List[str]:
+        """Claves del par (tarjeta/sesion, nodos): la base y todas las `base|nodoA|nodoB`."""
+        known: Set[str] = set(self._loop_breaker_states)
+        known.update(k for (_, k) in self._relay_rounds)
+        known.update(self._relay_last_sender)
+        return [k for k in known if k == base_key or k.startswith(base_key + "|")]
+
+    def list_tripped_loop_breakers(self) -> List[str]:
+        """Claves con el Loop Breaker disparado (para que la UI ofrezca el reinicio humano)."""
+        with self._lock:
+            return sorted(k for k, v in self._loop_breaker_states.items() if v == "LOOP_BREAKER_TRIPPED")
 
     def reset_loop_breaker(
         self,
@@ -590,9 +657,11 @@ class SwarmRelayOrchestrator:
         if key is None:
             return False
         with self._lock:
-            self._loop_breaker_states.pop(key, None)
-            self._relay_rounds.pop(("relay", key), None)
-            self._relay_rounds.pop(("dispatch", key), None)
+            for k in self._keys_for_locked(key):
+                self._loop_breaker_states.pop(k, None)
+                self._relay_rounds.pop(("relay", k), None)
+                self._relay_rounds.pop(("dispatch", k), None)
+                self._relay_last_sender.pop(k, None)
         return True
 
     def get_deferred_dispatches(self, pane_id: Optional[int | str] = None) -> List[Dict[str, Any]]:

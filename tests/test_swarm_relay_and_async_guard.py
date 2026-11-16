@@ -309,17 +309,19 @@ def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds(tmp_path: Path) ->
         assert state["status"] == "LOOP_BREAKER_TRIPPED"
         assert state["requires_hitl"] is True
 
-        # Relevo en cola también aplica Loop Breaker DoD
+        # Relevo en cola también aplica Loop Breaker DoD: una ronda es un CAMBIO DE SENTIDO entre dos nodos
+        # (EGM-72), no cada evento; aquí agent-x y agent-y se devuelven la sesión sin converger.
         for idx in range(6):
+            sender, target = ("agent-y", "agent-x") if idx % 2 == 0 else ("agent-x", "agent-y")
             enq = orch.enqueue_assignment(
-                "agent-x",
-                {"project_uuid": "proj-lb", "session_id": "RFC-LB", "round": idx + 1},
+                target,
+                {"project_uuid": "proj-lb", "session_id": "RFC-LB", "round": idx + 1, "sender_node_uuid": sender},
             )
             assert enq["success"] is True
 
         enq_blocked = orch.enqueue_assignment(
             "agent-x",
-            {"project_uuid": "proj-lb", "session_id": "RFC-LB", "round": 7},
+            {"project_uuid": "proj-lb", "session_id": "RFC-LB", "round": 7, "sender_node_uuid": "agent-y"},
         )
         assert enq_blocked["success"] is False
         assert enq_blocked["status"] == "LOOP_BREAKER_TRIPPED"
