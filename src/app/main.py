@@ -76,8 +76,28 @@ def _dispatch_pty_exec(argv: List[str]) -> int:
             return 1
 
     _sanitize_pyinstaller_env()
+    _restore_default_signals()
     os.execvp(cmd[0], cmd)
     return 0
+
+
+def _restore_default_signals() -> None:
+    """Disposiciones por defecto antes de `execvp`, como hace un emulador de terminal (EGM-81).
+
+    Un `SIG_IGN` sobrevive a `exec`: sin esto el CLI del panel heredaba `SIGPIPE`/`SIGXFSZ` ignorados
+    (los ignora el propio Python al arrancar) y, si la GUI se lanzo con `SIGINT`/`SIGQUIT` ignorados
+    (p. ej. `./run.sh &` desde un script), Ctrl+C no cortaba nada dentro de la terminal.
+    """
+    import signal
+
+    for name in ("SIGINT", "SIGQUIT", "SIGPIPE", "SIGXFSZ", "SIGTSTP", "SIGTTIN", "SIGTTOU", "SIGHUP", "SIGTERM"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
 
 
 # Despacho temprano antes de importar ApiBridge / PyWebView / aiortc

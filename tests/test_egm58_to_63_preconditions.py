@@ -257,6 +257,8 @@ def test_egm59_dispatch_pty_exec_sanitizes_pyinstaller_env_before_execvp(
         pytest.skip("Prueba POSIX específica")
 
     monkeypatch.setattr(os, "isatty", lambda _fd: False)
+    # En proceso: no tocar las senales de pytest (EGM-81 tiene su propia prueba en subproceso).
+    monkeypatch.setattr(app_main, "_restore_default_signals", lambda: None)
 
     # Caso 1: _PYI_* + LD_LIBRARY_PATH_ORIG no vacía
     monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "/tmp/_MEI111")

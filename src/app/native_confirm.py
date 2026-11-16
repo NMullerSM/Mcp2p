@@ -8,13 +8,14 @@ comprometido teclee en una shell YA abierta (`pty_write_input`) no se puede conf
 de confianza entre "el usuario teclea" y "el JS teclea" en ese canal.
 
 Sin ventana (modo headless o tests) la accion se rechaza con `CONFIRMATION_UNAVAILABLE`, salvo que el
-entorno del proceso fije `MCP2P_TEST_AUTO_CONFIRM=1` (solo para pruebas; el JS no puede cambiar el entorno).
+entorno del proceso fije `MCP2P_TEST_AUTO_CONFIRM=1` DENTRO de pytest (fuera de pytest se ignora, EGM-82).
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Any, Callable, Dict, Optional
@@ -28,6 +29,20 @@ CONFIRMATION_UNAVAILABLE = "CONFIRMATION_UNAVAILABLE"
 _MAX_DECLINES = 3
 _COOLDOWN_S = 60.0
 _MAX_MESSAGE_CHARS = 1500
+
+
+def _test_auto_confirm_enabled() -> bool:
+    """`MCP2P_TEST_AUTO_CONFIRM=1` solo cuenta dentro de pytest (EGM-82).
+
+    Fuera de pytest se ignora: una variable olvidada en el perfil de la shell, heredada de un panel o
+    escrita por un agente en `~/.bashrc` no puede desactivar en silencio la confirmacion nativa de la GUI.
+    """
+    if os.environ.get(TEST_AUTO_CONFIRM_ENV) != "1":
+        return False
+    if "pytest" not in sys.modules:
+        logger.warning("%s=1 ignorada: solo vale dentro de pytest.", TEST_AUTO_CONFIRM_ENV)
+        return False
+    return True
 
 
 class NativeConfirmationService:
@@ -55,7 +70,7 @@ class NativeConfirmationService:
 
     def confirm(self, title: str, message: str) -> Optional[Dict[str, Any]]:
         """`None` si el usuario acepto; si no, la respuesta de error `{success: False, code, message}`."""
-        if os.environ.get(TEST_AUTO_CONFIRM_ENV) == "1":
+        if _test_auto_confirm_enabled():
             logger.warning("Confirmacion nativa omitida por %s (solo pruebas): %s", TEST_AUTO_CONFIRM_ENV, title)
             return None
         dialog = self.dialog or self._default_dialog()
