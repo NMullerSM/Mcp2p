@@ -10,6 +10,23 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 
 ## [Sin publicar]
 
+### Añadido
+- Antigravity (`agy`): MCP2P ya no toca su archivo de configuración global sin permiso. Antes de registrarse muestra
+  un diálogo del sistema con el archivo y la entrada exactos, recuerda tu respuesta y puedes quitar el registro cuando
+  quieras. Si dices que no, el panel se abre igual y ofrece el botón «Registrar MCP2P en Antigravity».
+- La opción `--hub-proxy-only` conecta un CLI externo al Hub de MCP2P sin abrir tu base de datos; también funciona con
+  la aplicación empaquetada (`mcp2p --mcp-server --hub-proxy-only`). Abierto fuera de un panel, avisa de que hay que
+  abrir el CLI desde MCP2P en lugar de usar datos que no son del panel.
+
+### Mejorado
+- La conexión de los CLI externos con el Hub aguanta esperas largas del agente (hasta unos 5 minutos), se reconecta
+  sola si el Hub se reinicia en la misma dirección y avisa al instante cuando MCP2P está cerrado, en lugar de quedarse
+  colgada.
+- El registro de MCP2P en Antigravity se escribe sin riesgo de dejar el archivo a medias, guarda una copia del original
+  la primera vez, no sigue enlaces simbólicos y respeta una entrada `mcp2p` que hayas puesto a mano.
+- En la aplicación empaquetada, un CLI cuya integración MCP aún no está comprobada ya no se anuncia como «MCP Hub»:
+  la etiqueta del panel dice «MCP sin verificar».
+
 ## [2.0.1] - 2026-11-17 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1)
 
 ### Añadido
