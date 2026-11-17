@@ -27,7 +27,8 @@ hiddenimports = [
     'src.runtime.terminal_platform', 'src.core.services.project_portability_service',
     # Ola 3: identidad de proceso, sobre firmado y bandeja persistente del relevo.
     'src.adapters.identity', 'src.adapters.identity.peer_process', 'src.adapters.identity.envelope_crypto',
-    'src.adapters.identity.ed25519_identity', 'src.mcp.peer_binding',
+    'src.adapters.identity.ed25519_identity', 'src.mcp.peer_binding', 'src.adapters.persistence.relay_sqlite',
+    'src.storage.relay_schema', 'src.core.services.message_relay_service', 'src.app.ui_adapters.relay_ui',
     # `keyring` se importa de forma perezosa: se declara para que el hook de PyInstaller copie sus metadatos (los
     # backends se descubren por entry points) y se anaden los backends que trae keyring 25 (keyring/backends/).
     'keyring', 'keyring.backends', 'keyring.backends.chainer', 'keyring.backends.fail', 'keyring.backends.null',

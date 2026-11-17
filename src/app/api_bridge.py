@@ -24,6 +24,7 @@ from src.app.ui_adapters import (
     ExtensionsLabUIAdapter,
     GitBranchesUIAdapter,
     KanbanOkfUIAdapter,
+    RelayUIAdapter,
     SystemProjectsUIAdapter,
     TribunalHitlUIAdapter,
 )
@@ -128,6 +129,7 @@ class ApiBridge:
         self.tribunal_ui = TribunalHitlUIAdapter(self)
         self.collab_ui = CollabMeshUIAdapter(self)
         self.extensions_ui = ExtensionsLabUIAdapter(self)
+        self.relay_ui = RelayUIAdapter(self)  # Ola 3: bandeja del humano, auditoria y parada del relevo
 
         self.transport.on_message(self._handle_transport_message)
         self._ensure_local_node()
@@ -743,6 +745,25 @@ class ApiBridge:
 
     def pty_set_auto_relay(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
         return self.extensions_ui.pty_set_auto_relay(pane_id=pane_id, enabled=enabled)
+
+    # Ola 3: relevo persistente (bandeja del humano, auditoria, parada). Solo backend; la UI llega despues.
+    def relay_list_human_inbox(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        return self.relay_ui.relay_list_human_inbox(project_uuid=project_uuid)
+
+    def relay_resolve_parked(self, msg_id: Any, decision: Any) -> Dict[str, Any]:
+        return self.relay_ui.relay_resolve_parked(msg_id=msg_id, decision=decision)
+
+    def relay_audit_status(self) -> Dict[str, Any]:
+        return self.relay_ui.relay_audit_status()
+
+    def relay_global_pause(self, enabled: Any) -> Dict[str, Any]:
+        return self.relay_ui.relay_global_pause(enabled=enabled)
+
+    def relay_pause_state(self) -> Dict[str, Any]:
+        return self.relay_ui.relay_pause_state()
+
+    def relay_resume_pane(self, node_uuid: Any) -> Dict[str, Any]:
+        return self.relay_ui.relay_resume_pane(node_uuid=node_uuid)
 
     def pty_register_agy_mcp(self) -> Dict[str, Any]:
         return self.extensions_ui.pty_register_agy_mcp()

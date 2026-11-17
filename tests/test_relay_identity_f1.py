@@ -561,3 +561,136 @@ def test_pty_write_spy_is_not_blind(_no_system_pty_writes) -> None:
         pass
     assert _no_system_pty_writes and _no_system_pty_writes[0][0] == "PosixPtyHostConnector"
     _no_system_pty_writes.clear()
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Puente de la GUI (backend de F1.6): bandeja del humano, liberar/descartar con dialogo nativo, auditoria, parada,
+# vinculo del proceso raiz al abrir un panel y turno humano al pulsar Enter
+# ----------------------------------------------------------------------------------------------------------------
+
+
+class _GuiTerminal:
+    """Terminal falso de la GUI: el pid de cada panel es el de este proceso (proceso real y vivo)."""
+
+    max_panes = 6
+
+    def __init__(self) -> None:
+        import os
+
+        self.pid = os.getpid()
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.human_writes: list = []
+
+    def is_available(self) -> bool:
+        return True
+
+    def get_status(self) -> Dict[str, Any]:
+        return {"available": True, "degraded": False, "mode": "fake"}
+
+    def list_sessions(self) -> list:
+        return list(self.sessions.values())
+
+    def spawn_session(self, **kwargs: Any) -> Dict[str, Any]:
+        sess = {"pane_id": kwargs["pane_id"], "alive": True, "session_id": f"s-{kwargs['pane_id']}", "pid": self.pid}
+        self.sessions[kwargs["pane_id"]] = sess
+        return {"success": True, **sess}
+
+    def send_input(self, pane_id: Any, data: Any) -> Dict[str, Any]:
+        self.human_writes.append((pane_id, data))  # solo llega aqui lo que teclea el humano (is_human=True)
+        return {"success": True}
+
+    def close_session(self, pane_id: Any) -> Dict[str, Any]:
+        self.sessions.pop(str(pane_id), None)
+        return {"success": True}
+
+    def close(self) -> None:
+        self.sessions.clear()
+
+
+@pytest.fixture
+def gui(tmp_path: Path, monkeypatch):
+    from src.app.api_bridge import ApiBridge
+    import src.app.ui_adapters.extensions_lab_ui as lab_mod
+    from src.storage.db import DatabaseManager
+
+    monkeypatch.setattr(lab_mod, "is_unsupported_terminal_platform", lambda: False)
+    monkeypatch.delenv("MCP2P_TEST_AUTO_CONFIRM", raising=False)
+    bridge = ApiBridge(db_manager=DatabaseManager(db_path=str(tmp_path / "gui.db")))
+    term = _GuiTerminal()
+    bridge.core_kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, term)
+    proj = bridge.db.create_project("GUI", str(tmp_path / "gui_repo"))["project_uuid"]
+    for pane in ("pane_1", "pane_2"):
+        assert bridge.pty_spawn_pane(pane, "custom_shell", start_hub=False, project_uuid=proj)["success"] is True
+    reg = bridge.extensions_ui._get_pane_registry()
+    handler = MCPToolsHandler(kernel=bridge.core_kernel, owns_kernel=False, pane_registry=reg)
+    try:
+        yield bridge, term, reg, handler, proj
+    finally:
+        handler.close()
+        bridge._close_terminal_matrix()
+        bridge.core_kernel.close()
+
+
+def _tok(reg: PaneRegistry, pane: str) -> str:
+    return reg.get_pane(pane).session_token
+
+
+def test_spawn_binds_the_pane_to_its_root_process_and_enter_is_a_human_turn(gui) -> None:
+    bridge, term, reg, handler, _proj = gui
+    rec = reg.get_pane("pane_1")
+    ident = reg.process_resolver.process_identity(term.pid)
+    assert rec.pid == term.pid and rec.pid_create_time == pytest.approx(ident.create_time)
+    bridge.pty_write_input("pane_1", "ls", True)
+    assert rec.last_human_submit_at == 0.0  # sin Enter no hay turno
+    bridge.pty_write_input("pane_1", "\r", True)
+    assert rec.last_human_submit_at > 0.0
+    assert term.human_writes == [("pane_1", "ls"), ("pane_1", "\r")]
+
+
+def test_gui_bridge_human_inbox_release_discard_audit_and_kill_switch(gui) -> None:
+    bridge, _term, reg, handler, proj = gui
+    answers: list = []
+    decision = {"ok": False}
+
+    def _dialog(title: str, message: str) -> bool:
+        answers.append((title, message))
+        return decision["ok"]
+
+    bridge.confirmations.dialog = _dialog
+    t1, t2 = _tok(reg, "pane_1"), _tok(reg, "pane_2")
+    out = json.loads(handler.send_message(session_token=t1, target_pane_id="pane_2", text="borra la rama vieja",
+                                          confirm_with_human=True))
+    inbox = bridge.relay_list_human_inbox(proj)
+    assert inbox["success"] is True and [i["msg_id"] for i in inbox["items"]] == [out["msg_id"]]
+
+    declined = bridge.relay_resolve_parked(out["msg_id"], "release")
+    assert declined["success"] is False and declined["code"] == "CONFIRMATION_DECLINED"
+    assert "borra la rama vieja" in answers[-1][1]  # el humano ve el texto EXACTO en el dialogo nativo
+    assert json.loads(handler.inbox_next(session_token=t2))["messages"] == []
+    decision["ok"] = True
+    assert bridge.relay_resolve_parked(out["msg_id"], "release")["state"] == "queued"
+    (item,) = json.loads(handler.inbox_next(session_token=t2))["messages"]
+    assert item["mcp2p_envelope"]["released_by_human"] is True
+    # la clave humana de la GUI esta disponible (sin cifrar en este HOME de prueba): hay certificado de dispositivo
+    assert item["mcp2p_envelope"]["device_cert"] is True and item["mcp2p_envelope"]["verified"] is True
+    assert bridge.relay_resolve_parked("no-existe", "release")["code"] == "MESSAGE_NOT_FOUND"
+    assert bridge.relay_resolve_parked(out["msg_id"], "borrar")["code"] == "INVALID_ARGUMENT"
+
+    status = bridge.relay_audit_status()
+    assert status["chain"]["ok"] is True and status["events"]["released"] == 1 and status["retention_days"] == 30
+    assert status["device"]["storage"] == "encrypted_file" and status["device"]["has_certificate"] is True
+
+    n_dialogs = len(answers)
+    assert bridge.relay_global_pause(True)["global_paused"] is True and len(answers) == n_dialogs  # bajar: sin dialogo
+    decision["ok"] = False
+    assert bridge.relay_global_pause(False)["code"] == "CONFIRMATION_DECLINED"
+    assert bridge.relay_pause_state()["global_paused"] is True
+    decision["ok"] = True
+    assert bridge.relay_global_pause(False)["global_paused"] is False
+
+    json.loads(handler.relay_pause_self(session_token=t2))
+    node2 = reg.get_pane("pane_2").node_uuid
+    assert bridge.relay_pause_state()["paused_panes"] == [node2]
+    assert bridge.relay_resume_pane(node2)["paused_panes"] == []
+    assert bridge.relay_resume_pane(node2)["code"] == "PANE_NOT_PAUSED"
+    assert bridge.relay_global_pause("si")["code"] == "INVALID_ARGUMENT"

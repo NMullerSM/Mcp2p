@@ -121,6 +121,7 @@ from src.app.ui_adapters.git_branches_ui import GitBranchesUIAdapter
 from src.app.ui_adapters.tribunal_hitl_ui import TribunalHitlUIAdapter
 from src.app.ui_adapters.collab_mesh_ui import CollabMeshUIAdapter
 from src.app.ui_adapters.extensions_lab_ui import ExtensionsLabUIAdapter
+from src.app.ui_adapters.relay_ui import RelayUIAdapter
 
 __all__ = [
     "_BaseUIAdapter",
@@ -130,4 +131,5 @@ __all__ = [
     "TribunalHitlUIAdapter",
     "CollabMeshUIAdapter",
     "ExtensionsLabUIAdapter",
+    "RelayUIAdapter",
 ]
