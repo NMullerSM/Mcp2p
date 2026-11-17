@@ -20,6 +20,7 @@ from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
 from src.core.services.kanban_swarm_adapter import KanbanSwarmAdapter
+from src.core.services.project_scope_guard import PROJECT_SCOPE_FORBIDDEN, ProjectScopeGuard
 from src.core.services.swarm_relay_service import SwarmRelayOrchestrator, clamp_await_timeout_ms
 from src.mcp.pane_registry import (
     PaneRegistry,
@@ -297,16 +298,18 @@ class MCPToolsHandler:
             ensure_ascii=False,
         )
 
-    def _require_hub_session(
+    def _require_hub_pane(
         self,
         node_uuid: Optional[str] = None,
         *,
         session_token: Optional[str] = None,
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Identidad del panel autenticada por el Hub o una respuesta de error ya serializada (fallo cerrado).
+        project_uuid: Optional[str] = None,
+    ) -> tuple[Optional[PaneSessionRecord], Optional[str]]:
+        """Sesion de panel autenticada por el Hub o una respuesta de error ya serializada (fallo cerrado).
 
         Fuera del Hub (sin `PaneRegistry` o sin token de panel) nunca se acepta el `node_uuid` declarado:
-        devuelve `HUB_REQUIRED` (F0.2 del dossier 37, EGM-106).
+        devuelve `HUB_REQUIRED` (F0.2 del dossier 37, EGM-106). Las herramientas del relevo estan en `enforce`
+        desde el primer dia (Ola 2): un `project_uuid` distinto del de la sesion da `PROJECT_SCOPE_FORBIDDEN`.
         """
         rec, err_code = self._resolve_active_pane_session(session_token=session_token)
         if err_code is not None:
@@ -316,6 +319,30 @@ class MCPToolsHandler:
         declared = node_uuid.strip() if isinstance(node_uuid, str) else ""
         if declared and declared != rec.node_uuid:
             return None, self._auth_error_response("NODE_UUID_SPOOFING_FORBIDDEN")
+        requested = project_uuid.strip() if isinstance(project_uuid, str) else ""
+        if requested and requested != rec.project_uuid:
+            return None, json.dumps(
+                {
+                    "success": False,
+                    "code": PROJECT_SCOPE_FORBIDDEN,
+                    "error": "Este panel solo puede ver y escribir a paneles de su propio proyecto.",
+                    "session_project_uuid": rec.project_uuid,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        return rec, None
+
+    def _require_hub_session(
+        self,
+        node_uuid: Optional[str] = None,
+        *,
+        session_token: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """`node_uuid` del panel autenticado por el Hub o una respuesta de error serializada (ver `_require_hub_pane`)."""
+        rec, error_response = self._require_hub_pane(node_uuid, session_token=session_token)
+        if rec is None:
+            return None, error_response
         return rec.node_uuid, None
 
     def _agent(
@@ -1669,37 +1696,42 @@ class MCPToolsHandler:
         procedencia en ``from`` (verificada por el Hub) separada del ``text``, que es un DATO de otro agente y
         no una instruccion del usuario. Sin Hub responde ``HUB_REQUIRED``.
         """
-        resolved_node, error_response = self._require_hub_session(node_uuid, session_token=session_token)
-        if error_response is not None:
-            return error_response
+        rec, error_response = self._require_hub_pane(
+            node_uuid, session_token=session_token, project_uuid=project_uuid
+        )
+        if rec is None:
+            return error_response or self._hub_required_response()
 
-        effective_node = resolved_node
+        scope = rec.project_uuid  # Ola 2: solo asignaciones y mensajes del proyecto del panel
         try:
             relay = self._get_relay_orchestrator()
             applied_timeout_ms = clamp_await_timeout_ms(timeout_ms)  # EGM-76: tope a la espera
             res = relay.await_next_assignment(
-                effective_node,
-                project_uuid=project_uuid,
+                rec.node_uuid,
+                project_uuid=scope,
                 timeout_ms=applied_timeout_ms,
             )
-            res = {**res, "timeout_ms_applied": applied_timeout_ms}
-            return self._wrap_response(project_uuid, res)
+            res = {**res, "timeout_ms_applied": applied_timeout_ms, "project_uuid": scope}
+            return self._wrap_response(scope or None, res)
         except Exception as e:
-            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+            return self._wrap_response(scope or None, {"success": False, "error": str(e)})
 
     def list_swarm_panes(self, project_uuid: Optional[str] = None, session_token: Optional[str] = None) -> str:
-        """Lista los paneles activos del enjambre (sin pid ni telemetria de tecleo) con su actividad informativa,
-        tarjetas Kanban y estado de Auto-Relay. Sin Hub responde ``HUB_REQUIRED``."""
-        _, error_response = self._require_hub_session(None, session_token=session_token)
-        if error_response is not None:
-            return error_response
+        """Lista los paneles activos DEL PROYECTO del panel que llama (sin pid ni telemetria de tecleo) con su
+        actividad informativa, tarjetas Kanban y Auto-Relay de cada panel. `auto_relay_enabled` en la raiz es el
+        del propio panel. Sin Hub responde ``HUB_REQUIRED``; con otro proyecto, ``PROJECT_SCOPE_FORBIDDEN``."""
+        rec, error_response = self._require_hub_pane(
+            None, session_token=session_token, project_uuid=project_uuid
+        )
+        if rec is None:
+            return error_response or self._hub_required_response()
+        scope = rec.project_uuid
         try:
-            res = self._get_kanban_swarm_adapter().list_swarm_panes(project_uuid=project_uuid)
-            relay_status = self._get_relay_orchestrator().get_auto_relay_status()
-            res["auto_relay_enabled"] = bool(relay_status.get("auto_relay_enabled", False))
-            return self._wrap_response(project_uuid, res)
+            res = self._get_kanban_swarm_adapter().list_swarm_panes(project_uuid=scope)
+            res["auto_relay_enabled"] = bool(rec.auto_relay_enabled)
+            return self._wrap_response(scope or None, res)
         except Exception as e:
-            return self._wrap_response(project_uuid, {"success": False, "error": str(e)})
+            return self._wrap_response(scope or None, {"success": False, "error": str(e)})
 
     def send_pane_message(
         self,
@@ -1714,11 +1746,16 @@ class MCPToolsHandler:
     ) -> str:
         """Deja un mensaje directo en la bandeja de otro panel (sin escribir en su terminal), validando identidad.
 
-        El destino lo recoge con `await_next_assignment`; el texto va limitado a 8 KiB y no sale a pares P2P.
+        El destino lo recoge con `await_next_assignment`; el texto va limitado a 8 KiB y no sale a pares P2P. Solo
+        se puede escribir a paneles activos del mismo proyecto que el panel que llama (Ola 2).
         """
-        resolved_node, error_response = self._require_hub_session(node_uuid, session_token=session_token)
-        if error_response is not None:
-            return error_response
+        rec, error_response = self._require_hub_pane(
+            node_uuid, session_token=session_token, project_uuid=project_uuid
+        )
+        if rec is None:
+            return error_response or self._hub_required_response()
+        resolved_node = rec.node_uuid
+        project_uuid = rec.project_uuid
 
         if not isinstance(message, str) or not message.strip():
             return self._wrap_response(

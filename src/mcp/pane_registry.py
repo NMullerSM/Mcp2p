@@ -15,9 +15,10 @@ import threading
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
+from src.core.domain.pane_identity import new_pane_node_uuid, normalize_project_uuid
 from src.mcp.transport_options import resolve_http_bind
 
 logger = logging.getLogger("mcp2p.mcp.pane_registry")
@@ -38,6 +39,11 @@ class PaneSessionRecord:
     created_at: float = 0.0
     last_seen_at: float = 0.0
     last_human_keystroke_at: float = 0.0
+    # Alcance (Ola 2, T2.2): el token de la sesion solo actua sobre este proyecto ('' = panel sin proyecto).
+    project_uuid: str = ""
+    cwd: Optional[str] = None
+    # Auto-Relay POR PANEL (D2): apagado por defecto y persistido por (proyecto, ranura).
+    auto_relay_enabled: bool = False
 
     def to_dict(self, include_token: bool = False) -> Dict[str, Any]:
         """Serializa la ficha del panel sin exponer `session_token` por defecto."""
@@ -52,6 +58,9 @@ class PaneSessionRecord:
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
             "last_human_keystroke_at": self.last_human_keystroke_at,
+            "project_uuid": self.project_uuid,
+            "cwd": self.cwd,
+            "auto_relay_enabled": self.auto_relay_enabled,
         }
         if include_token:
             data["session_token"] = self.session_token
@@ -108,6 +117,7 @@ class PaneRegistry:
         *,
         collab_repo: Optional[Any] = None,
         clock: Optional[Callable[[], float]] = None,
+        identity_repo: Optional[Any] = None,
     ) -> None:
         self._collab_repo = collab_repo
         self._clock: Callable[[], float] = clock or time.time
@@ -115,6 +125,31 @@ class PaneRegistry:
         self._panes: Dict[str, PaneSessionRecord] = {}
         self._tokens: Dict[str, str] = {}
         self._human_keystrokes: Dict[str, float] = {}
+        # Identidad estable por (proyecto, ranura): en BD si hay repositorio (sobrevive al reinicio del Hub) y,
+        # si no, en memoria (estable mientras viva el proceso).
+        self._identity_repo = identity_repo
+        self._memory_identities: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def resolve_pane_identity(
+        self, pane_id: int | str, project_uuid: Optional[str] = "", *, touch: bool = False
+    ) -> Dict[str, Any]:
+        """Identidad estable `{node_uuid, auto_relay_enabled}` de (proyecto, ranura); la crea la primera vez."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        proj = normalize_project_uuid(project_uuid)
+        if self._identity_repo is not None:
+            return dict(self._identity_repo.get_or_create_pane_identity(proj, norm_pane_id, touch=touch))
+        with self._lock:
+            key = (proj, norm_pane_id)
+            ident = self._memory_identities.get(key)
+            if ident is None:
+                ident = {
+                    "project_uuid": proj,
+                    "pane_slot": norm_pane_id,
+                    "node_uuid": new_pane_node_uuid(proj, norm_pane_id),
+                    "auto_relay_enabled": False,
+                }
+                self._memory_identities[key] = ident
+            return dict(ident)
 
     def register_pane(
         self,
@@ -126,12 +161,25 @@ class PaneRegistry:
         role: str = "implementer",
         pid: Optional[int] = None,
         session_token: Optional[str] = None,
+        project_uuid: Optional[str] = "",
+        cwd: Optional[str] = None,
+        auto_relay_enabled: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        """Registra o reemplaza la sesión de un panel, emitiendo un nuevo token único."""
-        norm_pane_id, pane_num = _normalize_pane_id(pane_id)
+        """Registra o reemplaza la SESION de un panel con un token nuevo; la identidad es la estable de
+        (proyecto, ranura) salvo que se pase `node_uuid` explicito."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        proj = normalize_project_uuid(project_uuid)
         now = float(self._clock())
         token = session_token or secrets.token_urlsafe(24)
-        resolved_node = node_uuid or f"pane_{pane_num}_{secrets.token_hex(4)}"
+        if node_uuid:
+            resolved_node = node_uuid
+            relay_flag = bool(auto_relay_enabled)
+        else:
+            identity = self.resolve_pane_identity(norm_pane_id, proj, touch=True)
+            resolved_node = str(identity["node_uuid"])
+            relay_flag = (
+                bool(identity.get("auto_relay_enabled")) if auto_relay_enabled is None else bool(auto_relay_enabled)
+            )
         resolved_agent = agent_name or f"{cli_profile}-{norm_pane_id}"
 
         with self._lock:
@@ -154,6 +202,9 @@ class PaneRegistry:
                 created_at=now,
                 last_seen_at=now,
                 last_human_keystroke_at=last_keystroke,
+                project_uuid=proj,
+                cwd=cwd,
+                auto_relay_enabled=relay_flag,
             )
             self._panes[norm_pane_id] = record
             payload = record.to_dict(include_token=True)
@@ -293,14 +344,51 @@ class PaneRegistry:
                     )
         return rec
 
-    def list_panes(self, *, include_closed: bool = False) -> List[Dict[str, Any]]:
-        """Lista las sesiones de paneles sin exponer los tokens secretos."""
+    def list_panes(
+        self, *, include_closed: bool = False, project_uuid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Lista las sesiones de paneles sin exponer los tokens; `project_uuid` filtra por proyecto exacto."""
         with self._lock:
             return [
                 rec.to_dict(include_token=False)
                 for rec in self._panes.values()
-                if include_closed or rec.status != "closed"
+                if (include_closed or rec.status != "closed")
+                and (project_uuid is None or rec.project_uuid == project_uuid)
             ]
+
+    def find_active_pane_by_node(
+        self, node_uuid: str, *, project_uuid: Optional[str] = None
+    ) -> Optional[PaneSessionRecord]:
+        """Panel ACTIVO con esa identidad (y de ese proyecto si se indica); None si no hay."""
+        if not node_uuid:
+            return None
+        with self._lock:
+            for rec in self._panes.values():
+                if rec.status == "closed" or rec.node_uuid != node_uuid:
+                    continue
+                if project_uuid is not None and rec.project_uuid != project_uuid:
+                    continue
+                return rec
+        return None
+
+    def set_auto_relay(self, pane_id: int | str, enabled: bool) -> Optional[PaneSessionRecord]:
+        """Cambia el Auto-Relay de un panel ACTIVO y lo persiste por (proyecto, ranura); None si no hay panel."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+            proj = rec.project_uuid
+        if self._identity_repo is not None:
+            self._identity_repo.set_pane_auto_relay(proj, norm_pane_id, bool(enabled))
+        else:
+            with self._lock:
+                ident = self._memory_identities.get((proj, norm_pane_id))
+                if ident is not None:
+                    ident["auto_relay_enabled"] = bool(enabled)
+        with self._lock:
+            rec.auto_relay_enabled = bool(enabled)
+            return rec
 
 
 class EmbeddedMcpHub:
@@ -318,7 +406,10 @@ class EmbeddedMcpHub:
         self.pane_registry = (
             pane_registry
             if pane_registry is not None
-            else PaneRegistry(collab_repo=getattr(kernel, "collab_repo", None))
+            else PaneRegistry(
+                collab_repo=getattr(kernel, "collab_repo", None),
+                identity_repo=getattr(kernel, "pane_identity_repo", None),
+            )
         )
         self.host = host
         self.port = port

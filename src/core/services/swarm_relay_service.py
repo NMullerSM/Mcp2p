@@ -72,7 +72,6 @@ class SwarmRelayOrchestrator:
         pane_registry: Optional[Any] = None,
         max_relay_rounds: int = 6,
         clock: Optional[Callable[[], float]] = None,
-        auto_relay_enabled: bool = False,
     ) -> None:
         self._lock = threading.RLock()
         self._conditions: Dict[str, threading.Condition] = {}
@@ -82,8 +81,8 @@ class SwarmRelayOrchestrator:
         self.pane_registry = pane_registry
         self.max_relay_rounds = max(1, int(max_relay_rounds))
         self._clock: Callable[[], float] = clock or time.time
-        # Con F0 significa solo «dejar avisos en la bandeja del agente destino»; no escribe en ninguna terminal.
-        self._auto_relay_enabled = bool(auto_relay_enabled)
+        # Auto-Relay (D2): es POR PANEL y vive en el `PaneRegistry` (persistido por proyecto y ranura). Solo
+        # significa «dejar avisos en la bandeja de ESE panel»; no escribe en ninguna terminal.
         self._closed = False
         # Bandeja por nodo destino: mensajes directos y avisos con procedencia estructurada (en memoria).
         self._inbox: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
@@ -218,7 +217,8 @@ class SwarmRelayOrchestrator:
         node_uuid: str,
         project_uuid: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        proj_filter = project_uuid.strip() if isinstance(project_uuid, str) and project_uuid.strip() else None
+        # Ola 2: None = sin filtro (uso interno); un texto (incluido '') filtra por ese proyecto EXACTO.
+        proj_filter = project_uuid.strip() if isinstance(project_uuid, str) else None
         search_keys = [node_uuid] if node_uuid == "*" else [node_uuid, "*"]
         for key in search_keys:
             queue = self._queues.get(key)
@@ -411,7 +411,7 @@ class SwarmRelayOrchestrator:
 
     def _pop_inbox_locked(self, node_uuid: str, project_uuid: Optional[str]) -> List[Dict[str, Any]]:
         """Vacia la bandeja de `node_uuid` (solo los mensajes del proyecto filtrado, si se pidio)."""
-        proj_filter = project_uuid.strip() if isinstance(project_uuid, str) and project_uuid.strip() else None
+        proj_filter = project_uuid.strip() if isinstance(project_uuid, str) else None
         inbox = self._inbox.get(node_uuid)
         if not inbox:
             return []
@@ -577,57 +577,72 @@ class SwarmRelayOrchestrator:
     # Auto-Relay controlado y mensajería directa entre nodos/paneles
     # ------------------------------------------------------------------
 
-    def set_auto_relay_enabled(self, enabled: bool) -> Dict[str, Any]:
-        """Activa o desactiva el Auto-Relay controlado hacia paneles PTY."""
-        with self._lock:
-            self._auto_relay_enabled = bool(enabled)
-        return self.get_auto_relay_status()
+    def _active_panes(self) -> List[Dict[str, Any]]:
+        """Paneles activos del registro como diccionarios (sin token)."""
+        if self.pane_registry is None:
+            return []
+        list_panes_fn = getattr(self.pane_registry, "list_panes", None)
+        if not callable(list_panes_fn):
+            return []
+        panes: List[Dict[str, Any]] = []
+        for raw in list_panes_fn() or []:
+            pane = dict(raw) if isinstance(raw, dict) else (
+                raw.to_dict(include_token=False) if hasattr(raw, "to_dict") else None
+            )
+            if pane and str(pane.get("status") or "active").lower() != "closed":
+                panes.append(pane)
+        return panes
 
     def get_auto_relay_status(self) -> Dict[str, Any]:
-        """Estado del Auto-Relay (avisos en bandeja) y de los Loop Breakers disparados."""
+        """Estado del Auto-Relay por panel (avisos en bandeja) y de los Loop Breakers disparados (vista de la GUI)."""
+        relay_panes = sorted(
+            str(p.get("pane_id")) for p in self._active_panes() if bool(p.get("auto_relay_enabled"))
+        )
         with self._lock:
             return {
                 "success": True,
-                "auto_relay_enabled": self._auto_relay_enabled,
+                "auto_relay_enabled": bool(relay_panes),
+                "auto_relay_panes": relay_panes,
                 "inbox_pending": sum(len(q) for q in self._inbox.values()),
                 "tripped_cases": sorted(
                     k for k, v in self._loop_breaker_states.items() if v == "LOOP_BREAKER_TRIPPED"
                 ),
             }
 
-    def _resolve_target_node_from_pane(self, pane_id: int | str) -> str:
+    def _resolve_target_node_from_pane(self, pane_id: int | str, project_uuid: str) -> str:
+        """`node_uuid` del panel ACTIVO `pane_id` solo si es del proyecto `project_uuid`; '' si no."""
         if self.pane_registry is None:
             return ""
         get_pane_fn = getattr(self.pane_registry, "get_pane", None)
         if not callable(get_pane_fn):
             return ""
-        pane = get_pane_fn(pane_id)
+        try:
+            pane = get_pane_fn(pane_id)
+        except ValueError:
+            return ""
         if pane is None:
             return ""
-        if isinstance(pane, dict):
-            if str(pane.get("status") or "active").lower() == "closed":
-                return ""
-            return str(pane.get("node_uuid") or "").strip()
-        if str(getattr(pane, "status", "active") or "active").lower() == "closed":
+        data = dict(pane) if isinstance(pane, dict) else (
+            pane.to_dict(include_token=False) if hasattr(pane, "to_dict") else {}
+        )
+        if str(data.get("status") or "active").lower() == "closed":
             return ""
-        return str(getattr(pane, "node_uuid", "") or "").strip()
+        if str(data.get("project_uuid") or "") != project_uuid:
+            return ""
+        return str(data.get("node_uuid") or "").strip()
 
-    def _find_active_pane_for_node(self, node_uuid: str) -> Optional[Dict[str, Any]]:
-        if self.pane_registry is None or not node_uuid:
+    def _find_active_pane_for_node(
+        self, node_uuid: str, *, project_uuid: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Panel activo con ese `node_uuid` (del proyecto exacto si se indica)."""
+        if not node_uuid:
             return None
-        list_panes_fn = getattr(self.pane_registry, "list_panes", None)
-        if not callable(list_panes_fn):
-            return None
-        for raw in list_panes_fn() or []:
-            pane = dict(raw) if isinstance(raw, dict) else (
-                raw.to_dict(include_token=False) if hasattr(raw, "to_dict") else None
-            )
-            if not pane:
+        for pane in self._active_panes():
+            if str(pane.get("node_uuid") or "").strip() != node_uuid:
                 continue
-            if str(pane.get("status") or "active").lower() == "closed":
+            if project_uuid is not None and str(pane.get("project_uuid") or "") != project_uuid:
                 continue
-            if str(pane.get("node_uuid") or "").strip() == node_uuid:
-                return pane
+            return pane
         return None
 
     @staticmethod
@@ -697,22 +712,25 @@ class SwarmRelayOrchestrator:
         *,
         assignment_uuid: str = "",
     ) -> None:
-        """Con Auto-Relay activo deja un AVISO en la bandeja del destino; jamas escribe en su terminal."""
+        """Si el PANEL destino tiene Auto-Relay activo deja un AVISO en su bandeja; jamas escribe en su terminal."""
         target = (target_node_uuid or "").strip()
         if not target or target == "*":
             return
         if str(assignment.get("source") or "") == "direct_message":
             return  # el mensaje directo ya es, el mismo, el contenido de la bandeja
         with self._lock:
-            if self._closed or not self._auto_relay_enabled:
+            if self._closed:
                 return
             if self._active_waiters.get(target, 0) > 0:
                 return  # ya esta esperando: recibira la asignacion directamente
         sender = self._extract_sender_node(assignment)
         if sender and sender == target:
             return
-        if self._find_active_pane_for_node(target) is None:
-            return
+        target_pane = self._find_active_pane_for_node(target)
+        if target_pane is None or not bool(target_pane.get("auto_relay_enabled")):
+            return  # D2: el aviso solo va a un panel con su Auto-Relay encendido
+        if str(target_pane.get("project_uuid") or "") != str(assignment.get("project_uuid") or ""):
+            return  # Ola 2: nunca avisar a un panel de otro proyecto
 
         kind = self._sanitize_single_line(
             str(assignment.get("event_type") or assignment.get("kind") or "ASSIGNMENT"), max_len=64
@@ -743,8 +761,10 @@ class SwarmRelayOrchestrator:
     ) -> Dict[str, Any]:
         """Deja un mensaje directo en la bandeja del nodo/panel destino y lo audita en el A2ABus (solo local).
 
-        `sender_node_uuid` DEBE venir de la sesion de panel autenticada por el Hub. El texto nunca se escribe
-        en un PTY ni sale a pares P2P: el destino lo recoge con `await_next_assignment`.
+        `sender_node_uuid` y `project_uuid` DEBEN venir de la sesion de panel autenticada por el Hub. El destino
+        tiene que ser un panel ACTIVO del mismo proyecto: si es de otro proyecto o no existe, la respuesta es la
+        misma (`TARGET_NOT_FOUND`), sin filtrar su existencia (Ola 2). El texto nunca se escribe en un PTY ni sale
+        a pares P2P: el destino lo recoge con `await_next_assignment`.
         """
         if not isinstance(message, str) or not message.strip():
             return {"success": False, "code": "EMPTY_MESSAGE", "error": "El mensaje directo no puede estar vacío."}
@@ -756,15 +776,20 @@ class SwarmRelayOrchestrator:
                 "error": f"El mensaje supera el maximo de {MAX_DIRECT_MESSAGE_BYTES} bytes.",
             }
 
-        resolved_target = (target_node_uuid or "").strip()
-        if not resolved_target and target_pane_id is not None:
-            resolved_target = self._resolve_target_node_from_pane(target_pane_id)
+        scope = project_uuid.strip() if isinstance(project_uuid, str) else ""
+        requested_node = (target_node_uuid or "").strip() if isinstance(target_node_uuid, str) else ""
+        resolved_target = ""
+        if requested_node:
+            if self._find_active_pane_for_node(requested_node, project_uuid=scope) is not None:
+                resolved_target = requested_node
+        elif target_pane_id is not None:
+            resolved_target = self._resolve_target_node_from_pane(target_pane_id, scope)
 
         if not resolved_target:
             return {
                 "success": False,
                 "code": "TARGET_NOT_FOUND",
-                "error": "No se pudo resolver target_node_uuid para el mensaje directo.",
+                "error": "No hay ningun panel activo con ese destino en este proyecto.",
             }
 
         message_uuid = str(uuid.uuid4())

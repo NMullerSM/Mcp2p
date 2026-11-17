@@ -99,8 +99,10 @@ def test_stdio_subprocess_proxies_to_live_embedded_hub_and_delivers_pane_message
     p_uuid = desktop_kernel.db.list_projects()[0]["project_uuid"]
     reg = PaneRegistry(collab_repo=desktop_kernel.collab_repo)
 
-    p1 = reg.register_pane(1, node_uuid="node_agy", agent_name="Agy", cli_profile="agy")
-    p2 = reg.register_pane(2, node_uuid="node_opencode", agent_name="OpenCode", cli_profile="opencode")
+    p1 = reg.register_pane(1, node_uuid="node_agy", agent_name="Agy", cli_profile="agy", project_uuid=p_uuid)
+    p2 = reg.register_pane(
+        2, node_uuid="node_opencode", agent_name="OpenCode", cli_profile="opencode", project_uuid=p_uuid
+    )
     desktop_kernel.db.add_or_request_collaborator(p_uuid, "node_agy", status="approved")
     desktop_kernel.db.add_or_request_collaborator(p_uuid, "node_opencode", status="approved")
 

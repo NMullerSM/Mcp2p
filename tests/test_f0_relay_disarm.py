@@ -67,9 +67,13 @@ class Swarm:
         self.event_bus = DomainEventBus()
         self.bus = A2ABus(self.db)
         self.registry = PaneRegistry()
-        self.tok1 = self.registry.register_pane("pane_1", node_uuid="node-1", session_token="tok-1")["session_token"]
+        # Ola 2: los paneles pertenecen al proyecto y el Auto-Relay es por panel (activo en ambos aqui).
+        self.tok1 = self.registry.register_pane(
+            "pane_1", node_uuid="node-1", session_token="tok-1", project_uuid=self.proj, auto_relay_enabled=True
+        )["session_token"]
         self.tok2 = self.registry.register_pane(
-            "pane_2", node_uuid="node-2", session_token="tok-2", pid=4242
+            "pane_2", node_uuid="node-2", session_token="tok-2", pid=4242, project_uuid=self.proj,
+            auto_relay_enabled=True,
         )["session_token"]
         self.pty = PosixPtyHostConnector(max_panes=2) if with_ptys else None
         self.spy = _SpyConnector(self.pty) if self.pty is not None else None
@@ -77,9 +81,7 @@ class Swarm:
             for pane in ("pane_1", "pane_2"):
                 res = self.pty.spawn_session(pane, command=["/bin/sh"], cwd=tmp_path, use_trampoline=False)
                 assert res["success"] is True
-        self.orch = SwarmRelayOrchestrator(
-            event_bus=self.event_bus, bus=self.bus, pane_registry=self.registry, auto_relay_enabled=True
-        )
+        self.orch = SwarmRelayOrchestrator(event_bus=self.event_bus, bus=self.bus, pane_registry=self.registry)
         self.kernel = ApplicationFactory.create_mcp_kernel(
             db_manager=self.db, bus=self.bus, event_bus=self.event_bus
         )
@@ -459,27 +461,31 @@ class _Dialog:
 
 
 def test_enabling_auto_relay_needs_native_confirmation_and_disabling_does_not(bridge) -> None:
-    # sin ventana: se rechaza y el relevo sigue apagado
-    res = bridge.pty_set_auto_relay(True)
+    # D2: el Auto-Relay es por panel; la firma global antigua (un solo booleano) se rechaza.
+    registry = bridge.extensions_ui._get_pane_registry()
+    registry.register_pane("pane_1", cli_profile="custom_shell")
+    assert bridge.pty_set_auto_relay(True)["code"] == "INVALID_ARGUMENT"
+    assert bridge.pty_set_auto_relay("pane_5", True)["code"] == "PANE_NOT_FOUND"
+
+    # sin ventana: se rechaza y el panel sigue apagado
+    res = bridge.pty_set_auto_relay("pane_1", True)
     assert res["success"] is False and res["code"] == "CONFIRMATION_UNAVAILABLE"
-    assert bridge.extensions_ui._embedded_hub is None or not bridge.extensions_ui._embedded_hub.is_running()
+    assert registry.get_pane("pane_1").auto_relay_enabled is False
 
     dialog = _Dialog([False, True])
     bridge.confirmations.dialog = dialog
-    declined = bridge.pty_set_auto_relay(True)
+    declined = bridge.pty_set_auto_relay("pane_1", True)
     assert declined["success"] is False and declined["code"] == "CONFIRMATION_DECLINED"
-    hub = bridge.extensions_ui._embedded_hub
-    assert hub is None or not hub.is_running() or hub.relay_orchestrator().get_auto_relay_status()[
-        "auto_relay_enabled"
-    ] is False
+    assert registry.get_pane("pane_1").auto_relay_enabled is False
 
-    accepted = bridge.pty_set_auto_relay(True)
+    accepted = bridge.pty_set_auto_relay("pane_1", True)
     assert accepted["success"] is True and accepted["auto_relay_enabled"] is True
+    assert accepted["pane_id"] == "pane_1"
     assert "key_encrypted" not in accepted and "deferred_count" not in accepted  # Gate 0c ya no aplica
     title, message = dialog.calls[-1]
-    assert "bandeja" in message and "ninguna terminal" in message
+    assert "bandeja" in message and "ninguna terminal" in message and "pane_1" in message
 
     calls_before = len(dialog.calls)
-    off = bridge.pty_set_auto_relay(False)
+    off = bridge.pty_set_auto_relay("pane_1", False)
     assert off["success"] is True and off["auto_relay_enabled"] is False
     assert len(dialog.calls) == calls_before  # apagar no abre dialogo

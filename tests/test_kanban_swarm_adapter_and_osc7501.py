@@ -130,8 +130,12 @@ def test_kanban_swarm_adapter_projects_assigned_cards_and_activity(tmp_path: Pat
     )
 
     registry = PaneRegistry()
-    registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-1", role="coordinator")
-    registry.register_pane("pane_2", node_uuid="node-pane-2", session_token="tok-2", role="implementer")
+    registry.register_pane(
+        "pane_1", node_uuid="node-pane-1", session_token="tok-1", role="coordinator", project_uuid=proj_uuid
+    )
+    registry.register_pane(
+        "pane_2", node_uuid="node-pane-2", session_token="tok-2", role="implementer", project_uuid=proj_uuid
+    )
 
     term = _ControllableTerminalConnector()
     term.set_idle("pane_1", False)
@@ -186,8 +190,8 @@ def test_mcp_tools_list_swarm_panes_and_send_pane_message_egm22(tmp_path: Path) 
     kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, term)
 
     registry = PaneRegistry()
-    registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-pane-1")
-    registry.register_pane("pane_2", node_uuid="node-pane-2", session_token="tok-pane-2")
+    registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-pane-1", project_uuid=proj_uuid)
+    registry.register_pane("pane_2", node_uuid="node-pane-2", session_token="tok-pane-2", project_uuid=proj_uuid)
 
     handler = MCPToolsHandler(
         kernel=kernel,
@@ -271,14 +275,16 @@ def test_auto_relay_leaves_notices_in_the_inbox_and_never_writes_to_the_pty(tmp_
     term.set_idle("pane_2", True)
 
     registry = PaneRegistry()
-    registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-1")
-    registry.register_pane("pane_2", node_uuid="node-pane-2", session_token="tok-2")
+    registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-1", project_uuid=proj_uuid)
+    # D2: el Auto-Relay es POR PANEL; aqui solo el destino (pane_2) lo tiene activo.
+    registry.register_pane(
+        "pane_2", node_uuid="node-pane-2", session_token="tok-2", project_uuid=proj_uuid, auto_relay_enabled=True
+    )
 
     orch = SwarmRelayOrchestrator(
         event_bus=event_bus,
         bus=bus,
         pane_registry=registry,
-        auto_relay_enabled=True,
     )
     kernel = ApplicationFactory.create_mcp_kernel(
         db_manager=db,
@@ -294,7 +300,8 @@ def test_auto_relay_leaves_notices_in_the_inbox_and_never_writes_to_the_pty(tmp_
         relay_orchestrator=orch,
     )
     try:
-        assert orch.get_auto_relay_status()["auto_relay_enabled"] is True
+        status = orch.get_auto_relay_status()
+        assert status["auto_relay_enabled"] is True and status["auto_relay_panes"] == ["pane_2"]
 
         # Caso A: asignar una tarjeta a pane_2 deja un AVISO en su bandeja (con la asignacion en la cola pull).
         event_bus.publish(

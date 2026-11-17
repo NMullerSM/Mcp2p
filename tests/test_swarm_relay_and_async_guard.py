@@ -205,9 +205,11 @@ def test_orchestrator_has_no_pty_dispatch_api_and_takes_no_terminal_connector() 
 def test_human_typing_does_not_defer_or_block_inbox_delivery() -> None:
     now = [1000.0]
     registry = PaneRegistry(clock=lambda: now[0])
-    registry.register_pane("pane_1", node_uuid="agent-a", session_token="tok-a")
-    registry.register_pane("pane_2", node_uuid="agent-b", session_token="tok-b")
-    orch = SwarmRelayOrchestrator(pane_registry=registry, clock=lambda: now[0], auto_relay_enabled=True)
+    registry.register_pane("pane_1", node_uuid="agent-a", session_token="tok-a", project_uuid="p1")
+    registry.register_pane(
+        "pane_2", node_uuid="agent-b", session_token="tok-b", project_uuid="p1", auto_relay_enabled=True
+    )
+    orch = SwarmRelayOrchestrator(pane_registry=registry, clock=lambda: now[0])
     try:
         registry.record_human_keystroke("pane_2")  # el humano esta tecleando justo en el destino
         res = orch.send_direct_message(
@@ -267,7 +269,11 @@ def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds() -> None:
 
 
 def test_loop_breaker_also_stops_direct_message_ping_pong_through_the_inbox() -> None:
-    orch = SwarmRelayOrchestrator(max_relay_rounds=3)
+    # Ola 2: el destino de un mensaje directo tiene que ser un panel ACTIVO del mismo proyecto.
+    registry = PaneRegistry()
+    registry.register_pane("pane_1", node_uuid="agent-a", project_uuid="p1")
+    registry.register_pane("pane_2", node_uuid="agent-b", project_uuid="p1")
+    orch = SwarmRelayOrchestrator(max_relay_rounds=3, pane_registry=registry)
     try:
         results = []
         for idx in range(8):
@@ -296,8 +302,8 @@ def test_mcp_handler_and_server_await_next_assignment_with_egm22_protection(tmp_
     db = DatabaseManager(db_path=db_path)
     proj_id = db.create_project("Proyecto MCP Relay", str(tmp_path / "repo"))["project_uuid"]
     registry = PaneRegistry()
-    registry.register_pane("pane_1", node_uuid="node-alpha", session_token="tok-alpha")
-    registry.register_pane("pane_2", node_uuid="node-beta", session_token="tok-beta")
+    registry.register_pane("pane_1", node_uuid="node-alpha", session_token="tok-alpha", project_uuid=proj_id)
+    registry.register_pane("pane_2", node_uuid="node-beta", session_token="tok-beta", project_uuid=proj_id)
 
     handler = MCPToolsHandler(db_manager=db, pane_registry=registry)
     try:

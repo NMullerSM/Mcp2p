@@ -572,7 +572,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if self._pane_registry is None:
                 kernel = self.core_kernel
                 collab_repo = getattr(kernel, "collab_repo", None) if kernel is not None else None
-                self._pane_registry = PaneRegistry(collab_repo=collab_repo)
+                identity_repo = getattr(kernel, "pane_identity_repo", None) if kernel is not None else None
+                self._pane_registry = PaneRegistry(collab_repo=collab_repo, identity_repo=identity_repo)
             return self._pane_registry
 
     def _get_embedded_hub(self) -> Optional[EmbeddedMcpHub]:
@@ -599,9 +600,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             logger.warning("No se pudo iniciar EmbeddedMcpHub (modo tolerante): %s", exc)
             return None
 
-    def _resolve_active_code_repo(self) -> Optional[str]:
+    def _resolve_active_code_repo(self, project_uuid: Optional[str] = None) -> Optional[str]:
         try:
-            target_uuid = self._resolve_project_uuid()
+            target_uuid = project_uuid or self._resolve_project_uuid()
             if not target_uuid:
                 return None
             proj = self.db.get_project_by_uuid(target_uuid)
@@ -710,7 +711,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                         relay_status = dict(relay.get_auto_relay_status())
                 except Exception:
                     relay_status = dict(default_relay_status)
-            auto_relay_enabled = bool(relay_status.get("auto_relay_enabled", False))
+            # D2: el Auto-Relay es por panel (cada `panes[i].auto_relay_enabled`); la raiz resume si hay alguno.
+            auto_relay_enabled = any(bool(p.get("auto_relay_enabled")) for p in panes)
+            relay_status["auto_relay_enabled"] = auto_relay_enabled
+            relay_status["auto_relay_panes"] = sorted(
+                str(p.get("pane_id")) for p in panes if bool(p.get("auto_relay_enabled"))
+            )
 
             manual_command: Optional[str] = None
             mcp_config: Optional[Dict[str, Any]] = None
@@ -1051,6 +1057,26 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if pane_lock is not None:
                 pane_lock.release()
 
+    def _resolve_pane_project(self, project_uuid: Any) -> tuple[str, Optional[Dict[str, Any]]]:
+        """Proyecto del panel: el que envia la GUI (debe existir) o el activo; '' si no hay ninguno."""
+        if project_uuid is not None and not isinstance(project_uuid, str):
+            return "", _fail("INVALID_ARGUMENT", "project_uuid debe ser texto.")
+        requested = (project_uuid or "").strip()
+        if requested:
+            if len(requested) > 200 or has_control_chars(requested):
+                return "", _fail("INVALID_ARGUMENT", "project_uuid invalido.")
+            try:
+                exists = self.db.get_project_by_uuid(requested) is not None
+            except Exception:
+                exists = False
+            if not exists:
+                return "", _fail("PROJECT_NOT_FOUND", "El proyecto del panel no existe.")
+            return requested, None
+        try:
+            return (self._resolve_project_uuid() or ""), None
+        except Exception:
+            return "", None
+
     @staticmethod
     def _validate_cwd(cwd: Any) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         if cwd is None:
@@ -1076,7 +1102,10 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         start_hub: bool = True,
         cwd: Optional[str] = None,
         resume: bool = False,
+        project_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Abre un panel ligado a un proyecto (Ola 2): `project_uuid` lo envia la GUI (el proyecto visible); si
+        falta, se usa el proyecto activo del puente y, sin ninguno, el panel queda sin proyecto ('')."""
         registry = self._get_pane_registry()
         registered_here = False
         norm_pane_id: Optional[str] = None
@@ -1148,6 +1177,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
             if not isinstance(resume, bool):
                 return _fail("INVALID_ARGUMENT", "resume debe ser booleano.", degraded=False, pane_id=norm_pane_id)
+            pane_project, project_error = self._resolve_pane_project(project_uuid)
+            if project_error is not None:
+                return {**project_error, "degraded": False, "pane_id": norm_pane_id}
 
             # EGM-75: dos spawns simultaneos del mismo panel no deben pisarse el token del registro.
             pane_lock = self._pane_lock(norm_pane_id)
@@ -1168,10 +1200,15 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                             "message": f"El panel {norm_pane_id} ya tiene una sesión viva.",
                         }
 
+            effective_cwd = resolved_cwd if resolved_cwd is not None else self._resolve_active_code_repo(pane_project)
+
+            # Identidad ESTABLE por (proyecto, ranura); la sesion (token, pid, session_id) es nueva en cada spawn.
             registered = registry.register_pane(
                 norm_pane_id,
                 cli_profile=cli_profile,
                 role=role,
+                project_uuid=pane_project,
+                cwd=effective_cwd,
             )
             registered_here = True
             token = registered["session_token"]
@@ -1182,8 +1219,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             else:
                 hub = self._embedded_hub
                 hub_url = hub.url if (hub is not None and hub.is_running()) else None
-
-            effective_cwd = resolved_cwd if resolved_cwd is not None else self._resolve_active_code_repo()
 
             spawn_res = dict(
                 terminal.spawn_session(
@@ -1246,6 +1281,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "degraded": False,
                 "pane_id": norm_pane_id,
                 "node_uuid": node_uuid,
+                "project_uuid": pane_project,
                 "pid": pid,
                 "hub_url": hub_url,
                 "cwd": effective_cwd,
@@ -1373,50 +1409,66 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
-    def pty_set_auto_relay(self, enabled: bool) -> Dict[str, Any]:
-        """Activa o desactiva el Auto-Relay del Hub embebido.
+    def pty_set_auto_relay(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
+        """Activa o desactiva el Auto-Relay de UN panel (D2) y lo persiste por (proyecto, ranura).
 
-        F0: activarlo solo significa «dejar avisos en la bandeja del agente destino»; nunca escribe en un PTY.
+        Activarlo solo significa «dejar avisos de asignacion en la bandeja de ESE panel»; nunca escribe en un PTY.
         Activarlo exige confirmacion NATIVA (EGM-74); apagarlo no pregunta (es la direccion segura).
         """
         try:
-            target_enabled = bool(enabled)
-            if target_enabled:
+            if not isinstance(enabled, bool):
+                return _fail("INVALID_ARGUMENT", "Indique el panel y enabled (booleano): el Auto-Relay es por panel.")
+            registry = self._get_pane_registry()
+            try:
+                rec = registry.get_pane(pane_id)
+            except (TypeError, ValueError):
+                rec = None
+            if rec is None or rec.status == "closed":
+                return _fail("PANE_NOT_FOUND", "No hay un panel activo con ese identificador.")
+            if enabled:
+                project_label = rec.project_uuid or "(sin proyecto)"
+                try:
+                    proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
+                    if proj and proj.get("name"):
+                        project_label = f"{proj['name']} ({rec.project_uuid})"
+                except Exception:
+                    pass
                 declined = self._confirm_native(
-                    "Activar Auto-Relay",
-                    "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja de los agentes "
-                    "destino, ademas de los mensajes directos que ya reciben.\n\n"
-                    "No escribe nada en ninguna terminal: cada agente decide cuando recoger los avisos. "
+                    "Activar Auto-Relay en un panel",
+                    f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
+                    "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja del agente de este "
+                    "panel, ademas de los mensajes directos que ya recibe.\n\n"
+                    "No escribe nada en ninguna terminal: el agente decide cuando recoger los avisos. "
                     "Acepte solo si quiere ese comportamiento.",
                 )
                 if declined is not None:
-                    return declined
-            hub = self._embedded_hub
-            if target_enabled and (hub is None or not hub.is_running()):
-                self._ensure_hub_started()
-                hub = self._embedded_hub
-            relay = hub.relay_orchestrator() if hub is not None else None
-            if relay is None:
-                return _fail(
-                    "RELAY_UNAVAILABLE",
-                    "El Hub embebido no está en marcha o no pudo iniciar; Auto-Relay no disponible.",
-                )
-
-            relay.set_auto_relay_enabled(target_enabled)
-            return {"success": True, **dict(relay.get_auto_relay_status())}
+                    return {**declined, "pane_id": rec.pane_id}
+            updated = registry.set_auto_relay(rec.pane_id, enabled)
+            if updated is None:
+                return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
+            return {
+                "success": True,
+                "code": "OK",
+                "pane_id": updated.pane_id,
+                "project_uuid": updated.project_uuid,
+                "auto_relay_enabled": bool(updated.auto_relay_enabled),
+            }
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
-    def pty_get_kanban_swarm_snapshot(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Devuelve la proyección Kanban <-> Swarm de paneles activos y tarjetas asignadas."""
+    def pty_get_kanban_swarm_snapshot(
+        self, project_uuid: Optional[str] = None, all_projects: bool = False
+    ) -> Dict[str, Any]:
+        """Proyección Kanban <-> Swarm de los paneles del proyecto (o de todos con `all_projects`, solo GUI)."""
         try:
-            target_uuid = self._resolve_project_uuid(project_uuid)
+            target_uuid = None if all_projects is True else (self._resolve_project_uuid(project_uuid) or "")
             kernel = self.core_kernel
             kanban_repo = getattr(kernel, "kanban_repo", None) if kernel is not None else None
             adapter = KanbanSwarmAdapter(
                 kanban_repo=kanban_repo,
                 pane_registry=self._get_pane_registry(),
                 terminal_connector=self._get_terminal_connector(),
+                allow_all_projects=all_projects is True,
             )
             return adapter.list_swarm_panes(project_uuid=target_uuid)
         except Exception as exc:

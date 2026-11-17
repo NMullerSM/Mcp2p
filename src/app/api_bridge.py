@@ -684,6 +684,7 @@ class ApiBridge:
         start_hub: bool = True,
         cwd: Optional[str] = None,
         resume: bool = False,
+        project_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.extensions_ui.pty_spawn_pane(
             pane_id=pane_id,
@@ -695,6 +696,7 @@ class ApiBridge:
             start_hub=start_hub,
             cwd=cwd,
             resume=resume,
+            project_uuid=project_uuid,
         )
 
     def pty_list_cli_catalog(self) -> Dict[str, Any]:
@@ -739,11 +741,13 @@ class ApiBridge:
             project_uuid=project_uuid, card_id=card_id, session_id=session_id
         )
 
-    def pty_set_auto_relay(self, enabled: bool) -> Dict[str, Any]:
-        return self.extensions_ui.pty_set_auto_relay(enabled=enabled)
+    def pty_set_auto_relay(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
+        return self.extensions_ui.pty_set_auto_relay(pane_id=pane_id, enabled=enabled)
 
-    def pty_get_kanban_swarm_snapshot(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        return self.extensions_ui.pty_get_kanban_swarm_snapshot(project_uuid=project_uuid)
+    def pty_get_kanban_swarm_snapshot(
+        self, project_uuid: Optional[str] = None, all_projects: bool = False
+    ) -> Dict[str, Any]:
+        return self.extensions_ui.pty_get_kanban_swarm_snapshot(project_uuid=project_uuid, all_projects=all_projects)
 
     def public_js_functions(self) -> List[Callable[..., Any]]:
         """Funciones planas para `window.expose(...)`; la ventana se crea con `js_api=None` (EGM-73).

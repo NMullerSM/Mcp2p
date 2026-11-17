@@ -8,12 +8,18 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("mcp2p.core.services.kanban_swarm_adapter")
 
 # Datos del panel que NUNCA se proyectan hacia agentes (F0.4): el pid permite leer /proc/<pid>/environ de otro
-# panel (EGM-105) y la marca de tecleo es telemetria del humano. El token tampoco sale jamas por aqui.
-_PRIVATE_PANE_KEYS = ("pid", "last_human_keystroke_at", "session_token")
+# panel (EGM-105) y la marca de tecleo es telemetria del humano. El token tampoco sale jamas por aqui. La carpeta
+# de trabajo de otro panel tampoco hace falta a un agente.
+_PRIVATE_PANE_KEYS = ("pid", "last_human_keystroke_at", "session_token", "cwd")
 
 
 class KanbanSwarmAdapter:
-    """Proyecta el estado de los paneles del enjambre junto con sus tarjetas Kanban."""
+    """Proyecta el estado de los paneles del enjambre junto con sus tarjetas Kanban.
+
+    Alcance (Ola 2, T2.5): cada consulta ve SOLO los paneles del proyecto pedido. Ver los de todos los proyectos
+    exige construir el adaptador con `allow_all_projects=True`, cosa que solo hace el puente de la GUI; las
+    herramientas MCP nunca (hay prueba AST).
+    """
 
     def __init__(
         self,
@@ -21,12 +27,17 @@ class KanbanSwarmAdapter:
         kanban_repo: Optional[Any] = None,
         pane_registry: Optional[Any] = None,
         terminal_connector: Optional[Any] = None,
+        allow_all_projects: bool = False,
     ) -> None:
         self.kanban_repo = kanban_repo
         self.pane_registry = pane_registry
         self.terminal_connector = terminal_connector
+        self.allow_all_projects = bool(allow_all_projects)
 
-    def _get_active_panes(self) -> List[Dict[str, Any]]:
+    def _get_active_panes(self, project_uuid: Optional[str]) -> List[Dict[str, Any]]:
+        """Paneles activos del proyecto exacto `project_uuid` ('' = sin proyecto); None = todos (solo GUI)."""
+        if project_uuid is None and not self.allow_all_projects:
+            project_uuid = ""
         if self.pane_registry is None:
             return []
         list_fn = getattr(self.pane_registry, "list_panes", None)
@@ -44,14 +55,20 @@ class KanbanSwarmAdapter:
             status = str(entry.get("status") or "active").lower()
             if status == "closed":
                 continue
+            if project_uuid is not None and str(entry.get("project_uuid") or "") != project_uuid:
+                continue
             for private_key in _PRIVATE_PANE_KEYS:
                 entry.pop(private_key, None)
             panes.append(entry)
         return panes
 
     def list_swarm_panes(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Lista paneles activos/pausados enriquecidos con actividad PTY y tarjetas Kanban."""
-        raw_panes = self._get_active_panes()
+        """Lista los paneles activos/pausados DEL PROYECTO con actividad PTY y tarjetas Kanban.
+
+        `project_uuid=None` solo lista todos los proyectos si el adaptador lo permite (GUI); si no, equivale a
+        los paneles sin proyecto.
+        """
+        raw_panes = self._get_active_panes(project_uuid)
 
         cards: List[Dict[str, Any]] = []
         if project_uuid and self.kanban_repo is not None:
@@ -118,7 +135,7 @@ class KanbanSwarmAdapter:
         if not isinstance(card, dict):
             return None
 
-        panes = self._get_active_panes()
+        panes = self._get_active_panes(project_uuid)
         if not panes:
             return None
 
