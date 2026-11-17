@@ -5,7 +5,7 @@ Almacenamiento (por orden):
 1. **Llavero del sistema** via `keyring` (Secret Service/KWallet en Linux, Credential Manager en Windows, Keychain en
    macOS). Servicio ``mcp2p-device-identity``, usuario = `node_uuid` del dispositivo, valor = semilla de 32 bytes en
    base64url. Se comprueba leyendo lo escrito (un backend «null» que acepta y olvida no cuenta).
-2. **Archivo cifrado** de respaldo (`~/.mcp2p/device_identity.enc`) si no hay llavero utilizable (p. ej. CI Linux sin
+2. **Archivo cifrado** de respaldo (`~/.mcp2p/device_identity-<hash del node_uuid>.enc`) si no hay llavero utilizable (p. ej. CI Linux sin
    Secret Service): Fernet con una clave HKDF-SHA256 derivada de un secreto local (`device_identity.secret`, 32 bytes
    aleatorios, 0600) + el identificador de la maquina si existe (`/etc/machine-id`, `MachineGuid`). No pide la frase
    del humano: el Hub debe poder firmar sin desbloqueo. Protege frente a la copia suelta del archivo o a llevarselo a
@@ -119,8 +119,15 @@ class DeviceKeyStore:
         self.warning: Optional[str] = None
 
     @property
+    def _device_tag(self) -> str:
+        import hashlib
+
+        return hashlib.sha256(self.device_id.encode("utf-8")).hexdigest()[:12]
+
+    @property
     def file_path(self) -> Path:
-        return self.base_dir / "device_identity.enc"
+        """Un archivo por dispositivo (varios kernels con `node_uuid` distinto no se pisan la clave)."""
+        return self.base_dir / f"device_identity-{self._device_tag}.enc"
 
     @property
     def secret_path(self) -> Path:
@@ -303,7 +310,7 @@ class DeviceIdentity:
 
     @property
     def certificate_path(self) -> Path:
-        return self.key_store.base_dir / "device_cert.json"
+        return self.key_store.base_dir / f"device_cert-{self.key_store._device_tag}.json"
 
     def device_certificate(self) -> Optional[Dict[str, Any]]:
         cert = self._certificate

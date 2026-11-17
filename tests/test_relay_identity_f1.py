@@ -71,7 +71,7 @@ def test_device_key_lives_in_the_os_keyring_and_is_stable(tmp_path: Path) -> Non
     first = DeviceIdentity("dev-1", key_store=DeviceKeyStore("dev-1", base_dir=tmp_path, keyring_backend=kr))
     assert first.key_store.storage == STORAGE_KEYRING and first.key_store.warning is None
     assert (KEYRING_SERVICE, "dev-1") in kr.store
-    assert not (tmp_path / "device_identity.enc").exists()  # nada en disco
+    assert not list(tmp_path.glob("device_identity*.enc"))  # nada en disco
     again = DeviceIdentity("dev-1", key_store=DeviceKeyStore("dev-1", base_dir=tmp_path, keyring_backend=kr))
     assert again.public_key_b64() == first.public_key_b64()
     env = first.sign_header(_header())
@@ -86,7 +86,7 @@ def test_without_usable_keyring_falls_back_to_encrypted_file_with_warning(tmp_pa
         ident = DeviceIdentity("dev-1", key_store=DeviceKeyStore("dev-1", base_dir=base, keyring_backend=backend))
         assert ident.key_store.storage == STORAGE_ENCRYPTED_FILE
         assert ident.key_store.warning and "archivo cifrado" in ident.key_store.warning
-        blob = (base / "device_identity.enc").read_bytes()
+        blob = ident.key_store.file_path.read_bytes()
         seed = ident._private_key.private_bytes_raw()
         assert seed not in blob and json.loads(blob)["alg"] == "fernet+hkdf-sha256"
         reloaded = DeviceIdentity(
@@ -109,16 +109,18 @@ def test_tampered_or_foreign_key_file_is_not_trusted(tmp_path: Path) -> None:
 
     store = DeviceKeyStore("dev-1", base_dir=tmp_path, keyring_backend=FailKeyring())
     original = DeviceIdentity("dev-1", key_store=store)
-    doc = json.loads((tmp_path / "device_identity.enc").read_text())
+    doc = json.loads(store.file_path.read_text())
     doc["token"] = doc["token"][:-6] + "AAAAAA"
-    (tmp_path / "device_identity.enc").write_text(json.dumps(doc))
+    store.file_path.write_text(json.dumps(doc))
     regenerated = DeviceIdentity("dev-1", key_store=DeviceKeyStore("dev-1", base_dir=tmp_path, keyring_backend=FailKeyring()))
     assert regenerated.public_key_b64() != original.public_key_b64()
     assert "no se pudo descifrar" in (regenerated.key_store.warning or "")
-    assert list(tmp_path.glob("device_identity.enc.broken-*"))
-    # otro dispositivo no puede abrir el archivo de este
+    assert list(tmp_path.glob("device_identity-*.enc.broken-*"))
+    # el archivo de un dispositivo no sirve para otro (ni con el nombre cambiado)
     other = DeviceKeyStore("dev-2", base_dir=tmp_path, keyring_backend=FailKeyring())
+    other.file_path.write_bytes(store.file_path.read_bytes())
     assert DeviceIdentity("dev-2", key_store=other).public_key_b64() != regenerated.public_key_b64()
+    assert "no se pudo descifrar" in (other.warning or "")
 
 
 def test_device_certificate_requires_the_unlocked_human_key(tmp_path: Path) -> None:
@@ -146,3 +148,37 @@ def test_device_certificate_requires_the_unlocked_human_key(tmp_path: Path) -> N
     assert ident.certificate_is_valid(forged) is False
     # persistido y reutilizado aunque despues no haya clave humana
     assert DeviceIdentity("dev-1", key_store=store).device_certificate() == cert
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# F1.4 Esquema: migracion idempotente (mismo patron que pane_identities) con columnas de reserva del puntero
+# ----------------------------------------------------------------------------------------------------------------
+
+
+def test_relay_schema_migration_is_idempotent_and_reserves_pointer_columns(tmp_path: Path) -> None:
+    import sqlite3 as _sqlite3
+
+    from src.storage.db import DatabaseManager
+
+    path = tmp_path / "old.db"
+    with _sqlite3.connect(str(path)) as conn:  # tabla de una version anterior, sin columnas de reserva
+        conn.execute(
+            "CREATE TABLE relay_messages (msg_id TEXT PRIMARY KEY, project_uuid TEXT NOT NULL, from_principal TEXT "
+            "NOT NULL, to_principal TEXT NOT NULL, kind TEXT NOT NULL, chain_id TEXT NOT NULL, hop INTEGER NOT NULL, "
+            "parent_msg_id TEXT, trust TEXT NOT NULL, content_hash TEXT NOT NULL, content TEXT, envelope_json TEXT "
+            "NOT NULL, state TEXT NOT NULL, created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, "
+            "updated_at_ms INTEGER NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO relay_messages VALUES ('m1','p','pane:a','pane:b','note','c',0,NULL,'pane_authenticated',"
+            "'sha256:x','hola','{}','queued',1,2,1)"
+        )
+    for _ in range(2):
+        db = DatabaseManager(db_path=str(path))
+        db.close()
+    with _sqlite3.connect(str(path)) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(relay_messages)")}
+        assert {"pointer_state", "pointer_pty_incarnation", "state_reason", "card_id", "purged_at_ms"} <= cols
+        assert conn.execute("SELECT content FROM relay_messages WHERE msg_id='m1'").fetchone()[0] == "hola"
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"relay_messages", "relay_audit", "relay_pause"} <= tables

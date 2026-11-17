@@ -226,6 +226,9 @@ class ApplicationFactory:
         okf_meta_repo = SqliteOkfMetadataRepository(db)
         extension_repo = SqliteExtensionRegistryRepository(db)
         pane_identity_repo = SqlitePaneIdentityRepository(db)
+        from src.adapters.persistence.relay_sqlite import SqliteRelayStore
+
+        relay_store = SqliteRelayStore(db)
 
         # Buses
         resolved_event_bus = event_bus if event_bus is not None else DomainEventBus()
@@ -348,6 +351,7 @@ class ApplicationFactory:
             okf_meta_repo=okf_meta_repo,
             extension_repo=extension_repo,
             pane_identity_repo=pane_identity_repo,
+            relay_store=relay_store,
             event_bus=resolved_event_bus,
             bus=resolved_bus,
             kanban_service=kanban_service,
@@ -357,6 +361,32 @@ class ApplicationFactory:
             connectors=connectors,
             collaboration_service=collaboration_service,
         )
+
+    @staticmethod
+    def message_relay_service(kernel: CoreKernel, pane_directory: Any = None) -> Any:
+        """`MessageRelayService` del Hub, uno por kernel (lo comparten el Hub MCP y el puente de la GUI).
+
+        La clave del dispositivo se carga en el primer sobre (perezosa: llavero del SO o archivo cifrado)."""
+        with kernel._lock:
+            service = getattr(kernel, "message_relay_service", None)
+            if service is None:
+                from src.adapters.identity.ed25519_identity import build_device_identity
+                from src.core.services.message_relay_service import MessageRelayService
+
+                store = getattr(kernel, "relay_store", None)
+                if store is None:
+                    from src.adapters.persistence.relay_sqlite import SqliteRelayStore
+
+                    store = kernel.relay_store = SqliteRelayStore(kernel.db)
+                service = MessageRelayService(
+                    store=store,
+                    identity_factory=lambda: build_device_identity(kernel),
+                    pane_directory=pane_directory,
+                )
+                kernel.message_relay_service = service
+            elif pane_directory is not None and service.pane_directory is None:
+                service.pane_directory = pane_directory
+            return service
 
     @staticmethod
     def create_peer_network(

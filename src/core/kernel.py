@@ -82,6 +82,7 @@ class CoreKernel:
         connectors: Optional[Dict[str, Any]] = None,
         collaboration_service: Optional[Any] = None,
         pane_identity_repo: Optional[Any] = None,
+        relay_store: Optional[Any] = None,
     ) -> None:
         self._lock = threading.RLock()
         self._closed = False
@@ -99,6 +100,10 @@ class CoreKernel:
         self.extension_repo = extension_repo
         # Identidad estable de paneles por (proyecto, ranura) y su Auto-Relay (Ola 2); None sin persistencia.
         self.pane_identity_repo = pane_identity_repo
+        # Bandeja persistente + auditoria del relevo (Ola 3). El SERVICIO del relevo solo lo compone el Hub
+        # (`ApplicationFactory.message_relay_service`), nunca un proceso MCP independiente.
+        self.relay_store = relay_store
+        self.message_relay_service: Optional[Any] = None
 
         # Mensajería y eventos
         self.event_bus = event_bus

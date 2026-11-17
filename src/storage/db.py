@@ -720,6 +720,9 @@ class DatabaseManager:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_votes_unique ON human_jury_votes(ticket_id, node_uuid);
                 """)
                 self._migrate_pane_identities(conn)
+                from src.storage.relay_schema import migrate_relay_tables
+
+                migrate_relay_tables(conn)  # Ola 3: bandeja persistente y auditoria del relevo
 
     @staticmethod
     def _migrate_pane_identities(conn: sqlite3.Connection) -> None:
