@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 import psutil
 
 from src.adapters.terminal.cli_catalog import CliSpec
+from src.core.services.message_relay_service import TOOL_TIMEOUT_MS
 
 logger = logging.getLogger("mcp2p.adapters.terminal.mcp_injection")
 
@@ -83,14 +84,20 @@ class McpInjection:
 def _render_config(fmt: str, hub_url: str, token: str) -> Dict[str, Any]:
     auth = {"Authorization": f"Bearer {token}"}
     if fmt == "claude_mcp_json":
-        return {"mcpServers": {MCP_SERVER_NAME: {"type": "http", "url": hub_url, "headers": auth}}}
+        return {
+            "mcpServers": {
+                MCP_SERVER_NAME: {"type": "http", "url": hub_url, "headers": auth, "timeout": TOOL_TIMEOUT_MS}
+            }
+        }
     if fmt == "opencode_json":
         return {
             "$schema": "https://opencode.ai/config.json",
             "mcp": {MCP_SERVER_NAME: {"type": "remote", "url": hub_url, "headers": auth, "enabled": True}},
         }
     if fmt == "gemini_settings_json":
-        return {"mcpServers": {MCP_SERVER_NAME: {"httpUrl": hub_url, "headers": auth}}}
+        return {
+            "mcpServers": {MCP_SERVER_NAME: {"httpUrl": hub_url, "headers": auth, "timeout": TOOL_TIMEOUT_MS}}
+        }
     raise McpInjectionError(f"formato de configuracion MCP desconocido: {fmt!r}")
 
 

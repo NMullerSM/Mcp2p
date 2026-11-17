@@ -50,6 +50,17 @@ class PaneRootProcess:
         assert reply.get("ok"), reply
         return reply["result"]
 
+    def session_start(self, url: str, token: str) -> None:
+        """Abre un «agente» persistente (hijo de esta raiz) con una sesion MCP viva."""
+        reply = self._ask({"op": "session_start", "url": url, "token": token})
+        assert reply.get("ready"), reply
+
+    def session_call(self, tool: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Llamada por la sesion persistente: devuelve {ok, result, t0, t1}; bloquea mientras dure (inbox_wait)."""
+        reply = self._ask({"op": "session_call", "tool": tool, "args": args or {}})
+        assert reply.get("ok"), reply
+        return reply
+
     def call_from_orphan(
         self, url: str, token: str, tool: str, args: Optional[Dict[str, Any]], out: Path, *, new_session: bool
     ) -> Dict[str, Any]:

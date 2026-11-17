@@ -44,6 +44,8 @@ class PaneSessionRecord:
     cwd: Optional[str] = None
     # Auto-Relay POR PANEL (D2): apagado por defecto y persistido por (proyecto, ranura).
     auto_relay_enabled: bool = False
+    # Modo trabajador POR PANEL (F2.4): el agente se queda en `inbox_wait`; persistido por (proyecto, ranura).
+    worker_mode: bool = False
     # Vinculo con el proceso raiz del PTY (Ola 3, EGM-105): `pid` + `create_time` contra la reutilizacion de pids.
     # Sin `pid_create_time` el panel no esta ligado a ningun proceso y el relevo lo rechaza (fallo cerrado).
     pid_create_time: Optional[float] = None
@@ -66,6 +68,7 @@ class PaneSessionRecord:
             "project_uuid": self.project_uuid,
             "cwd": self.cwd,
             "auto_relay_enabled": self.auto_relay_enabled,
+            "worker_mode": self.worker_mode,
         }
         if include_token:
             data["session_token"] = self.session_token
@@ -188,6 +191,7 @@ class PaneRegistry:
                     "pane_slot": norm_pane_id,
                     "node_uuid": new_pane_node_uuid(proj, norm_pane_id),
                     "auto_relay_enabled": False,
+                    "worker_mode": False,
                 }
                 self._memory_identities[key] = ident
             return dict(ident)
@@ -215,12 +219,14 @@ class PaneRegistry:
         if node_uuid:
             resolved_node = node_uuid
             relay_flag = bool(auto_relay_enabled)
+            worker_flag = False
         else:
             identity = self.resolve_pane_identity(norm_pane_id, proj, touch=True)
             resolved_node = str(identity["node_uuid"])
             relay_flag = (
                 bool(identity.get("auto_relay_enabled")) if auto_relay_enabled is None else bool(auto_relay_enabled)
             )
+            worker_flag = bool(identity.get("worker_mode"))
         resolved_agent = agent_name or f"{cli_profile}-{norm_pane_id}"
         pid_ctime = self._process_create_time(pid)
 
@@ -248,6 +254,7 @@ class PaneRegistry:
                 project_uuid=proj,
                 cwd=cwd,
                 auto_relay_enabled=relay_flag,
+                worker_mode=worker_flag,
             )
             self._panes[norm_pane_id] = record
             payload = record.to_dict(include_token=True)
@@ -442,6 +449,25 @@ class PaneRegistry:
                     ident["auto_relay_enabled"] = bool(enabled)
         with self._lock:
             rec.auto_relay_enabled = bool(enabled)
+            return rec
+
+    def set_worker_mode(self, pane_id: int | str, enabled: bool) -> Optional[PaneSessionRecord]:
+        """Cambia el modo trabajador de un panel ACTIVO y lo persiste por (proyecto, ranura); None si no hay panel."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+            proj = rec.project_uuid
+        if self._identity_repo is not None:
+            self._identity_repo.set_pane_worker_mode(proj, norm_pane_id, bool(enabled))
+        else:
+            with self._lock:
+                ident = self._memory_identities.get((proj, norm_pane_id))
+                if ident is not None:
+                    ident["worker_mode"] = bool(enabled)
+        with self._lock:
+            rec.worker_mode = bool(enabled)
             return rec
 
 

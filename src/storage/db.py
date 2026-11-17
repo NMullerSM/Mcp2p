@@ -723,6 +723,9 @@ class DatabaseManager:
                 from src.storage.relay_schema import migrate_relay_tables
 
                 migrate_relay_tables(conn)  # Ola 3: bandeja persistente y auditoria del relevo
+                from src.storage.operator_schema import migrate_operator_tables
+
+                migrate_operator_tables(conn)  # Ola 4: sesiones del operador ligadas al proceso del harness
 
     @staticmethod
     def _migrate_pane_identities(conn: sqlite3.Connection) -> None:
@@ -749,6 +752,8 @@ class DatabaseManager:
             conn.execute("ALTER TABLE pane_identities ADD COLUMN auto_relay_enabled INTEGER NOT NULL DEFAULT 0;")
         if "last_spawned_at" not in cols:
             conn.execute("ALTER TABLE pane_identities ADD COLUMN last_spawned_at TEXT;")
+        if "worker_mode" not in cols:  # modo trabajador (F2.4): el agente se queda en inbox_wait
+            conn.execute("ALTER TABLE pane_identities ADD COLUMN worker_mode INTEGER NOT NULL DEFAULT 0;")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_identities_node ON pane_identities(node_uuid);")
 
     def _ensure_default_project(self) -> None:
@@ -2484,6 +2489,7 @@ class DatabaseManager:
             "pane_slot": row["pane_slot"],
             "node_uuid": row["node_uuid"],
             "auto_relay_enabled": bool(row["auto_relay_enabled"]),
+            "worker_mode": bool(row["worker_mode"]),
             "created_at": row["created_at"],
             "last_spawned_at": row["last_spawned_at"],
         }
@@ -2547,6 +2553,19 @@ class DatabaseManager:
             with conn:
                 conn.execute(
                     "UPDATE pane_identities SET auto_relay_enabled = ? WHERE project_uuid = ? AND pane_slot = ?;",
+                    (1 if enabled else 0, project_uuid or "", pane_slot),
+                )
+        identity = self.get_pane_identity(project_uuid, pane_slot)
+        assert identity is not None
+        return identity
+
+    def set_pane_worker_mode(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]:
+        """Persiste el modo trabajador del panel (proyecto, ranura); crea la identidad si faltaba."""
+        self.get_or_create_pane_identity(project_uuid, pane_slot)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE pane_identities SET worker_mode = ? WHERE project_uuid = ? AND pane_slot = ?;",
                     (1 if enabled else 0, project_uuid or "", pane_slot),
                 )
         identity = self.get_pane_identity(project_uuid, pane_slot)

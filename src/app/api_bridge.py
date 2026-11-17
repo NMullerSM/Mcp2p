@@ -746,6 +746,9 @@ class ApiBridge:
     def pty_set_auto_relay(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
         return self.extensions_ui.pty_set_auto_relay(pane_id=pane_id, enabled=enabled)
 
+    def pty_set_worker_mode(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
+        return self.extensions_ui.pty_set_worker_mode(pane_id=pane_id, enabled=enabled)
+
     # Ola 3: relevo persistente (bandeja del humano, auditoria, parada). Solo backend; la UI llega despues.
     def relay_list_human_inbox(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         return self.relay_ui.relay_list_human_inbox(project_uuid=project_uuid)

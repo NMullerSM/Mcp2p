@@ -32,6 +32,7 @@ DEFAULT_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 CONTENT_RETENTION_DAYS = 30  # D19: el texto se borra a los 30 dias; los hashes de auditoria se conservan siempre
 CONTENT_RETENTION_MS = CONTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
 MAX_WAIT_MS = 300_000
+TOOL_TIMEOUT_MS = MAX_WAIT_MS + 30_000  # limite por llamada MCP que se escribe en la configuracion de cada CLI
 AGENT_KINDS = frozenset({"note", "task.request", "task.reply"})
 GLOBAL_PAUSE_SCOPE = "global"
 HUMAN_UI_ACTOR = "human_ui"

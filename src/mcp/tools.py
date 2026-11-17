@@ -29,6 +29,7 @@ from src.mcp.pane_registry import (
     get_current_pane_session,
 )
 from src.mcp.peer_binding import legacy_peer_warning, peer_mismatch_response, relay_peer_allowed
+from src.mcp.worker_protocol import worker_fields
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
@@ -1911,7 +1912,9 @@ class MCPToolsHandler:
             n = int(limit)
         except (TypeError, ValueError):
             n = 10
-        return self._relay_json(service.next_for(rec, limit=n, include_unacked=include_unacked is True))
+        return self._relay_json(
+            worker_fields(service.next_for(rec, limit=n, include_unacked=include_unacked is True), rec)
+        )
 
     def inbox_wait(
         self,
@@ -1928,7 +1931,7 @@ class MCPToolsHandler:
             n = int(limit)
         except (TypeError, ValueError):
             n = 10
-        return self._relay_json(service.wait_for(rec, timeout_ms=timeout_ms, limit=n))
+        return self._relay_json(worker_fields(service.wait_for(rec, timeout_ms=timeout_ms, limit=n), rec))
 
     def inbox_ack(
         self,

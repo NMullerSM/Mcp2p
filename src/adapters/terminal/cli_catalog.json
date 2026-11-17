@@ -177,9 +177,9 @@
       "mcp": {
         "method": "flag",
         "format": "none",
-        "argv": ["-c", "mcp_servers.mcp2p.url=\"{hub_url}\"", "-c", "mcp_servers.mcp2p.bearer_token_env_var=\"MCP2P_SESSION_TOKEN\""],
+        "argv": ["-c", "mcp_servers.mcp2p.url=\"{hub_url}\"", "-c", "mcp_servers.mcp2p.bearer_token_env_var=\"MCP2P_SESSION_TOKEN\"", "-c", "mcp_servers.mcp2p.tool_timeout_sec=330"],
         "verified": false,
-        "note": "NO verificado con binario (codex no esta instalado). Segun la documentacion, mcp_servers.<id>.{url,bearer_token_env_var} en config.toml; se pasan como sobrescrituras `-c` (solo viaja el NOMBRE de la variable; el token queda en el entorno del panel)."
+        "note": "NO verificado con binario (codex no esta instalado). Documentado: mcp_servers.<id>.{url,bearer_token_env_var,tool_timeout_sec} en config.toml, como `-c` (el token no viaja: solo el nombre de la variable). tool_timeout_sec sube el limite de 60 s para inbox_wait."
       },
       "resume": {
         "argv": ["resume"],

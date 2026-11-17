@@ -7,6 +7,9 @@ Lee ordenes JSON por stdin, una por linea, y responde una linea JSON por stdout:
 - {"op": "orphan", "url", "token", "tool", "args", "out", "new_session": bool}: lanza un intermedio que lanza el
   cliente (con setsid si new_session y POSIX) y TERMINA en el acto: el cliente queda huerfano fuera del arbol,
   como un proceso demonizado. El resultado lo escribe el cliente en `out`.
+- {"op": "session_start", "url", "token"}: lanza un HIJO persistente (`agent_session.py`) con una sesion MCP abierta;
+  {"op": "session_call", "tool", "args"} le reenvia una llamada y devuelve su respuesta (con tiempos). Un agente en
+  `inbox_wait` mantiene esa llamada abierta, igual que un CLI real.
 - {"op": "exit"}.
 """
 
@@ -19,6 +22,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CALL = os.path.join(HERE, "mcp_http_call.py")
+SESSION = os.path.join(HERE, "agent_session.py")
 
 
 def _client_argv(cmd: dict, options: list | None = None) -> list:
@@ -36,9 +40,19 @@ def _spawn_orphan(cmd: dict) -> int:
     return 0
 
 
+def _stop_agent(agent: subprocess.Popen) -> None:
+    try:
+        agent.stdin.write(json.dumps({"op": "exit"}) + "\n")
+        agent.stdin.flush()
+        agent.wait(timeout=10)
+    except Exception:
+        agent.kill()
+
+
 def main() -> int:
     if len(sys.argv) > 2 and sys.argv[1] == "--spawn-orphan":
         return _spawn_orphan(json.loads(sys.argv[2]))
+    agent = None
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:
@@ -46,7 +60,24 @@ def main() -> int:
         cmd = json.loads(raw)
         op = cmd.get("op")
         if op == "exit":
+            if agent is not None:
+                _stop_agent(agent)
             return 0
+        if op == "session_start":
+            agent = subprocess.Popen(
+                [sys.executable, SESSION, cmd["url"], cmd["token"]],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            )
+            reply = agent.stdout.readline().strip() or json.dumps({"ok": False, "error": "la sesion no arranco"})
+            sys.stdout.write(reply + "\n")
+            sys.stdout.flush()
+            continue
+        if op == "session_call":
+            agent.stdin.write(json.dumps({"tool": cmd["tool"], "args": cmd.get("args") or {}}) + "\n")
+            agent.stdin.flush()
+            sys.stdout.write((agent.stdout.readline().strip() or json.dumps({"ok": False, "error": "sin respuesta"})) + "\n")
+            sys.stdout.flush()
+            continue
         if op == "call":
             proc = subprocess.run(_client_argv(cmd), capture_output=True, text=True, timeout=120)
             line = (proc.stdout or "").strip().splitlines()

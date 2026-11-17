@@ -616,5 +616,8 @@ class SqlitePaneIdentityRepository(_BaseSqliteRepository):
     def set_pane_auto_relay(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]:
         return self.db.set_pane_auto_relay(project_uuid, pane_slot, enabled)
 
+    def set_pane_worker_mode(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]:
+        return self.db.set_pane_worker_mode(project_uuid, pane_slot, enabled)
+
     def list_pane_identities(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
         return self.db.list_pane_identities(project_uuid)
