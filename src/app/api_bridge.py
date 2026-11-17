@@ -750,6 +750,13 @@ class ApiBridge:
         return self.extensions_ui.pty_set_worker_mode(pane_id=pane_id, enabled=enabled)
 
     # Ola 3: relevo persistente (bandeja del humano, auditoria, parada). Solo backend; la UI llega despues.
+    def relay_send_as_human(
+        self, project_uuid: Any = None, target_pane_id: Any = None, text: Any = "", kind: Any = "note"
+    ) -> Dict[str, Any]:
+        return self.relay_ui.relay_send_as_human(
+            project_uuid=project_uuid, target_pane_id=target_pane_id, text=text, kind=kind
+        )
+
     def relay_list_human_inbox(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         return self.relay_ui.relay_list_human_inbox(project_uuid=project_uuid)
 

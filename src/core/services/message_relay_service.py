@@ -21,7 +21,7 @@ import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.core.domain.envelope import EnvelopeError, build_header, content_hash, header_of
-from src.core.domain.identity import Principal, TrustLevel, cap_agent_trust
+from src.core.domain.identity import Principal, PrincipalKind, TrustLevel, cap_agent_trust
 from src.core.domain.relay_chain import CHAIN_DEPTH_EXCEEDED, DEFAULT_MAX_CHAIN_DEPTH, ChainTracker
 
 logger = logging.getLogger("mcp2p.core.services.message_relay")
@@ -37,6 +37,7 @@ AGENT_KINDS = frozenset({"note", "task.request", "task.reply"})
 GLOBAL_PAUSE_SCOPE = "global"
 HUMAN_UI_ACTOR = "human_ui"
 _PURGE_INTERVAL_MS = 60 * 60 * 1000
+HUMAN_PRINCIPAL_ID = "local"  # remitente `human:local` de los mensajes que escribe el humano en la GUI
 
 
 def _now_ms() -> int:
@@ -210,16 +211,21 @@ class MessageRelayService:
         parent: Optional[Dict[str, Any]] = None,
         target_rec: Any = None,
     ) -> Dict[str, Any]:
-        """`sender` es la sesion de panel AUTENTICADA (nunca algo declarado por el agente)."""
+        """`sender` es la sesion de panel AUTENTICADA (nunca algo declarado por el agente).
+
+        `sender_principal` y `trust_override` los usa SOLO `submit_as_human` (accion del humano en la GUI): ninguna
+        herramienta MCP los expone."""
         now = int(self._clock_ms())
         self._maintenance(now)
-        from_p = self.principal_of(sender)
+        from_p = sender_principal if sender_principal is not None else self.principal_of(sender)
         project = from_p.project_uuid
         if not isinstance(text, str) or not text.strip():
             return _err("EMPTY_MESSAGE", "El mensaje no puede estar vacío.")
         try:
             size = len(text.encode("utf-8"))
         except UnicodeEncodeError:
+        sender_principal: Optional[Principal] = None,
+        trust_override: Optional[TrustLevel] = None,
             return _err("INVALID_MESSAGE", "El mensaje no es texto UTF-8 valido.")
         if size > MAX_MESSAGE_BYTES:
             return _err(
@@ -247,7 +253,7 @@ class MessageRelayService:
             parent_chain_id=(parent or {}).get("chain_id"),
             parent_hop=(parent or {}).get("hop"),
         )
-        trust = cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
+        trust = trust_override or cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
         msg_id = str(uuid.uuid4())
         identity = self.identity
         try:
@@ -341,6 +347,31 @@ class MessageRelayService:
         ):
             return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje recibido con ese msg_id.")
         if not str(original["from_principal"]).startswith("pane:"):
+    def human_key_unlocked(self) -> bool:
+        """True si la clave humana del kernel esta disponible y desbloqueada (hay certificado de dispositivo)."""
+        try:
+            return self.identity.device_certificate() is not None
+        except Exception:
+            return False
+
+    def submit_as_human(
+        self, *, text: Any, target_rec: Any, kind: str = "note", project_uuid: str = ""
+    ) -> Dict[str, Any]:
+        """Mensaje que escribe el HUMANO desde la GUI a un panel: sobre firmado con `from = human:local`.
+
+        Confianza (solo niveles ya definidos): `human_confirmed` si la clave humana esta desbloqueada; si no,
+        `pane_authenticated`. Un agente no puede llegar aqui (no hay herramienta MCP) y no puede responder a este
+        remitente (`NOT_REPLYABLE`): el humano lee la respuesta en la terminal del agente."""
+        trust = TrustLevel.HUMAN_CONFIRMED if self.human_key_unlocked() else TrustLevel.PANE_AUTHENTICATED
+        return self.submit(
+            None,
+            text=text,
+            kind=kind,
+            target_rec=target_rec,
+            sender_principal=Principal(PrincipalKind.HUMAN, HUMAN_PRINCIPAL_ID, project_uuid=project_uuid),
+            trust_override=trust,
+        )
+
             return _err("NOT_REPLYABLE", "Ese mensaje no admite respuesta.")
         target = self._pane_by_node(str(original["from_principal"])[5:], from_p.project_uuid)
         if target is None:
