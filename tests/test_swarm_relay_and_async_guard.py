@@ -371,10 +371,11 @@ def test_mcp_handler_and_server_await_next_assignment_with_egm22_protection(tmp_
         tools_map = getattr(getattr(srv, "_tool_manager", None), "_tools", {})
         assert "await_next_assignment" in tools_map
         tool_fn = tools_map["await_next_assignment"].fn
+        # F0.2: servidor independiente (sin Hub ni token de panel) -> fallo cerrado, node_uuid autodeclarado inutil.
         raw_res = tool_fn(nodeUuid="node-srv", timeoutMs=0)
         parsed = json.loads(raw_res)
-        assert parsed["success"] is True
-        assert parsed["has_assignment"] is False
+        assert parsed["success"] is False
+        assert parsed["code"] == "HUB_REQUIRED"
     finally:
         srv_handler = getattr(srv, "mcp2p_handler", None)
         if srv_handler is not None:

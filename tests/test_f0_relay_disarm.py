@@ -294,3 +294,110 @@ def test_ast_check_actually_detects_a_pty_write() -> None:
     tree = ast.parse("def f(connector):\n    connector.send_input(1, 'x')\n    os.write(3, b'x')\n")
     names = [_call_name(n) for n in ast.walk(tree) if isinstance(n, ast.Call)]
     assert "connector.send_input" in names and "os.write" in names
+
+
+# ----------------------------------------------------------------------------------------------------------
+# F0.2 Fallo cerrado fuera del Hub
+# ----------------------------------------------------------------------------------------------------------
+
+
+def _clean_env() -> Dict[str, str]:
+    import os
+
+    return {k: v for k, v in os.environ.items() if not k.startswith("MCP2P_HUB") and k != "MCP2P_SESSION_TOKEN"}
+
+
+def test_standalone_server_answers_hub_required_and_persists_no_forged_sender(tmp_path: Path, monkeypatch) -> None:
+    from src.mcp.server import create_mcp_server
+
+    monkeypatch.delenv("MCP2P_SESSION_TOKEN", raising=False)
+    srv = create_mcp_server(db_path=str(tmp_path / "standalone.db"))
+    handler = srv.mcp2p_handler
+    try:
+        proj = handler.db.create_project("P", str(tmp_path / "repo"))["project_uuid"]
+        tools = srv._tool_manager._tools
+        assert {"send_pane_message", "list_swarm_panes", "await_next_assignment"} <= set(tools)
+        outs = [
+            tools["send_pane_message"].fn(
+                project_uuid=proj, target_node_uuid="pane-x", message="hola", node_uuid="human:owner"
+            ),
+            tools["list_swarm_panes"].fn(project_uuid=proj),
+            tools["await_next_assignment"].fn(node_uuid="human:owner", timeout_ms=0),
+        ]
+        for raw in outs:
+            parsed = json.loads(raw)
+            assert parsed["success"] is False and parsed["code"] == "HUB_REQUIRED", parsed
+        # EGM-106: el remitente autodeclarado no se persiste en a2a_messages
+        assert handler.db.get_recent_a2a_messages(proj, limit=10) == []
+    finally:
+        handler.close()
+
+
+def test_registry_without_a_pane_token_is_also_hub_required(swarm_no_pty: Swarm, monkeypatch) -> None:
+    monkeypatch.delenv("MCP2P_SESSION_TOKEN", raising=False)
+    h = swarm_no_pty.handler
+    for raw in (
+        h.send_pane_message(project_uuid=swarm_no_pty.proj, target_node_uuid="node-2", message="x", node_uuid="node-1"),
+        h.await_next_assignment(node_uuid="node-2"),
+        h.list_swarm_panes(project_uuid=swarm_no_pty.proj),
+    ):
+        assert json.loads(raw)["code"] == "HUB_REQUIRED"
+    # con un token valido las tres funcionan
+    assert json.loads(h.list_swarm_panes(project_uuid=swarm_no_pty.proj, session_token="tok-1"))["success"] is True
+
+
+@pytest.mark.parametrize(
+    "env,expect_error",
+    [
+        ({}, False),  # modo independiente explicito
+        ({"MCP2P_HUB_URL": "http://127.0.0.1:9", "MCP2P_SESSION_TOKEN": "t"}, False),  # proxy valido
+        ({"MCP2P_SESSION_TOKEN": "t"}, True),  # falta la URL
+        ({"MCP2P_HUB_URL": "http://127.0.0.1:9"}, True),  # falta el token
+        ({"MCP2P_HUB_URL": "http://example.com:9", "MCP2P_SESSION_TOKEN": "t"}, True),  # no loopback
+        ({"MCP2P_HUB_URL": "https://127.0.0.1:9", "MCP2P_SESSION_TOKEN": "t"}, True),  # no http
+    ],
+)
+def test_hub_proxy_misconfiguration_only_when_proxy_was_intended(env: Dict[str, str], expect_error: bool) -> None:
+    from src.mcp.stdio_proxy import hub_proxy_misconfiguration
+
+    assert (hub_proxy_misconfiguration(env) is not None) is expect_error
+
+
+def test_stdio_server_fails_closed_when_proxy_intended_but_hub_url_invalid() -> None:
+    import subprocess
+
+    for extra in (
+        {"MCP2P_SESSION_TOKEN": "tok"},
+        {"MCP2P_HUB_URL": "https://evil.example:1/mcp", "MCP2P_SESSION_TOKEN": "tok"},
+    ):
+        proc = subprocess.run(
+            [sys.executable, "-m", "src.mcp.server", "--transport", "stdio"],
+            env={**_clean_env(), **extra},
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            input="",
+        )
+        assert proc.returncode == 2, (proc.returncode, proc.stderr[-400:])
+        assert "No se arranca un servidor independiente" in proc.stderr
+        assert proc.stdout == ""
+
+
+def test_explicit_standalone_stdio_server_still_starts_without_hub_variables(tmp_path: Path) -> None:
+    import subprocess
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "src.mcp.server", "--transport", "stdio", "--db-path", str(tmp_path / "s.db")],
+        env=_clean_env(),
+        cwd=str(ROOT),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        time.sleep(2.0)
+        assert proc.poll() is None, "el modo independiente explicito no debe romperse"
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)

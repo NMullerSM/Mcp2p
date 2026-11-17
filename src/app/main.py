@@ -173,6 +173,15 @@ def _run_as_mcp_server(args: argparse.Namespace) -> int:
     """
     from src.mcp.server import create_mcp_server, run_mcp_server
 
+    if args.transport == "stdio":
+        from src.mcp.stdio_proxy import hub_proxy_misconfiguration
+
+        problem = hub_proxy_misconfiguration()
+        if problem is not None:
+            # Fallo cerrado (EGM-98): la intencion era el proxy al Hub; no se degrada a un servidor independiente.
+            print(problem, file=sys.stderr, flush=True)
+            return 2
+
     server = create_mcp_server(db_path=args.db_path, transport=args.transport)
     run_mcp_server(server, transport=args.transport, host=args.host, port=args.port)
     return 0

@@ -52,9 +52,13 @@ def test_egm76_mcp_tool_reports_the_applied_timeout(tmp_path: Path) -> None:
 
     from src.storage.db import DatabaseManager
 
-    handler = MCPToolsHandler(db_manager=DatabaseManager(db_path=str(tmp_path / "t.db")))
+    from src.mcp.pane_registry import PaneRegistry
+
+    registry = PaneRegistry()
+    registry.register_pane("pane_1", node_uuid="n1", session_token="tok-n1")
+    handler = MCPToolsHandler(db_manager=DatabaseManager(db_path=str(tmp_path / "t.db")), pane_registry=registry)
     try:
-        out = json.loads(handler.await_next_assignment(node_uuid="n1", timeout_ms="no-es-numero"))
+        out = json.loads(handler.await_next_assignment(node_uuid="n1", session_token="tok-n1", timeout_ms="no-es-numero"))
         assert out["timeout_ms_applied"] == 0 and out["has_assignment"] is False
     finally:
         handler.close()

@@ -57,6 +57,36 @@ def should_use_hub_proxy(
     return hub_url, session_token
 
 
+def hub_proxy_misconfiguration(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """Mensaje de error si el entorno PIDE el proxy al Hub pero no es utilizable; None si no hay intencion o es valido.
+
+    La intencion es proxy cuando `MCP2P_HUB_URL` o `MCP2P_SESSION_TOKEN` estan presentes (los fija MCP2P en los
+    paneles). Una URL ausente, no `http://` o no loopback, o un token ausente, NO debe degradar en silencio a un
+    servidor independiente con otra cola, otra BD e identidad autodeclarada (EGM-98/106). El modo independiente
+    explicito es el de un entorno sin ninguna de las dos variables.
+    """
+    source = env if env is not None else os.environ
+    hub_url = (source.get("MCP2P_HUB_URL") or "").strip()
+    session_token = (source.get("MCP2P_SESSION_TOKEN") or "").strip()
+    if not hub_url and not session_token:
+        return None
+    if should_use_hub_proxy(source) is not None:
+        return None
+    problems = []
+    if not hub_url:
+        problems.append("falta MCP2P_HUB_URL")
+    elif not _is_loopback_http_url(hub_url):
+        problems.append("MCP2P_HUB_URL debe ser una URL http:// de loopback (127.0.0.1, localhost o [::1])")
+    if not session_token:
+        problems.append("falta MCP2P_SESSION_TOKEN")
+    return (
+        "MCP2P: se pidio el modo proxy al Hub pero la configuracion no es valida ("
+        + "; ".join(problems)
+        + "). No se arranca un servidor independiente (EGM-98). Reabre el panel desde MCP2P o, para usar el "
+        "servidor independiente, quita MCP2P_HUB_URL y MCP2P_SESSION_TOKEN del entorno."
+    )
+
+
 async def _serve_stdio_proxy(hub_url: str, session_token: str) -> None:
     """Puentea solicitudes MCP `stdio` locales hacia el `EmbeddedMcpHub` HTTP."""
     async with httpx2.AsyncClient(

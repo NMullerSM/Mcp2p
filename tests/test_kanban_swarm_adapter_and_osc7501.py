@@ -196,7 +196,7 @@ def test_mcp_tools_list_swarm_panes_and_send_pane_message_egm22(tmp_path: Path) 
     )
     try:
         # 1. list_swarm_panes expone paneles y auto_relay_enabled
-        panes_out = json.loads(handler.list_swarm_panes(project_uuid=proj_uuid))
+        panes_out = json.loads(handler.list_swarm_panes(project_uuid=proj_uuid, session_token="tok-pane-1"))
         assert panes_out["success"] is True
         assert panes_out["count"] == 2
         assert "auto_relay_enabled" in panes_out

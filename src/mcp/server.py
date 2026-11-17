@@ -1015,7 +1015,7 @@ def run_mcp_server(
 
 
 def main() -> None:
-    from src.mcp.stdio_proxy import run_stdio_hub_proxy, should_use_hub_proxy
+    from src.mcp.stdio_proxy import hub_proxy_misconfiguration, run_stdio_hub_proxy, should_use_hub_proxy
 
     parser = argparse.ArgumentParser(description="MCP2P: Servidor Local Model Context Protocol")
     parser.add_argument("--db-path", type=str, default=None, help="Ruta a la base de datos SQLite")
@@ -1027,6 +1027,11 @@ def main() -> None:
         if proxy_cfg is not None:
             run_stdio_hub_proxy(proxy_cfg[0], proxy_cfg[1])
             return
+        problem = hub_proxy_misconfiguration()
+        if problem is not None:
+            # Fallo cerrado (EGM-98): la intencion era el proxy; no se degrada a un servidor independiente.
+            print(problem, file=sys.stderr, flush=True)
+            raise SystemExit(2)
 
     server = create_mcp_server(db_path=args.db_path, transport=args.transport)
     run_mcp_server(server, transport=args.transport, host=args.host, port=args.port)
