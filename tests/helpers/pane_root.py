@@ -21,13 +21,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CALL = os.path.join(HERE, "mcp_http_call.py")
 
 
-def _client_argv(cmd: dict) -> list:
-    return [sys.executable, CALL, cmd["url"], cmd["token"], cmd["tool"], json.dumps(cmd.get("args") or {})]
+def _client_argv(cmd: dict, options: list | None = None) -> list:
+    # "--" antes de los posicionales: un token urlsafe puede empezar por "-" y argparse lo tomaria por una opcion.
+    return [sys.executable, CALL, *(options or []), "--", cmd["url"], cmd["token"], cmd["tool"], json.dumps(cmd.get("args") or {})]
 
 
 def _spawn_orphan(cmd: dict) -> int:
     """Modo intermedio: lanza el cliente y sale sin esperarlo."""
-    argv = _client_argv(cmd) + ["--out", cmd["out"], "--wait-orphan", str(os.getpid())]
+    argv = _client_argv(cmd, ["--out", cmd["out"], "--wait-orphan", str(os.getpid())])
     kwargs = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if cmd.get("new_session") and os.name == "posix":
         kwargs["start_new_session"] = True

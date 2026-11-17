@@ -94,7 +94,7 @@ def wait_result_file(path: Path, timeout_s: float = 60.0) -> Dict[str, Any]:
 def call_from_foreign_process(url: str, token: str, tool: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Un proceso AJENO al arbol del panel (hijo directo de pytest) con el token robado."""
     proc = subprocess.run(
-        [sys.executable, str(CALL), url, token, tool, json.dumps(args or {})],
+        [sys.executable, str(CALL), "--", url, token, tool, json.dumps(args or {})],
         capture_output=True,
         text=True,
         timeout=120,

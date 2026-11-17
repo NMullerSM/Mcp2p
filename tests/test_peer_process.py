@@ -219,3 +219,17 @@ def test_relay_allowance_follows_the_binding_context() -> None:
         with peer_binding_context(PeerBinding(status, "pane_1")):
             assert relay_peer_allowed() is False
     assert get_current_peer_binding() is None
+
+
+def test_call_helper_accepts_tokens_that_start_with_a_dash() -> None:
+    # Los tokens urlsafe pueden empezar por "-" (1 de cada 64): sin "--" argparse los tomaba por una opcion y
+    # las pruebas con procesos reales fallaban de forma intermitente con "arguments are required: args".
+    import json as _json
+    import subprocess as _sp
+    import sys as _sys
+    from tests.helpers.relay_lab import CALL
+
+    proc = _sp.run([_sys.executable, str(CALL), "--", "http://127.0.0.1:1/mcp", "-token-con-guion", "list_swarm_panes", "{}"],
+                   capture_output=True, text=True, timeout=60)
+    payload = _json.loads(proc.stdout.strip().splitlines()[-1])
+    assert payload["ok"] is False and "usage" not in payload["error"].lower()
