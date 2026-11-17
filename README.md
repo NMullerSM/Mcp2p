@@ -25,6 +25,13 @@
   (sin exposición en la red local). Para activarlo en LAN: `MCP2P_LAN_BIND_HOST=0.0.0.0` (o la IP de la interfaz). Todo
   payload entrante debe venir firmado con Ed25519 por una clave pública que figure como colaborador aprobado del
   proyecto; cualquier otro paquete se rechaza (401/403).
+* **Solicitudes de Colaborador P2P**: flujo de unión asíncrono (invitación → solicitud pendiente → aprobación del
+  owner → clonado) con identidad por clave pública Ed25519, límite de reintentos con bloqueo progresivo (30 min / 24 h)
+  y transporte modular (WebRTC o intercambio manual de código) para incorporar colaboradores sin exponer credenciales.
+* **Terminales Integradas en Enjambre (Swarm)**: varios paneles de terminal reales dentro de la propia app (PTY nativo
+  en Linux/macOS, ConPTY vía `pywinpty` en Windows ≥ build 17763), cada uno vinculable a una tarjeta del Kanban. Los
+  paneles se comunican entre sí y reciben avisos de Auto-Relay mediante una bandeja de mensajes por nodo, sin exponer
+  nunca PID, telemetría de tecleo humano ni tokens de sesión a los agentes.
 
 ---
 
@@ -37,11 +44,15 @@ Mcp2p/
 │   └── GUIA_DE_USUARIO_Y_UX.md           # Heurísticas de Nielsen y diseño UX
 ├── frontend/                             # Interfaz de usuario SPA en React + Vite + Tailwind/Lucide
 │   ├── src/                              # Componentes visuales conectados de verdad al puente PyWebView
+│   │   └── components/terminals/        # Paneles de terminal del Swarm (modelo, registro, controles)
 │   └── dist/                             # Bundle estático servido localmente a coste cero de red
 ├── src/                                  # Backend modular en Python 3.11+
 │   ├── app/                              # Lógica de arranque (main.py) y puente bidireccional (api_bridge.py)
 │   ├── mcp/                              # Servidor local Model Context Protocol (server.py y tools.py)
 │   ├── a2a/                              # Canal dialéctico Agente-a-Agente y motor de juicio Borda
+│   ├── p2p/                              # Puerto de transporte P2P (WebRTC / adaptador nulo) para colaboradores
+│   ├── runtime/                          # Detección de plataforma de terminal (PTY / ConPTY) por SO real
+│   ├── adapters/terminal/                # Conectores de terminal (ConPTY en Windows, PTY en Linux/macOS)
 │   └── storage/                          # Base de datos SQLite (WAL) y adaptadores de memoria OKF
 ├── run.sh                                # Lanzador automático para Linux / macOS (con auto-build de frontend)
 ├── run.bat                               # Lanzador automático para Windows (con auto-build de frontend)
@@ -136,4 +147,4 @@ mismo valida `tests/test_version_consistency.py` en local.
 PYTHONPATH=. .venv/bin/pytest tests/ -v
 cd frontend && npm test   # vitest: hooks de React (useProjectPulse)
 ```
-Suite exhaustiva con 140 pruebas unitarias y de integración (1 adicional se omite fuera de un host Windows real) cubriendo persistencia, criptografía Ed25519, colisiones de leases (incluida concurrencia real multi-proceso), autenticación del webhook P2P, path traversal, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico, las 25 herramientas MCP y actualización automática multiplataforma. Ver [`CHANGELOG.md`](CHANGELOG.md) para el detalle por versión.
+Suite exhaustiva con 778 pruebas unitarias y de integración en backend (algunas se omiten fuera de un host Windows real, p. ej. las de ConPTY) cubriendo persistencia, criptografía Ed25519, colisiones de leases (incluida concurrencia real multi-proceso), solicitudes de colaborador P2P y su límite de reintentos, autenticación del webhook P2P, path traversal, worktrees aislados, bus dialéctico A2A, tribunal de honor dinámico, el relevo del Swarm de terminales, las herramientas MCP y actualización automática multiplataforma. Ver [`CHANGELOG.md`](CHANGELOG.md) para el detalle por versión.
