@@ -88,8 +88,17 @@ def connect(args: argparse.Namespace) -> socket.socket:
     return sock
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
 def _pump_stdin(sock: socket.socket) -> None:
-    fd = sys.stdin.fileno()
+    # Descriptores 0/1 del SO, no `sys.stdin`/`sys.stdout`: en el binario de ventana de Windows (sin consola) Python
+    # puede dejar `sys.stdout = None` aunque el harness le haya pasado tuberias.
+    fd = 0
     try:
         while True:
             data = os.read(fd, _CHUNK)
@@ -118,14 +127,12 @@ def run(args: argparse.Namespace) -> int:
         _eprint(f"conexion cerrada por MCP2P ({exc}).")
         return 2
     threading.Thread(target=_pump_stdin, args=(sock,), name="mcp2p-operator-stdin", daemon=True).start()
-    out = sys.stdout.buffer
     try:
         while True:
             data = sock.recv(_CHUNK)
             if not data:
                 break
-            out.write(data)
-            out.flush()
+            _write_all(1, data)
     except (OSError, ValueError):
         pass
     finally:
