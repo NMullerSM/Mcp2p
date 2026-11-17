@@ -22,13 +22,27 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 - Bandeja de mensajes entre agentes que no se pierde al cerrar MCP2P. Los agentes la usan con `send_message`,
   `inbox_next`, `inbox_wait` (espera hasta que llega algo), `inbox_ack` e `inbox_reply`. Cada mensaje llega con su
   remitente verificado por MCP2P y separado del texto, que el agente recibe como dato y no como orden tuya.
-- Los mensajes que MCP2P retiene para ti (una conversación automática entre agentes que ya dio su vuelta, o un mensaje
-  que el agente pidió confirmar) quedan guardados en tu bandeja: no se entregan solos. La pantalla para revisarlos y
-  entregarlos o descartarlos, siempre tras ver el texto exacto en un diálogo del sistema, llega en una próxima versión.
+- Bandeja del humano: los mensajes que MCP2P retiene para ti (una conversación automática entre agentes que ya dio su
+  vuelta, o un mensaje que el agente pidió confirmar) aparecen en el panel lateral de Terminales con quién lo envía,
+  a quién va, en qué vuelta de la conversación está y su texto tal cual. Puedes liberarlos o descartarlos; antes se
+  muestra el texto exacto en un diálogo del sistema.
+- Modo trabajador por terminal: un interruptor en «Terminales activas» (apagado por defecto, pide confirmación al
+  encenderlo y se recuerda por proyecto) deja al agente esperando mensajes de otros agentes y respondiéndolos, para que
+  dos agentes conversen sin que escribas nada en sus terminales. MCP2P sigue sin escribir en ninguna terminal: las
+  instrucciones llegan al agente al conectarse y en cada respuesta de su bandeja. Una conversación entre dos agentes se
+  detiene sola tras una respuesta automática y espera tu confirmación.
+- Cada terminal muestra su identidad estable (la misma que firma MCP2P en sus mensajes) y si está en modo trabajador o
+  con el relevo en pausa.
+- El panel lateral de Terminales muestra si el historial de mensajes entre agentes sigue íntegro o ha sido alterado, y
+  tiene el interruptor de la parada general del relevo.
+- Puedes escribir a un agente desde el panel lateral: el mensaje llega a su bandeja como mensaje tuyo, sin teclear en su
+  terminal. Si el agente se lanzó con los permisos saltados, MCP2P te pide confirmar antes en un diálogo del sistema.
 - Parada del relevo: un interruptor general detiene la entrega de mensajes entre agentes sin perder ninguno, y un
   agente puede pausar su propia bandeja con `relay_pause_self`. Solo tú puedes reanudarlos, con confirmación.
 
 ### Mejorado
+- Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que la
+  espera larga del modo trabajador no se corte.
 - Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar
   MCP2P, así que las tarjetas asignadas a ese agente siguen siendo suyas.
 - Al cambiar de proyecto, las terminales del proyecto anterior siguen abiertas pero ocultas, y el panel lateral
