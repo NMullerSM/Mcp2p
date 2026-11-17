@@ -5,7 +5,8 @@ calcula SIEMPRE el Hub a partir de la autenticacion (sesion de panel + vinculo d
 del humano en la GUI). Ningun parametro de una herramienta MCP puede fijarlos (hay prueba AST).
 
 Niveles (de menos a mas confianza). Solo se usan hoy ``unverified``, ``pane_authenticated``, ``operator_delegated`` (Ola
-4) y ``system``; el resto queda reservado para olas posteriores y NO lo emite ningun codigo de esta version:
+4), ``human_confirmed`` (solo para lo que el humano escribe en la GUI con su clave desbloqueada) y ``system``; el resto
+queda reservado para olas posteriores y NO lo emite ningun codigo de esta version:
 
 ======  =====================  ==========================================================================
 Nivel   Nombre                 Base de la prueba
@@ -14,7 +15,7 @@ T0      ``unverified``         Nada verificable (p. ej. contenido importado, fir
 T1      ``pane_authenticated`` Token del panel + proceso par dentro del arbol del panel (EGM-105)
 T1      ``operator_delegated`` Sesion de operador emparejada por proceso y aprobada por el humano (Ola 4, F2)
 T2      ``device_certified``   Sobre de otro dispositivo con certificado firmado por su humano (reservado, P2P)
-T3      ``human_confirmed``    Firma o clic del humano sobre el texto exacto (reservado, Ola 4)
+T3      ``human_confirmed``    Mensaje del humano desde la GUI con la clave humana desbloqueada (liberar no lo concede)
 T4      ``system``             Generado por el propio Hub (avisos, eventos Kanban dirigidos)
 ======  =====================  ==========================================================================
 
@@ -61,7 +62,13 @@ TRUST_RANK = {
 # Niveles que el Hub puede emitir en esta version. Los reservados existen en el enum (para leer sobres de versiones
 # futuras sin romper) pero ningun camino de codigo los asigna hoy.
 ACTIVE_TRUST_LEVELS = frozenset(
-    {TrustLevel.UNVERIFIED, TrustLevel.PANE_AUTHENTICATED, TrustLevel.OPERATOR_DELEGATED, TrustLevel.SYSTEM}
+    {
+        TrustLevel.UNVERIFIED,
+        TrustLevel.PANE_AUTHENTICATED,
+        TrustLevel.OPERATOR_DELEGATED,
+        TrustLevel.HUMAN_CONFIRMED,
+        TrustLevel.SYSTEM,
+    }
 )
 # Lo maximo que vale algo que emite un agente de panel, diga lo que diga su texto.
 MAX_AGENT_TRUST = TrustLevel.PANE_AUTHENTICATED
