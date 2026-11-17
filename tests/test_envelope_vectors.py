@@ -38,6 +38,15 @@ from src.core.domain.identity import (
     parse_principal_uri,
 )
 
+from helpers.relay_lab import install_pty_write_spy  # noqa: E402
+@pytest.fixture(autouse=True)
+def _no_system_pty_writes(monkeypatch):
+    """Invariante F0/D12 en toda la suite nueva: ninguna escritura del sistema en un PTY."""
+    calls = install_pty_write_spy(monkeypatch)
+    yield calls
+    assert calls == [], f"el relevo escribio en un PTY: {calls}"
+
+
 VECTORS = json.loads((Path(__file__).parent / "vectors" / "envelope_v1.json").read_text(encoding="utf-8"))
 SEED = bytes.fromhex(VECTORS["private_key_seed_hex"])
 SK = ed25519.Ed25519PrivateKey.from_private_bytes(SEED)

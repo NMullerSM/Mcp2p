@@ -1,8 +1,9 @@
 """Servicio de aplicación para el relevo push->pull del enjambre.
 
-F0 del dossier 37: el relevo NUNCA escribe en el `stdin` de un PTY. Los mensajes directos entre paneles y los
-avisos del Auto-Relay quedan en una bandeja por nodo destino que el agente recoge con `await_next_assignment`,
-con la procedencia como campo estructurado aparte del texto."""
+F0 del dossier 37: el relevo NUNCA escribe en el `stdin` de un PTY. Ola 3: los mensajes directos entre paneles viven
+en la bandeja PERSISTENTE de `MessageRelayService` (sobre firmado, cadena causal, auditoria); este orquestador solo
+conserva las colas pull de eventos Kanban/Tribunal y los avisos del Auto-Relay (en memoria). `await_next_assignment`
+(alias D20) mezcla ambos: la fuente de mensajes se conecta con `attach_message_source`."""
 
 from __future__ import annotations
 
@@ -26,17 +27,12 @@ MAX_QUEUE_DEPTH = 1024
 MAX_TARGET_QUEUES = 256
 # Una espera ocupa un hilo del threadpool del Hub: se acota (EGM-76). El agente vuelve a llamar al vencer.
 MAX_AWAIT_TIMEOUT_MS = 300_000
-# Tope del texto de un mensaje directo entre paneles, en bytes UTF-8 (EGM-96).
-MAX_DIRECT_MESSAGE_BYTES = 8 * 1024
+# Tope del texto de un mensaje directo entre paneles, en bytes UTF-8 (EGM-96). Definicion unica en el relevo (Ola 3).
+from src.core.services.message_relay_service import MAX_MESSAGE_BYTES as MAX_DIRECT_MESSAGE_BYTES  # noqa: E402
 # Tope de la bandeja de cada nodo destino: al llenarse se RECHAZA el mensaje nuevo (el remitente lo sabe).
 MAX_INBOX_DEPTH = 256
 # La procedencia la fija el servidor a partir de la sesion de panel autenticada por el Hub; nunca el remitente.
 PROVENANCE_VERIFIED_BY = "hub_pane_session"
-
-
-def direct_message_too_large(message: Any) -> bool:
-    """True si `message` supera `MAX_DIRECT_MESSAGE_BYTES` en UTF-8."""
-    return isinstance(message, str) and len(message.encode("utf-8", errors="replace")) > MAX_DIRECT_MESSAGE_BYTES
 
 
 
@@ -95,6 +91,8 @@ class SwarmRelayOrchestrator:
         self._relay_last_sender: Dict[str, str] = {}
         self._dropped_oldest_total = 0
         self._active_waiters: Dict[str, int] = defaultdict(int)
+        # Ola 3: fuente de mensajes directos persistentes (alias `await_next_assignment`): fn(node, proyecto) -> lista.
+        self._message_source: Optional[Callable[[str, Optional[str]], List[Dict[str, Any]]]] = None
 
         if self._event_bus is not None:
             self._event_bus.subscribe("*", self._on_domain_event)
@@ -259,16 +257,26 @@ class SwarmRelayOrchestrator:
         assignment: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Encola una asignación para ``target_node_uuid`` aplicando dedup y Loop Breaker DoD."""
-        return self._enqueue(target_node_uuid, assignment, inbox=False)
+        return self._enqueue(target_node_uuid, assignment)
+
+    def attach_message_source(
+        self, source: Optional[Callable[[str, Optional[str]], List[Dict[str, Any]]]]
+    ) -> None:
+        """Conecta la bandeja persistente (Ola 3): `source(node_uuid, project_uuid)` entrega y confirma mensajes."""
+        with self._lock:
+            self._message_source = source
+
+    def wake(self, node_uuid: str) -> None:
+        """Despierta a quien espera en `await_next_assignment` porque llego algo a la bandeja persistente."""
+        with self._lock:
+            self._notify_waiters_locked((node_uuid or "").strip() or "*")
 
     def _enqueue(
         self,
         target_node_uuid: str,
         assignment: Dict[str, Any],
-        *,
-        inbox: bool,
     ) -> Dict[str, Any]:
-        """Dedup + Loop Breaker comunes; `inbox=True` deja el item en la bandeja del nodo (mensaje directo)."""
+        """Dedup + Loop Breaker comunes de la cola pull (eventos Kanban/Tribunal/A2A)."""
         target = (target_node_uuid or "").strip() or "*"
         if not isinstance(assignment, dict):
             return {
@@ -352,30 +360,6 @@ class SwarmRelayOrchestrator:
                 item["relay_round"] = rounds
                 item["assignment_key"] = loop_key
 
-            if inbox:
-                msg = self._build_inbox_message(
-                    item, target, kind="direct_message", text=str(item.get("message") or "")
-                )
-                err = self._push_inbox_locked(target, msg)
-                if err:
-                    return {
-                        "success": False,
-                        "blocked": True,
-                        "code": err,
-                        "reason": f"Bandeja del destino llena o demasiados destinos (maximo {MAX_INBOX_DEPTH}).",
-                    }
-                return {
-                    "success": True,
-                    "queued": True,
-                    "inbox": True,
-                    "target_node_uuid": target,
-                    "assignment_uuid": item["assignment_uuid"],
-                    "queue_depth": len(self._inbox[target]),
-                    "rounds": rounds,
-                    "assignment_key": loop_key,
-                    "dropped_oldest": False,
-                }
-
             queue = self._queue_for_locked(target)
             if queue is None:
                 return {
@@ -433,6 +417,11 @@ class SwarmRelayOrchestrator:
         """Resultado de espera si hay una asignacion o mensajes de bandeja listos; None si no hay nada."""
         item = self._pop_matching_locked(node_uuid, project_uuid)
         messages = self._pop_inbox_locked(node_uuid, project_uuid) if node_uuid != "*" else []
+        if node_uuid != "*" and self._message_source is not None:
+            try:
+                messages = list(self._message_source(node_uuid, project_uuid)) + messages
+            except Exception:
+                logger.warning("No se pudo leer la bandeja persistente de %s", node_uuid, exc_info=True)
         if item is None and not messages:
             return None
         return {
@@ -609,28 +598,6 @@ class SwarmRelayOrchestrator:
                 ),
             }
 
-    def _resolve_target_node_from_pane(self, pane_id: int | str, project_uuid: str) -> str:
-        """`node_uuid` del panel ACTIVO `pane_id` solo si es del proyecto `project_uuid`; '' si no."""
-        if self.pane_registry is None:
-            return ""
-        get_pane_fn = getattr(self.pane_registry, "get_pane", None)
-        if not callable(get_pane_fn):
-            return ""
-        try:
-            pane = get_pane_fn(pane_id)
-        except ValueError:
-            return ""
-        if pane is None:
-            return ""
-        data = dict(pane) if isinstance(pane, dict) else (
-            pane.to_dict(include_token=False) if hasattr(pane, "to_dict") else {}
-        )
-        if str(data.get("status") or "active").lower() == "closed":
-            return ""
-        if str(data.get("project_uuid") or "") != project_uuid:
-            return ""
-        return str(data.get("node_uuid") or "").strip()
-
     def _find_active_pane_for_node(
         self, node_uuid: str, *, project_uuid: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -748,113 +715,6 @@ class SwarmRelayOrchestrator:
         if err:
             logger.debug("Aviso de Auto-Relay descartado para %s: %s", target, err)
 
-    def send_direct_message(
-        self,
-        *,
-        project_uuid: str,
-        sender_node_uuid: str,
-        target_node_uuid: Optional[str] = None,
-        target_pane_id: Optional[str] = None,
-        message: str,
-        card_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Deja un mensaje directo en la bandeja del nodo/panel destino y lo audita en el A2ABus (solo local).
-
-        `sender_node_uuid` y `project_uuid` DEBEN venir de la sesion de panel autenticada por el Hub. El destino
-        tiene que ser un panel ACTIVO del mismo proyecto: si es de otro proyecto o no existe, la respuesta es la
-        misma (`TARGET_NOT_FOUND`), sin filtrar su existencia (Ola 2). El texto nunca se escribe en un PTY ni sale
-        a pares P2P: el destino lo recoge con `await_next_assignment`.
-        """
-        if not isinstance(message, str) or not message.strip():
-            return {"success": False, "code": "EMPTY_MESSAGE", "error": "El mensaje directo no puede estar vacío."}
-        if direct_message_too_large(message):
-            return {
-                "success": False,
-                "code": "MESSAGE_TOO_LARGE",
-                "max_bytes": MAX_DIRECT_MESSAGE_BYTES,
-                "error": f"El mensaje supera el maximo de {MAX_DIRECT_MESSAGE_BYTES} bytes.",
-            }
-
-        scope = project_uuid.strip() if isinstance(project_uuid, str) else ""
-        requested_node = (target_node_uuid or "").strip() if isinstance(target_node_uuid, str) else ""
-        resolved_target = ""
-        if requested_node:
-            if self._find_active_pane_for_node(requested_node, project_uuid=scope) is not None:
-                resolved_target = requested_node
-        elif target_pane_id is not None:
-            resolved_target = self._resolve_target_node_from_pane(target_pane_id, scope)
-
-        if not resolved_target:
-            return {
-                "success": False,
-                "code": "TARGET_NOT_FOUND",
-                "error": "No hay ningun panel activo con ese destino en este proyecto.",
-            }
-
-        message_uuid = str(uuid.uuid4())
-        assignment: Dict[str, Any] = {
-            "source": "direct_message",
-            "intent": "DIRECT_MESSAGE",
-            "kind": "DIRECT_MESSAGE",
-            "signal_type": "DIRECT_MESSAGE",
-            "project_uuid": project_uuid,
-            "sender_node_uuid": sender_node_uuid,
-            "target_node_uuid": resolved_target,
-            "message": message,
-            "message_uuid": message_uuid,
-        }
-        if card_id:
-            assignment["card_id"] = card_id
-        if session_id:
-            assignment["session_id"] = session_id
-
-        res = self._enqueue(resolved_target, assignment, inbox=True)
-        if res.get("queued") and not res.get("deduplicated"):
-            self._audit_direct_message(
-                project_uuid=project_uuid,
-                message_uuid=message_uuid,
-                sender_node_uuid=sender_node_uuid,
-                target_node_uuid=resolved_target,
-                message=message,
-                card_id=card_id,
-                session_id=session_id,
-            )
-
-        return {
-            **res,
-            "target_node_uuid": resolved_target,
-            "message_uuid": message_uuid,
-        }
-
-    def _audit_direct_message(
-        self,
-        *,
-        project_uuid: str,
-        message_uuid: str,
-        sender_node_uuid: str,
-        target_node_uuid: str,
-        message: str,
-        card_id: Optional[str],
-        session_id: Optional[str],
-    ) -> None:
-        """Registra el mensaje en `a2a_messages` (auditoria local); el bus lo excluye de `outbox_events`."""
-        if self._bus is None:
-            return
-        send_fn = getattr(self._bus, "send_informative", None)
-        try:
-            if callable(send_fn):
-                send_fn(
-                    project_uuid=project_uuid,
-                    sender_node_uuid=sender_node_uuid,
-                    signal_type="DIRECT_MESSAGE",
-                    data={"target_node_uuid": target_node_uuid, "message": message, "session_id": session_id},
-                    card_id=card_id,
-                    message_uuid=message_uuid,
-                )
-        except Exception:
-            logger.warning("No se pudo auditar el mensaje directo %s", message_uuid, exc_info=True)
-
     # ------------------------------------------------------------------
     # Suscriptores de DomainEventBus y A2ABus
     # ------------------------------------------------------------------
@@ -943,7 +803,7 @@ class SwarmRelayOrchestrator:
         if signal_type in _IGNORED_INFORMATIVE_SIGNALS and not explicit_target:
             return
         if signal_type == "DIRECT_MESSAGE":
-            # El mensaje directo llega a la bandeja por `send_direct_message`, con remitente autenticado por el
+            # El mensaje directo llega a la bandeja persistente (`MessageRelayService`), con remitente autenticado por el
             # Hub; un evento A2A con esta señal (p. ej. de un par remoto) no puede entrar por aqui (F0).
             return
 

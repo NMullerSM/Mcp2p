@@ -202,28 +202,41 @@ def test_orchestrator_has_no_pty_dispatch_api_and_takes_no_terminal_connector() 
 # ----------------------------------------------------------------------
 
 
-def test_human_typing_does_not_defer_or_block_inbox_delivery() -> None:
+def _persistent_relay(tmp_path: Path, registry: PaneRegistry, clock: Any = None):
+    """Ola 3: los mensajes directos viven en la bandeja persistente (`MessageRelayService`), no en el orquestador."""
+    from keyring.backends.fail import Keyring as FailKeyring
+
+    from src.adapters.identity.ed25519_identity import DeviceIdentity, DeviceKeyStore
+    from src.adapters.persistence.relay_sqlite import SqliteRelayStore
+    from src.core.services.message_relay_service import MessageRelayService
+
+    db = DatabaseManager(db_path=str(tmp_path / "relay_inbox.db"))
+    ident = DeviceIdentity("dev-test", key_store=DeviceKeyStore("dev-test", base_dir=tmp_path, keyring_backend=FailKeyring()))
+    kwargs = {"clock_ms": clock} if clock is not None else {}
+    return MessageRelayService(store=SqliteRelayStore(db), identity=ident, pane_directory=registry, **kwargs), db
+
+
+def test_human_typing_does_not_defer_or_block_inbox_delivery(tmp_path: Path) -> None:
     now = [1000.0]
     registry = PaneRegistry(clock=lambda: now[0])
     registry.register_pane("pane_1", node_uuid="agent-a", session_token="tok-a", project_uuid="p1")
     registry.register_pane(
         "pane_2", node_uuid="agent-b", session_token="tok-b", project_uuid="p1", auto_relay_enabled=True
     )
-    orch = SwarmRelayOrchestrator(pane_registry=registry, clock=lambda: now[0])
+    service, db = _persistent_relay(tmp_path, registry)
     try:
         registry.record_human_keystroke("pane_2")  # el humano esta tecleando justo en el destino
-        res = orch.send_direct_message(
-            project_uuid="p1", sender_node_uuid="agent-a", target_node_uuid="agent-b", message="hola"
-        )
-        assert res["success"] is True and res["queued"] is True
+        res = service.submit(registry.get_pane("pane_1"), target_node_uuid="agent-b", text="hola")
+        assert res["success"] is True and res["queued"] is True and res["delivered"] is True
         assert "deferred" not in res
-        got = orch.await_next_assignment("agent-b")
-        assert got["has_messages"] is True
-        assert got["messages"][0]["text"] == "hola"
-        assert got["messages"][0]["from"]["node_uuid"] == "agent-a"
-        assert got["messages"][0]["from"]["pane_id"] == "pane_1"
+        got = service.next_for(registry.get_pane("pane_2"))
+        (msg,) = got["messages"]
+        assert msg["payload_untrusted_text"] == "hola"
+        assert msg["mcp2p_envelope"]["from"]["node_uuid"] == "agent-a"
+        assert msg["mcp2p_envelope"]["from"]["pane_id"] == "pane_1"
+        assert msg["mcp2p_envelope"]["verified"] is True
     finally:
-        orch.close()
+        db.close()
 
 
 # ----------------------------------------------------------------------
@@ -268,28 +281,29 @@ def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds() -> None:
         orch.close()
 
 
-def test_loop_breaker_also_stops_direct_message_ping_pong_through_the_inbox() -> None:
-    # Ola 2: el destino de un mensaje directo tiene que ser un panel ACTIVO del mismo proyecto.
+def test_sealed_chain_stops_direct_message_ping_pong_through_the_inbox(tmp_path: Path) -> None:
+    """Antes el Loop Breaker por `card_id` frenaba el ping-pong de mensajes directos (y rotar la tarjeta lo eludia,
+    EGM-93). Ola 3: lo frena la cadena causal sellada por el Hub; la tarjeta no interviene."""
     registry = PaneRegistry()
     registry.register_pane("pane_1", node_uuid="agent-a", project_uuid="p1")
     registry.register_pane("pane_2", node_uuid="agent-b", project_uuid="p1")
-    orch = SwarmRelayOrchestrator(max_relay_rounds=3, pane_registry=registry)
+    service, db = _persistent_relay(tmp_path, registry)
     try:
         results = []
-        for idx in range(8):
-            sender, target = ("agent-a", "agent-b") if idx % 2 == 0 else ("agent-b", "agent-a")
+        for idx in range(4):
+            sender, target = ("pane_1", "pane_2") if idx % 2 == 0 else ("pane_2", "pane_1")
             results.append(
-                orch.send_direct_message(
-                    project_uuid="p1", sender_node_uuid=sender, target_node_uuid=target,
-                    message=f"turno {idx}", card_id="CARD-PP",
+                service.submit(
+                    registry.get_pane(sender), target_pane_id=target, text=f"turno {idx}", card_id=f"CARD-{idx}",
                 )
             )
-        assert results[0]["success"] is True
-        tripped = [r for r in results if r.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED"]
-        assert tripped and tripped[0]["requires_hitl"] is True
-        assert orch.list_tripped_loop_breakers()
+            service.next_for(registry.get_pane(target))
+        assert [r["success"] for r in results[:2]] == [True, True]
+        assert results[2]["code"] == "CHAIN_DEPTH_EXCEEDED" and results[2]["delivered"] is False
+        assert results[2]["parked"] is True
+        assert service.list_human_inbox("p1")[0]["text"] == "turno 2"
     finally:
-        orch.close()
+        db.close()
 
 
 # ----------------------------------------------------------------------

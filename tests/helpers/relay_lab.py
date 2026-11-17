@@ -110,12 +110,17 @@ def call_from_foreign_process(url: str, token: str, tool: str, args: Optional[Di
 class RelayLab:
     """Hub real + dos paneles del mismo proyecto, cada uno ligado a su propio proceso raiz."""
 
-    def __init__(self, tmp_path: Path, *, host: str = "127.0.0.1", pane_count: int = 2) -> None:
+    def __init__(
+        self, tmp_path: Path, *, host: str = "127.0.0.1", pane_count: int = 2, pty_calls: Optional[List[Any]] = None
+    ) -> None:
         from src.core.factory import ApplicationFactory
+        from src.core.kernel import CoreKernel
         from src.mcp.pane_registry import EmbeddedMcpHub, PaneRegistry
 
         self.tmp_path = tmp_path
         self.kernel = ApplicationFactory.create_mcp_kernel(db_path=str(tmp_path / "relay_lab.db"))
+        if pty_calls is not None:
+            self.kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, SpyTerminal(pty_calls))
         self.proj = self.kernel.db.create_project("Proyecto Lab", str(tmp_path / "repo"))["project_uuid"]
         self.registry = PaneRegistry(identity_repo=self.kernel.pane_identity_repo)
         self.panes: List[Dict[str, Any]] = []
@@ -148,3 +153,41 @@ class RelayLab:
             self.hub.stop(timeout_s=5.0)
         finally:
             self.kernel.close()
+
+
+def install_pty_write_spy(monkeypatch: Any) -> List[Any]:
+    """Invariante de F0/D12: espia `send_input` de TODOS los conectores de terminal (AgentTerminalPort).
+
+    Devuelve la lista de llamadas; la suite nueva exige que quede vacia (el relevo nunca escribe en un PTY)."""
+    from src.adapters.outbound.extension_gate import NullAgentTerminalConnector
+    from src.adapters.terminal.pty_host import PosixPtyHostConnector
+    from src.adapters.terminal.supervisor import SafeTerminalHostSupervisor
+    from src.adapters.terminal.winpty_host import WinPtyHostConnector
+
+    calls: List[Any] = []
+    for cls in (PosixPtyHostConnector, WinPtyHostConnector, SafeTerminalHostSupervisor, NullAgentTerminalConnector):
+        original = cls.send_input
+
+        def _spy(self: Any, *args: Any, __orig: Any = original, __cls: Any = cls, **kwargs: Any) -> Any:
+            calls.append((__cls.__name__, args, kwargs))
+            return __orig(self, *args, **kwargs)
+
+        monkeypatch.setattr(cls, "send_input", _spy)
+    return calls
+
+
+class SpyTerminal:
+    """Conector de terminal falso para registrar como PORT_AGENT_TERMINAL: anota cualquier escritura."""
+
+    def __init__(self, calls: List[Any]) -> None:
+        self.calls = calls
+
+    def send_input(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        self.calls.append(("SpyTerminal", args, kwargs))
+        return {"success": True}
+
+    def get_status(self) -> Dict[str, Any]:
+        return {"available": False}
+
+    def list_sessions(self) -> List[Dict[str, Any]]:
+        return []

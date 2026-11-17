@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from helpers.relay_lab import RelayLab, call_from_foreign_process
+from helpers.relay_lab import RelayLab, call_from_foreign_process, install_pty_write_spy
 from src.adapters.identity.peer_process import PsutilPeerProcessResolver, is_loopback_endpoint
 from src.core.ports.identity import PEER_MISMATCH, PEER_VERIFIED, ProcessIdentity
 from src.mcp.pane_registry import PaneRegistry
@@ -32,9 +32,17 @@ from src.mcp.peer_binding import (
 MISMATCH = PEER_PROCESS_MISMATCH
 
 
+@pytest.fixture(autouse=True)
+def _no_system_pty_writes(monkeypatch):
+    """Invariante F0/D12 en toda la suite nueva: ninguna escritura del sistema en un PTY."""
+    calls = install_pty_write_spy(monkeypatch)
+    yield calls
+    assert calls == [], f"el relevo escribio en un PTY: {calls}"
+
+
 @pytest.fixture
-def lab(tmp_path: Path):
-    lab = RelayLab(tmp_path)
+def lab(tmp_path: Path, _no_system_pty_writes):
+    lab = RelayLab(tmp_path, pty_calls=_no_system_pty_writes)
     try:
         yield lab
     finally:

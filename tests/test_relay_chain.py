@@ -91,3 +91,123 @@ def test_origin_trust_is_the_minimum_of_the_chain() -> None:
     tr.observe_delivery("B", chain_id="c", hop=0, trust="unverified")
     assert tr.context_for("B").origin_trust is TrustLevel.UNVERIFIED
     assert tr.next_link("B").origin_trust is TrustLevel.UNVERIFIED
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Extremo a extremo con las herramientas MCP (en proceso): A->B->A->B, card_id rotado, turno humano, respuesta
+# ----------------------------------------------------------------------------------------------------------------
+
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Dict  # noqa: E402
+
+from helpers.relay_lab import SpyTerminal, install_pty_write_spy  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_system_pty_writes(monkeypatch):
+    calls = install_pty_write_spy(monkeypatch)
+    yield calls
+    assert calls == [], f"el relevo escribio en un PTY: {calls}"
+
+
+@pytest.fixture
+def tools(tmp_path: Path, _no_system_pty_writes):
+    from src.core.factory import ApplicationFactory
+    from src.core.kernel import CoreKernel
+    from src.mcp.pane_registry import PaneRegistry
+    from src.mcp.tools import MCPToolsHandler
+
+    kernel = ApplicationFactory.create_mcp_kernel(db_path=str(tmp_path / "chain.db"))
+    kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, SpyTerminal(_no_system_pty_writes))
+    proj = kernel.db.create_project("Cadena", str(tmp_path / "repo"))["project_uuid"]
+    reg = PaneRegistry()
+    reg.register_pane("pane_1", node_uuid="agent-a", project_uuid=proj, session_token="tok-a")
+    reg.register_pane("pane_2", node_uuid="agent-b", project_uuid=proj, session_token="tok-b")
+    handler = MCPToolsHandler(kernel=kernel, owns_kernel=False, pane_registry=reg)
+
+    class _T:
+        registry = reg
+        project = proj
+
+        @staticmethod
+        def call(tool: str, token: str, **kw: Any) -> Dict[str, Any]:
+            return json.loads(getattr(handler, tool)(session_token=token, **kw))
+
+        service = property(lambda self: handler._get_message_relay())
+
+    try:
+        yield _T()
+    finally:
+        handler.close()
+        kernel.close()
+
+
+def _ping(t, sender_tok: str, target: str, text: str, card: str) -> Dict[str, Any]:
+    return t.call("send_message", sender_tok, target_pane_id=target, text=text, card_id=card)
+
+
+def _pull(t, tok: str) -> list:
+    return t.call("inbox_next", tok)["messages"]
+
+
+def test_ping_pong_parks_the_third_message_even_rotating_card_id(tools) -> None:
+    first = _ping(tools, "tok-a", "pane_2", "A->B", "K-1")
+    assert first["success"] and first["chain"]["hop"] == 0
+    assert len(_pull(tools, "tok-b")) == 1
+    second = _ping(tools, "tok-b", "pane_1", "B->A", "K-2")  # otra tarjeta: no cambia nada
+    assert second["success"] and second["chain"] == {**first["chain"], "hop": 1}
+    assert len(_pull(tools, "tok-a")) == 1
+    third = _ping(tools, "tok-a", "pane_2", "A->B otra vez", "K-3")
+    assert third["success"] is False and third["code"] == "CHAIN_DEPTH_EXCEEDED"
+    assert third["delivered"] is False and third["parked"] is True and third["chain"]["hop"] == 2
+    assert _pull(tools, "tok-b") == []  # no llega al agente...
+    (card,) = tools.service.list_human_inbox(tools.project)  # ...queda para el humano
+    assert card["text"] == "A->B otra vez" and card["reason"] == "CHAIN_DEPTH_EXCEEDED"
+    events = [e["event"] for e in tools.service.store.audit_for(third["msg_id"])]
+    assert events == ["submitted", "parked"]
+
+
+def test_reply_inherits_the_chain_and_counts_hops(tools) -> None:
+    first = _ping(tools, "tok-a", "pane_2", "pregunta", "K-1")
+    (item,) = _pull(tools, "tok-b")
+    reply = tools.call("inbox_reply", "tok-b", msg_id=item["mcp2p_envelope"]["msg_id"], text="respuesta")
+    assert reply["success"] and reply["chain"]["chain_id"] == first["chain"]["chain_id"] and reply["chain"]["hop"] == 1
+    (back,) = _pull(tools, "tok-a")
+    assert back["mcp2p_envelope"]["parent_msg_id"] == first["msg_id"] and back["mcp2p_envelope"]["kind"] == "task.reply"
+    again = tools.call("inbox_reply", "tok-a", msg_id=back["mcp2p_envelope"]["msg_id"], text="y otra")
+    assert again["code"] == "CHAIN_DEPTH_EXCEEDED"
+    # no se puede responder a un mensaje que no recibiste
+    assert tools.call("inbox_reply", "tok-b", msg_id=first["msg_id"] + "x", text="?")["code"] == "MESSAGE_NOT_FOUND"
+    assert tools.call("inbox_reply", "tok-a", msg_id=first["msg_id"], text="?")["code"] == "MESSAGE_NOT_FOUND"
+
+
+def test_human_enter_in_the_pane_opens_a_new_chain(tools) -> None:
+    _ping(tools, "tok-a", "pane_2", "1", "K")
+    _pull(tools, "tok-b")
+    _ping(tools, "tok-b", "pane_1", "2", "K")
+    _pull(tools, "tok-a")
+    tools.registry.record_human_keystroke("pane_1")  # teclear sin Enter no es un turno humano
+    assert _ping(tools, "tok-a", "pane_2", "3", "K")["code"] == "CHAIN_DEPTH_EXCEEDED"
+    tools.registry.record_human_keystroke("pane_1", timestamp=time_now() + 1, submitted=True)
+    fresh = _ping(tools, "tok-a", "pane_2", "nuevo turno humano", "K")
+    assert fresh["success"] is True and fresh["chain"]["hop"] == 0
+
+
+def test_human_release_of_a_parked_message_does_not_reset_the_chain(tools) -> None:
+    _ping(tools, "tok-a", "pane_2", "1", "K")
+    _pull(tools, "tok-b")
+    _ping(tools, "tok-b", "pane_1", "2", "K")
+    _pull(tools, "tok-a")
+    parked = _ping(tools, "tok-a", "pane_2", "3", "K")
+    assert tools.service.resolve_parked(parked["msg_id"], "release")["state"] == "queued"
+    (item,) = _pull(tools, "tok-b")
+    assert item["mcp2p_envelope"]["chain"]["hop"] == 2 and item["mcp2p_envelope"]["released_by_human"] is True
+    # B ya arrastra el salto 2: lo siguiente que emita vuelve a esperar al humano
+    assert _ping(tools, "tok-b", "pane_1", "4", "K")["code"] == "CHAIN_DEPTH_EXCEEDED"
+
+
+def time_now() -> float:
+    import time as _time
+
+    return _time.time()

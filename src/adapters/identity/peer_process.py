@@ -192,4 +192,3 @@ class PsutilPeerProcessResolver:
         if not self._owners_in([proc], client, server):
             return False
         return self._in_tree(proc, root)
-
