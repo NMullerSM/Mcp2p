@@ -1,0 +1,628 @@
+{
+  "version": 1,
+  "description": "Vectores fijos del sobre v1 de MCP2P (Ed25519, cabecera JSON canonica). No regenerar: un cambio aqui es un cambio de formato.",
+  "private_key_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "public_key_b64url": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+  "signing_domain": "MCP2P-ENV/1\\n",
+  "valid": [
+    {
+      "name": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "canonical_header": "{\"chain_id\":\"0193b8c2-0000-7000-8000-0000000000c1\",\"content_hash\":\"sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526\",\"content_size\":42,\"created_at\":1763380800000,\"device_cert\":null,\"expires_at\":1763985600000,\"from\":\"pane:pane-7a1b2c3d-1-0badc0de\",\"from_device\":\"device:node-vector\",\"hop\":0,\"kind\":\"note\",\"msg_id\":\"0193b8c2-0000-7000-8000-000000000001\",\"parent_msg_id\":null,\"project_uuid\":\"7a1b2c3d-0000-4000-8000-000000000042\",\"to\":\"pane:pane-7a1b2c3d-2-0ddba11a\",\"trust\":\"pane_authenticated\",\"v\":1}",
+      "signing_input_b64": "TUNQMlAtRU5WLzEKeyJjaGFpbl9pZCI6IjAxOTNiOGMyLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDBjMSIsImNvbnRlbnRfaGFzaCI6InNoYTI1NjpjMWUxNGE3MzFkYzVjMTc3NjQ4ZmUwM2YzNDJiMWM5YzA1MzZiMTc3MTc0NjBmZGVkNzEwYjYxYjYwNWNhNTI2IiwiY29udGVudF9zaXplIjo0MiwiY3JlYXRlZF9hdCI6MTc2MzM4MDgwMDAwMCwiZGV2aWNlX2NlcnQiOm51bGwsImV4cGlyZXNfYXQiOjE3NjM5ODU2MDAwMDAsImZyb20iOiJwYW5lOnBhbmUtN2ExYjJjM2QtMS0wYmFkYzBkZSIsImZyb21fZGV2aWNlIjoiZGV2aWNlOm5vZGUtdmVjdG9yIiwiaG9wIjowLCJraW5kIjoibm90ZSIsIm1zZ19pZCI6IjAxOTNiOGMyLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMSIsInBhcmVudF9tc2dfaWQiOm51bGwsInByb2plY3RfdXVpZCI6IjdhMWIyYzNkLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDA0MiIsInRvIjoicGFuZTpwYW5lLTdhMWIyYzNkLTItMGRkYmExMWEiLCJ0cnVzdCI6InBhbmVfYXV0aGVudGljYXRlZCIsInYiOjF9"
+    },
+    {
+      "name": "reply_unicode_and_controls",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000002",
+        "kind": "task.reply",
+        "from": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-1-0badc0de",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 1,
+        "parent_msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "content_hash": "sha256:418de33e2a3e4d20b253e2343431e6754c4fccbfd2a24a6ee95132f3048d49ae",
+        "content_size": 37,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "v7r-Y8hBa9excxnC8bD62oCyWyBpqNQtnrDZJxluYYIEGuwVY6J0Oewo2c-A6N9orFdnbA2GrYijWEkjFwFoAA"
+        }
+      },
+      "content": "Hola é́ 🚀 \"citado\" \\ \u001b[2K\r\n\u0003 fin",
+      "canonical_header": "{\"chain_id\":\"0193b8c2-0000-7000-8000-0000000000c1\",\"content_hash\":\"sha256:418de33e2a3e4d20b253e2343431e6754c4fccbfd2a24a6ee95132f3048d49ae\",\"content_size\":37,\"created_at\":1763380800000,\"device_cert\":null,\"expires_at\":1763985600000,\"from\":\"pane:pane-7a1b2c3d-2-0ddba11a\",\"from_device\":\"device:node-vector\",\"hop\":1,\"kind\":\"task.reply\",\"msg_id\":\"0193b8c2-0000-7000-8000-000000000002\",\"parent_msg_id\":\"0193b8c2-0000-7000-8000-000000000001\",\"project_uuid\":\"7a1b2c3d-0000-4000-8000-000000000042\",\"to\":\"pane:pane-7a1b2c3d-1-0badc0de\",\"trust\":\"pane_authenticated\",\"v\":1}",
+      "signing_input_b64": "TUNQMlAtRU5WLzEKeyJjaGFpbl9pZCI6IjAxOTNiOGMyLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDBjMSIsImNvbnRlbnRfaGFzaCI6InNoYTI1Njo0MThkZTMzZTJhM2U0ZDIwYjI1M2UyMzQzNDMxZTY3NTRjNGZjY2JmZDJhMjRhNmVlOTUxMzJmMzA0OGQ0OWFlIiwiY29udGVudF9zaXplIjozNywiY3JlYXRlZF9hdCI6MTc2MzM4MDgwMDAwMCwiZGV2aWNlX2NlcnQiOm51bGwsImV4cGlyZXNfYXQiOjE3NjM5ODU2MDAwMDAsImZyb20iOiJwYW5lOnBhbmUtN2ExYjJjM2QtMi0wZGRiYTExYSIsImZyb21fZGV2aWNlIjoiZGV2aWNlOm5vZGUtdmVjdG9yIiwiaG9wIjoxLCJraW5kIjoidGFzay5yZXBseSIsIm1zZ19pZCI6IjAxOTNiOGMyLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDAwMiIsInBhcmVudF9tc2dfaWQiOiIwMTkzYjhjMi0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJwcm9qZWN0X3V1aWQiOiI3YTFiMmMzZC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwNDIiLCJ0byI6InBhbmU6cGFuZS03YTFiMmMzZC0xLTBiYWRjMGRlIiwidHJ1c3QiOiJwYW5lX2F1dGhlbnRpY2F0ZWQiLCJ2IjoxfQ"
+    },
+    {
+      "name": "system_notice_with_device_cert",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000003",
+        "kind": "relay_notice",
+        "from": "device:node-vector",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:aa564af68cfaf39231dc465b32e2948bb9a83b4aacdc192f3ffb18e76beac229",
+        "content_size": 21,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "system",
+        "device_cert": {
+          "v": 1,
+          "node_uuid": "node-vector",
+          "device_ed25519_pub": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+          "not_after": 1795000000000,
+          "human_pub": "aHVtYW4",
+          "sig": "c2ln"
+        },
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "WjSW_iHbdZryLQkC9mIzfPDA8ul1ViyGTwWcRF7XGGJoFHxfdIkHo4zxMGN-p5RyCqAvzWaP-t0pMLaTYPRvCQ"
+        }
+      },
+      "content": "Asignacion pendiente.",
+      "canonical_header": "{\"chain_id\":\"0193b8c2-0000-7000-8000-0000000000c1\",\"content_hash\":\"sha256:aa564af68cfaf39231dc465b32e2948bb9a83b4aacdc192f3ffb18e76beac229\",\"content_size\":21,\"created_at\":1763380800000,\"device_cert\":{\"device_ed25519_pub\":\"A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg\",\"human_pub\":\"aHVtYW4\",\"node_uuid\":\"node-vector\",\"not_after\":1795000000000,\"sig\":\"c2ln\",\"v\":1},\"expires_at\":1763985600000,\"from\":\"device:node-vector\",\"from_device\":\"device:node-vector\",\"hop\":0,\"kind\":\"relay_notice\",\"msg_id\":\"0193b8c2-0000-7000-8000-000000000003\",\"parent_msg_id\":null,\"project_uuid\":\"7a1b2c3d-0000-4000-8000-000000000042\",\"to\":\"pane:pane-7a1b2c3d-2-0ddba11a\",\"trust\":\"system\",\"v\":1}",
+      "signing_input_b64": "TUNQMlAtRU5WLzEKeyJjaGFpbl9pZCI6IjAxOTNiOGMyLTAwMDAtNzAwMC04MDAwLTAwMDAwMDAwMDBjMSIsImNvbnRlbnRfaGFzaCI6InNoYTI1NjphYTU2NGFmNjhjZmFmMzkyMzFkYzQ2NWIzMmUyOTQ4YmI5YTgzYjRhYWNkYzE5MmYzZmZiMThlNzZiZWFjMjI5IiwiY29udGVudF9zaXplIjoyMSwiY3JlYXRlZF9hdCI6MTc2MzM4MDgwMDAwMCwiZGV2aWNlX2NlcnQiOnsiZGV2aWNlX2VkMjU1MTlfcHViIjoiQTZFSHZfUE9FTDRkY04wWTUwdkFtV2ZrMWpDYnBRMWZIZHlHWkJKVk1iZyIsImh1bWFuX3B1YiI6ImFIVnRZVzQiLCJub2RlX3V1aWQiOiJub2RlLXZlY3RvciIsIm5vdF9hZnRlciI6MTc5NTAwMDAwMDAwMCwic2lnIjoiYzJsbiIsInYiOjF9LCJleHBpcmVzX2F0IjoxNzYzOTg1NjAwMDAwLCJmcm9tIjoiZGV2aWNlOm5vZGUtdmVjdG9yIiwiZnJvbV9kZXZpY2UiOiJkZXZpY2U6bm9kZS12ZWN0b3IiLCJob3AiOjAsImtpbmQiOiJyZWxheV9ub3RpY2UiLCJtc2dfaWQiOiIwMTkzYjhjMi0wMDAwLTcwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJwYXJlbnRfbXNnX2lkIjpudWxsLCJwcm9qZWN0X3V1aWQiOiI3YTFiMmMzZC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwNDIiLCJ0byI6InBhbmU6cGFuZS03YTFiMmMzZC0yLTBkZGJhMTFhIiwidHJ1c3QiOiJzeXN0ZW0iLCJ2IjoxfQ"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "tampered_hop",
+      "base": "reply_unicode_and_controls",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000002",
+        "kind": "task.reply",
+        "from": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-1-0badc0de",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "content_hash": "sha256:418de33e2a3e4d20b253e2343431e6754c4fccbfd2a24a6ee95132f3048d49ae",
+        "content_size": 37,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "v7r-Y8hBa9excxnC8bD62oCyWyBpqNQtnrDZJxluYYIEGuwVY6J0Oewo2c-A6N9orFdnbA2GrYijWEkjFwFoAA"
+        }
+      },
+      "content": "Hola é́ 🚀 \"citado\" \\ \u001b[2K\r\n\u0003 fin",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "escalated_trust",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "human_confirmed",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "forged_from",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "human:0123456789abcdef",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "rerouted_to",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-ffffffff-9-ffffffff",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "swapped_chain",
+      "base": "reply_unicode_and_controls",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000002",
+        "kind": "task.reply",
+        "from": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-1-0badc0de",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "otra-cadena",
+        "hop": 1,
+        "parent_msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "content_hash": "sha256:418de33e2a3e4d20b253e2343431e6754c4fccbfd2a24a6ee95132f3048d49ae",
+        "content_size": 37,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "v7r-Y8hBa9excxnC8bD62oCyWyBpqNQtnrDZJxluYYIEGuwVY6J0Oewo2c-A6N9orFdnbA2GrYijWEkjFwFoAA"
+        }
+      },
+      "content": "Hola é́ 🚀 \"citado\" \\ \u001b[2K\r\n\u0003 fin",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "extended_expiry",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600001,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "content_bit_flip",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Sevisa la tarjeta K-118 y propone un plan.",
+      "expected": "CONTENT_HASH_MISMATCH"
+    },
+    {
+      "name": "content_appended",
+      "base": "reply_unicode_and_controls",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000002",
+        "kind": "task.reply",
+        "from": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-1-0badc0de",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 1,
+        "parent_msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "content_hash": "sha256:418de33e2a3e4d20b253e2343431e6754c4fccbfd2a24a6ee95132f3048d49ae",
+        "content_size": 37,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "v7r-Y8hBa9excxnC8bD62oCyWyBpqNQtnrDZJxluYYIEGuwVY6J0Oewo2c-A6N9orFdnbA2GrYijWEkjFwFoAA"
+        }
+      },
+      "content": "Hola é́ 🚀 \"citado\" \\ \u001b[2K\r\n\u0003 fin ",
+      "expected": "CONTENT_HASH_MISMATCH"
+    },
+    {
+      "name": "signature_bit_flip",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2iAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "BAD_SIGNATURE"
+    },
+    {
+      "name": "signed_by_other_key",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "5540ee3de4e09522",
+          "value": "Q6Lcz8DJtDVG2qwENnNUDTdM9i7741Ipu9jtq4WhbsRGofvvh_gpt6tDjizrEVx2icZiL3HUjHZULrLkmJiSBQ"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "KEY_MISMATCH"
+    },
+    {
+      "name": "float_timestamp",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000.5,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "SCHEMA_INVALID"
+    },
+    {
+      "name": "non_nfc_header_text",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "proyecto-é",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "NON_CANONICAL"
+    },
+    {
+      "name": "unknown_field",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        },
+        "x_extra": 1
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "SCHEMA_INVALID"
+    },
+    {
+      "name": "missing_field",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "SCHEMA_INVALID"
+    },
+    {
+      "name": "future_version",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 2,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "VERSION_UNSUPPORTED"
+    },
+    {
+      "name": "other_alg",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "HS256",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "UNSUPPORTED_ALG"
+    },
+    {
+      "name": "unknown_kind_keyboard",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "keyboard.input",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "SCHEMA_INVALID"
+    },
+    {
+      "name": "expired",
+      "base": "note_ascii",
+      "envelope": {
+        "v": 1,
+        "msg_id": "0193b8c2-0000-7000-8000-000000000001",
+        "kind": "note",
+        "from": "pane:pane-7a1b2c3d-1-0badc0de",
+        "from_device": "device:node-vector",
+        "to": "pane:pane-7a1b2c3d-2-0ddba11a",
+        "project_uuid": "7a1b2c3d-0000-4000-8000-000000000042",
+        "chain_id": "0193b8c2-0000-7000-8000-0000000000c1",
+        "hop": 0,
+        "parent_msg_id": null,
+        "content_hash": "sha256:c1e14a731dc5c177648fe03f342b1c9c0536b17717460fded710b61b605ca526",
+        "content_size": 42,
+        "created_at": 1763380800000,
+        "expires_at": 1763985600000,
+        "trust": "pane_authenticated",
+        "device_cert": null,
+        "sig": {
+          "alg": "Ed25519",
+          "key": "56475aa75463474c",
+          "value": "CCsUHwJDcRBxC2mAliGlUAESaPSiuyQny6cujlmRQLhuYtQMGuw-jD3MQnZwyCRG9HgACxtjP--p1D4i5Go1Bw"
+        }
+      },
+      "content": "Revisa la tarjeta K-118 y propone un plan.",
+      "expected": "EXPIRED",
+      "now_ms": 1763985600000
+    }
+  ]
+}
