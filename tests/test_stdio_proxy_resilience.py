@@ -322,3 +322,32 @@ def test_hub_proxy_only_rejects_non_stdio_transport(module: str, tmp_path: Path)
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=str(REPO_ROOT), env=_env({}, tmp_path))
     assert proc.returncode == 2
     assert "stdio" in proc.stderr
+
+
+def test_reconnect_stops_when_the_time_budget_is_spent_even_if_each_attempt_is_slow(monkeypatch) -> None:
+    """En Windows rechazar una conexion a loopback tarda ~2 s por intento: 4 intentos dejaban al CLI casi 10 s."""
+    import anyio
+
+    from src.mcp import stdio_proxy
+
+    attempts: List[float] = []
+
+    @asynccontextmanager
+    async def slow_refused(*_a: Any, **_k: Any):
+        attempts.append(time.monotonic())
+        await anyio.sleep(1.2)  # simula el rechazo lento de Windows
+        raise ConnectionRefusedError("rechazada")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(stdio_proxy, "streamable_http_client", slow_refused)
+
+    async def go() -> float:
+        t0 = time.monotonic()
+        with pytest.raises(stdio_proxy.HubUnavailableError):
+            async with stdio_proxy.HubLink("http://127.0.0.1:9/mcp", "tok").session():
+                pass
+        return time.monotonic() - t0
+
+    elapsed = _run(go())
+    assert len(attempts) == 2, attempts  # el tercer intento ya no cabe en el presupuesto
+    assert elapsed < 4.5

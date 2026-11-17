@@ -39,6 +39,10 @@ HUB_REQUEST_TIMEOUT_S = 15.0
 # Esperas entre intentos de CONEXION (backoff acotado: ~1,75 s en total). Una llamada ya enviada nunca se reintenta,
 # porque `send_pane_message` y compania no son idempotentes.
 RECONNECT_DELAYS_S: Sequence[float] = (0.0, 0.25, 0.5, 1.0)
+# Presupuesto de TIEMPO para reconectar: no se empieza un intento nuevo si ya se gasto. En Linux un puerto cerrado
+# responde al instante y caben todos los intentos; en Windows rechazar una conexion a loopback tarda ~2 s por intento,
+# y 4 intentos dejaban al CLI casi 10 s esperando el aviso de "Hub caido".
+RECONNECT_BUDGET_S = 2.0
 
 HUB_UNREACHABLE = "HUB_UNREACHABLE"
 HUB_REQUIRED = "HUB_REQUIRED"
@@ -147,7 +151,10 @@ class HubLink:
     async def session(self) -> AsyncIterator[ClientSession]:
         delays = tuple(self._delays if self._delays is not None else RECONNECT_DELAYS_S) or (0.0,)
         last_error: Optional[BaseException] = None
+        started = anyio.current_time()
         for delay in delays:
+            if last_error is not None and anyio.current_time() - started + delay >= RECONNECT_BUDGET_S:
+                break
             if delay:
                 await anyio.sleep(delay)
             connected = False
