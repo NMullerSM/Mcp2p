@@ -259,7 +259,7 @@ export function describeTerminalError(res, context = {}) {
         ...base,
         tone: 'info',
         title: 'Las terminales integradas aún no están disponibles en Windows',
-        message: 'Falta el conector ConPTY de Windows, así que esta ventana no puede abrir terminales por ahora.',
+        message: backendMessage || 'Falta el conector ConPTY de Windows, así que esta ventana no puede abrir terminales por ahora.',
         hint: 'Ejecuta tu CLI en una terminal propia y conéctalo al servidor MCP con el comando manual.',
         manualCommand: data.manual_command || DEFAULT_MANUAL_COMMAND,
         mcpConfig: data.mcp_config || DEFAULT_MCP_CONFIG,

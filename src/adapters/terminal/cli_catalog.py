@@ -201,6 +201,23 @@ def validate_user_binary_path(path: Any) -> str:
     return path
 
 
+_WINDOWS_EXE_SUFFIXES = (".exe", ".cmd", ".bat", ".com")
+
+
+def _executable_variants(name: str, is_windows: bool) -> Tuple[str, ...]:
+    """Nombres a probar para un binario: en Windows `claude` -> `claude.exe`, `claude.cmd`... (como PATHEXT)."""
+    if not is_windows or name.lower().endswith(_WINDOWS_EXE_SUFFIXES):
+        return (name,)
+    return (*(name + ext for ext in _WINDOWS_EXE_SUFFIXES), name)
+
+
+def _is_cwd_hit(path: str) -> bool:
+    try:
+        return os.path.normcase(os.path.dirname(os.path.abspath(path))) == os.path.normcase(os.getcwd())
+    except OSError:
+        return False
+
+
 def is_executable_file(path: str) -> bool:
     try:
         return os.path.isfile(path) and os.access(path, os.X_OK)
@@ -733,8 +750,11 @@ class CliCatalogService:
         def _done(path: str, source: str) -> Resolution:
             return Resolution(spec.id, True, path, source, configured, configured_valid, version_from_path(path))
 
-        if spec.kind == "shell" and spec.shell_env:
-            env_shell = self.environ.get(spec.shell_env)
+        is_win = self.platform == "win32"
+        # En Windows la shell por defecto es %COMSPEC% (cmd.exe); `$SHELL` no existe fuera de Git Bash.
+        shell_env_name = "COMSPEC" if (spec.kind == "shell" and is_win) else spec.shell_env
+        if spec.kind == "shell" and shell_env_name:
+            env_shell = self.environ.get(shell_env_name)
             if (
                 env_shell
                 and not has_control_chars(env_shell)
@@ -744,16 +764,21 @@ class CliCatalogService:
             ):
                 return _done(env_shell, "shell_env")
 
-        for name in spec.binary_names:
-            hit = self._which(name)
-            if hit and os.path.isabs(hit) and is_executable_file(hit):
-                return _done(hit, "path")
+        # La shell de Windows no se busca en PATH por su nombre POSIX (`sh` de Git Bash no es la shell del sistema).
+        if not (spec.kind == "shell" and is_win):
+            for name in spec.binary_names:
+                hit = self._which(name)
+                if hit and is_win and _is_cwd_hit(hit):
+                    continue  # shutil.which en Windows prueba antes el directorio actual: no se ejecuta lo que ahi haya
+                if hit and os.path.isabs(hit) and is_executable_file(hit):
+                    return _done(hit, "path")
 
-        local_bin = self.home.rstrip("/\\") + "/.local/bin"
-        for name in spec.binary_names:
-            candidate = f"{local_bin}/{name}"
-            if is_executable_file(candidate):
-                return _done(candidate, "local_bin")
+            local_bin = self.home.rstrip("/\\") + "/.local/bin"
+            for name in spec.binary_names:
+                for variant in _executable_variants(name, is_win):
+                    candidate = f"{local_bin}/{variant}"
+                    if is_executable_file(candidate):
+                        return _done(candidate, "local_bin")
 
         matches = self._candidate_matches(spec)
         if matches:

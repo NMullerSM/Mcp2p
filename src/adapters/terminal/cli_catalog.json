@@ -12,7 +12,7 @@
       "candidate_paths": {
         "linux": ["~/.local/bin/claude", "~/.config/Claude/claude-code/*/*/claude"],
         "darwin": ["~/.local/bin/claude", "~/Library/Application Support/Claude/claude-code/*/*/claude"],
-        "win32": ["%USERPROFILE%\\.local\\bin\\claude.exe"]
+        "win32": ["%USERPROFILE%\\.local\\bin\\claude.exe", "%APPDATA%\\npm\\claude.cmd"]
       },
       "launch_flags": [],
       "mcp": {
@@ -383,7 +383,7 @@
       "candidate_paths": {
         "linux": ["/bin/sh"],
         "darwin": ["/bin/sh"],
-        "win32": []
+        "win32": ["%SystemRoot%\\System32\\cmd.exe", "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"]
       },
       "launch_flags": [],
       "mcp": {

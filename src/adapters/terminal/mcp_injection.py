@@ -152,6 +152,11 @@ def ensure_agy_mcp_registered(
 
 
 def _default_base_dir() -> Path:
+    if sys.platform == "win32":
+        # Perfil del usuario (hereda la ACL privada del perfil), no `%TEMP%` compartido por herramientas de terceros.
+        local = os.environ.get("LOCALAPPDATA")
+        if local and os.path.isdir(local):
+            return Path(local) / "mcp2p" / "panes"
     uid = os.getuid() if hasattr(os, "getuid") else 0
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime and os.path.isdir(runtime):

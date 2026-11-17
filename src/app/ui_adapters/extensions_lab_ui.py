@@ -25,7 +25,7 @@ from src.adapters.terminal.cli_catalog import (
     has_control_chars,
     validate_install_command,
 )
-from src.adapters.terminal.cli_install import InstallConfirmationBroker
+from src.adapters.terminal.cli_install import InstallConfirmationBroker, build_install_command
 from src.adapters.terminal.pty_host import (
     DEFAULT_MANUAL_COMMAND,
     HARD_MAX_PANES,
@@ -1005,18 +1005,13 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if declined is not None:
                 return {**declined, "cli_id": spec.id}
 
-            wrapper = (
-                f"{option.command}; rc=$?; echo; "
-                'echo "[mcp2p] El instalador termino con codigo $rc. Cierre este panel y vuelva a abrir el selector de CLI."; '
-                "exit $rc"
-            )
-            shell = "/bin/sh" if os.access("/bin/sh", os.X_OK) else (svc.which("sh") or "/bin/sh")
+            install_argv = build_install_command(option.command, svc.platform, svc.which)
             spawn_res = dict(
                 terminal.spawn_session(
                     pane_id=target_pane,
                     cli_profile="custom_shell",
                     role="installer",
-                    command=[shell, "-c", wrapper],
+                    command=install_argv,
                     cwd=None,
                     cols=100,
                     rows=28,

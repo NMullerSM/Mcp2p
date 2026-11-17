@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import secrets
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 DEFAULT_TOKEN_TTL_S = 120.0
 MAX_PENDING_TOKENS = 16
@@ -103,3 +104,28 @@ class InstallConfirmationBroker:
         ):
             return "INSTALL_TOKEN_INVALID"
         return "OK"
+
+
+def build_install_command(
+    command: str, platform: str, which: Callable[[str], Optional[str]]
+) -> List[str]:
+    """
+    argv que ejecuta el comando EXACTO del catalogo en una shell y avisa del codigo de salida: `sh -c` en POSIX,
+    `powershell -Command` en Windows (el catalogo usa `irm ... | iex`, `winget` y `npm`, validos en PowerShell).
+    """
+    if platform == "win32":
+        shell = which("powershell") or which("pwsh") or "powershell.exe"
+        wrapper = (
+            f"{command}; $rc = $LASTEXITCODE; Write-Host ''; "
+            "Write-Host \"[mcp2p] El instalador termino con codigo $rc. "
+            "Cierre este panel y vuelva a abrir el selector de CLI.\"; "
+            "exit $rc"
+        )
+        return [shell, "-NoLogo", "-NoProfile", "-Command", wrapper]
+    wrapper = (
+        f"{command}; rc=$?; echo; "
+        'echo "[mcp2p] El instalador termino con codigo $rc. Cierre este panel y vuelva a abrir el selector de CLI."; '
+        "exit $rc"
+    )
+    shell = "/bin/sh" if os.access("/bin/sh", os.X_OK) else (which("sh") or "/bin/sh")
+    return [shell, "-c", wrapper]
