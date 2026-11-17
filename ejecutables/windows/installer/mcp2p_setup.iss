@@ -32,6 +32,12 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; Actualización desde la propia app (src/app/auto_updater.py): lanza este instalador con
+; /SILENT /CLOSEAPPLICATIONS /NORESTART /RELAUNCH=1. CloseApplications cierra Mcp2p.exe si sigue
+; abierto (Restart Manager) para poder reemplazar sus archivos; la reapertura la hace el [Run]
+; de abajo (no /RESTARTAPPLICATIONS, que no reabre una app que ya salió por sí sola y duplicaría la instancia).
+CloseApplications=yes
+RestartApplications=no
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 
@@ -53,3 +59,12 @@ Name: "{autodesktop}\MCP2P"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,MCP2P}"; Flags: nowait postinstall skipifsilent
+; Actualización automática: la app se cerró para instalar, así que se reabre al terminar (solo con /RELAUNCH=1;
+; runasoriginaluser evita que arranque elevada si el instalador pidió UAC).
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
+
+[Code]
+function ShouldRelaunch(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
