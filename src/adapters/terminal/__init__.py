@@ -1,5 +1,5 @@
 """
-Conectores de terminal interactiva (POSIX PTY y supervisor con circuit breaker)
+Conectores de terminal interactiva (POSIX PTY, Windows ConPTY y supervisor con circuit breaker)
 que implementan `AgentTerminalPort`.
 """
 
@@ -16,6 +16,7 @@ from src.adapters.terminal.pty_host import (
     normalize_pane_id,
 )
 from src.adapters.terminal.supervisor import SafeTerminalHostSupervisor
+from src.adapters.terminal.winpty_host import WinPtyHostConnector
 
 __all__ = [
     "CLI_PROFILES",
@@ -30,5 +31,6 @@ __all__ = [
     "PosixPtyHostConnector",
     "PtyOutputRingBuffer",
     "SafeTerminalHostSupervisor",
+    "WinPtyHostConnector",
     "normalize_pane_id",
 ]

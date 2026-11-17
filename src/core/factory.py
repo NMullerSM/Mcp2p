@@ -68,7 +68,7 @@ class ApplicationFactory:
     ) -> Any:
         """
         Compone el `AgentTerminalPort` (`SafeTerminalHostSupervisor` envolviendo
-        `PosixPtyHostConnector` cuando está disponible y `NullAgentTerminalConnector`
+        `PosixPtyHostConnector` (POSIX) o `WinPtyHostConnector` (Windows/ConPTY) cuando está disponible y `NullAgentTerminalConnector`
         como respaldo degradado).
 
         `settings` (`ExtensionRegistryRepositoryPort`) aporta las rutas de binario por CLI y el
@@ -93,15 +93,22 @@ class ApplicationFactory:
         if use_pty_host:
             try:
                 from src.adapters.terminal.pty_host import PosixPtyHostConnector
+                from src.adapters.terminal.winpty_host import WinPtyHostConnector
 
-                if PosixPtyHostConnector.is_available():
+                if WinPtyHostConnector.is_available():
+                    # Windows 10 1809+ con pywinpty (ConPTY); si falta, queda el Null con TERMINAL_PLATFORM_UNSUPPORTED.
+                    primary = WinPtyHostConnector(
+                        max_panes=resolved_max_panes,
+                        catalog_service=CliCatalogService(settings),
+                    )
+                elif PosixPtyHostConnector.is_available():
                     primary = PosixPtyHostConnector(
                         max_panes=resolved_max_panes,
                         catalog_service=CliCatalogService(settings),
                     )
             except Exception as exc:
                 logger.warning(
-                    "No se pudo inicializar PosixPtyHostConnector; usando fallback degradado: %s",
+                    "No se pudo inicializar el conector de terminales; usando fallback degradado: %s",
                     exc,
                 )
                 primary = fallback
