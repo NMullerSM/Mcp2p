@@ -1,93 +1,138 @@
 # Changelog
 
-Todas las versiones siguen [SemVer](https://semver.org/lang/es/). Fuente única de la versión: `src/app/version.py`
-(sincronizar con `python scripts/sync_version.py`).
+Este archivo cuenta qué cambia en MCP2P para quien lo usa: funciones nuevas, mejoras, correcciones y seguridad.
+No describe cómo se implementó cada cosa. Para ver los commits exactos de una versión, usa el enlace de comparación
+junto a su título (también están al final del archivo).
 
-## [Unreleased]
+Formato: [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/). Versionado: [SemVer](https://semver.org/lang/es/).
+La versión vive en `src/app/version.py` (se sincroniza con `python scripts/sync_version.py`); la nota de cada release
+en GitHub se toma de la sección de este archivo que coincide con esa versión.
 
-## [1.0.5] - 2026-11-10
+## [Sin publicar]
 
-### Corregido
-- **Crash inmediato al abrir en Windows (1.0.4)**: `webview.start()` recibía `mcp2p.png` como icono en lugar de `mcp2p.ico`. El backend WinForms de PyWebView debe convertir un PNG a `Icon` vía `GetHicon()`/`Icon.FromHandle()`, y clonar un icono creado así desde un handle nativo dispara `System.Drawing.IconException`/`ArgumentException` no controlada en WinForms x64, matando el hilo de UI sin dejar proceso ni ventana visibles (compatible con build `--noconsole`). Ahora se pasa `mcp2p.ico` explícitamente en Windows (con fallback a `.ico` también en otras plataformas si el `.png` no existe), evitando por completo la ruta de conversión/clonado defectuosa.
-
-## [1.0.4] - 2026-11-10
-
-### Seguridad
-- **Cierre de Quórum Humano y Prevención de Primer Voto (NEW-01, EGM-01)**: `is_quorum_closed` exige unanimidad de votos o el transcurso de una ventana de gracia (48h) tras recepción confirmada (`dispute_vote_delivery`), o 168h de timeout por estancamiento. Se elimina la vulnerabilidad donde un único voto humano prematuro cerraba la disputa.
-- **Autenticación Ed25519 y Anti-Sybil en Votación (EGM-05)**: Los votos humanos requieren firma criptográfica válida sobre el contenido canónico (`VOTE:{option}:TICKET:{id}:PROJECT:{uuid}`) cruzada con la clave pública del colaborador aprobado. Nodos no registrados o atacantes Sybil se aíslan en `rejected_unknown_votes` sin diluir el denominador de elegibles. Exclusión estricta de contendientes en $N \ge 3$ y exclusión de árbitros en rondas regulares.
-- **Aislamiento de Contexto y Anti-Prompt Injection (EGM-06, EGM-08)**: Paquetes Clean-Room delimitados por `<untrusted_proposal_context>` con nonces únicos impredecibles. Caracteres `<` y `>` escapados a entidades HTML. Truncado defensivo a 8,000 caracteres con verificación SHA-256 para prevenir ataques de denegación de servicio por desbordamiento de contexto.
-- **Votación a Ciegas y Redacción Anti-Sesgo (EGM-07, NEW-05)**: Opciones proyectadas en alias neutrales (`ALFA`, `BETA`, `GAMMA`) mediante permutación determinista pseudoaleatoria por evaluador. Ocultamiento de puntuaciones numéricas de agentes y votos humanos individuales hasta que el evaluador firma su voto.
-- **Validación de Identidad de Jurados MCP (NEW-03)**: Verificación estricta de asignación de `agent_id` en la matriz neutral del ticket, rechazo de evaluaciones duplicadas y bloqueo en tickets cerrados.
-
-### Corregido
-- **Persistencia Condicional de Dictámenes (NEW-02)**: Los archivos YAML `RULING-{ticket_id}.yaml` y sus commits correspondientes en Git solo se crean si el estado del veredicto es estrictamente `ratified`. Dictámenes en `open` o `challenged` no dejan artefactos huérfanos.
-- **Eliminación de Sesgos Numéricos Mágicos (EGM-03)**: Removido el offset artificial `+10.0` y el multiplicador obsoleto `500.0`. Sincronía estricta `final_score == total_points`.
-- **Eliminación de Síntesis Fabricadas (NEW-04)**: Erradicada la plantilla autogenerada para la Tercera Vía C. La síntesis solo se formula si un sintetizador genuino la genera o si es provista con fundamento técnico real.
-- **Conteo Unificado de Votantes Elegibles (EGM-04)**: Centralizado en `bus.eligible_humans_count()` para evitar discrepancias entre bus, pasarela API y herramientas MCP.
+### Añadido
+- Terminales integradas en **Windows**: los paneles de Swarm Terminal Matrix ahora funcionan también allí (Claude,
+  Gemini, Codex, OpenCode, Antigravity o una shell), con instalación guiada de los CLI que falten.
 
 ### Mejorado
-- **Modelo Continuo de Consenso Dialéctico Ponderado (EGM-02)**: Consenso ponderado $R = 0.70 \cdot h + 0.30 \cdot a$ con umbral estricto del $80\%$ y escalera jerárquica de resolución en 5 pasos (supermayoría, unanimidad humana, árbitro externo, desempate técnico sin árbitro, y escalamiento manual).
-- **Mecanismo de Desempate con Árbitro Externo (EGM-01)**: Soporte para árbitro neutral pre-registrado (`project_arbiters`) congelado al momento de la apertura del ticket.
-- **Escritura Atómica en Disco e Índice de Precedentes OKF (EGM-10)**: Nueva utilidad `atomic_write_text` con `fsync` y `replace` seguro con limpieza garantizada. Índice de precedentes determinista con suma SHA-256 e indexación exclusiva de fallos ratificados.
-- **Identidad Visual de Marca MCP²P (Frente A)**: Generación de favicon e icono multi-resolución real para Windows (`mcp2p.ico` con capas de 16, 32, 48, 64 y 256 px), logos PNG optimizados, componente SVG inline `BrandMark.jsx`, tokens CSS de marca (`--brand-emerald`, `--brand-mint`) y títulos de ventana consistentes.
-- **Mitigación de Parpadeo de Consola en Windows (Frente C)**: Creación del helper `run_hidden` / `no_window_kwargs` (`CREATE_NO_WINDOW`) para todos los subprocesos (`git`, `gh`, `scripts`), caché TTL de 60s para estado de autenticación GitHub, sincronización nativa de fondo en PyWebView (`set_ui_theme`) y eliminación de render commits redundantes en drawers.
-
-### Interno
-- **Sincronización Documental y Catálogo Técnico (EGM-09)**: Catálogo exhaustivo de 10 vectores técnicos (`FOCUS_CATALOG`) con directivas y submétricas sincronizado en `docs/ARQUITECTURA_JUICIO_DIALECTICO_Y_MATRIZ.md`.
-- **Suite de Pruebas Adversariales**: 11 nuevas pruebas exhaustivas en `tests/test_adversarial_jury_and_hitl.py` cubriendo ataques Sybil, adulteración criptográfica, inyección de prompt, truncado masivo, aliasing ciego, resiliencia a caídas de disco y validación de jurados MCP.
-
-## [1.0.3] - 2026-11-09
-
-### Seguridad
-- Webhook P2P LAN (`/webhook/p2p`, `/notify`): ahora exige firma Ed25519 **y** que la clave pública pertenezca a un
-  colaborador aprobado (401 sin firma o firma inválida, 403 clave no confiable). Antes un payload sin `sig`/`payload`
-  se aceptaba sin verificación, y la verificación usaba la clave enviada por el propio emisor.
-- El listener P2P escucha por defecto solo en `127.0.0.1`. Para exponerlo en la LAN: `MCP2P_LAN_BIND_HOST=0.0.0.0`
-  (o la IP de la interfaz).
-- Límite de 1 MiB al cuerpo del webhook (413) y rechazo de `Content-Length` inválido (400).
-- Path traversal: `card_id`, `project_uuid` (incluido el de tokens de invitación firmados) e `item_id` se validan
-  (`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`, sin nombres reservados de Windows) antes de construir rutas o ramas git; los
-  puntos de escritura/lectura de YAML y worktrees verifican además contención de ruta.
+- El relevo entre agentes es más seguro: el aviso de Auto-Relay y los mensajes entre paneles ya no se escriben en la
+  terminal de otro agente; el agente destino los recibe en su bandeja y los recoge cuando quiere. El interruptor de
+  Auto-Relay pide confirmación al activarse y vuelve a empezar apagado.
+- Los mensajes entre paneles tienen un tamaño máximo (8 KiB) y no salen a otros colaboradores de la red P2P.
+- La lista de paneles que ve un agente ya no expone datos internos del proceso ni si estás escribiendo.
 
 ### Corregido
-- Leases de Kanban: dos agentes en procesos distintos podían adquirir la misma tarjeta (TOCTOU). Ahora la adquisición
-  usa `BEGIN IMMEDIATE` de SQLite y es atómica entre procesos.
-- Aprobación HITL de PR (`pr_merge`): ya no reporta `merged` ni marca la tarjeta como fusionada si el merge real falla
-  (rama inexistente, conflicto, API de GitHub); los conflictos se abortan (`git merge --abort`) para no dejar el repo
-  a medio fusionar. La UI muestra el error en lugar de forzar el estado "merged".
-- Aprobación por número de PR: owner/repo se resuelven desde `code_repo_url` (antes se enviaban vacíos).
-- `delete_project` devolvía `{}` (interpretado como éxito en JS) cuando el proyecto no existía.
-- `create_kanban_task` sin `card_id` dejaba una tarjeta fantasma con id vacío y bloqueaba permanentemente la creación
-  de tarjetas del proyecto (`UNIQUE constraint failed`); ahora se rechaza antes de escribir, con un error claro.
-- Imports faltantes que rompían en silencio el historial de precedentes HITL, el detalle de dictámenes del jurado,
-  el registro de errores de sincronización Kanban↔OKF y la creación de RFC/repartos sin `session_id`.
-- `sync_three_tiers`: si el commit del outbox falla, los eventos ya no se marcan como `acked` (antes se perdían).
-- Fallos de `git commit` / `git worktree add` en creación de proyectos, worktree huérfano, worktrees de tarea y
-  aprobación de colaboradores ahora se registran y propagan en lugar de ignorarse.
-- La versión embebida del frontend estaba desincronizada (1.0.2 se identificaba como 1.0.1 y mostraba siempre el
-  aviso de actualización); `frontend/package.json` y `package-lock.json` también habían quedado desfasados.
+- **Actualizar** en Windows ya muestra el progreso real (descarga, verificación, instalación) y, si algo falla, la
+  causa con opciones para reintentar, abrir la página de descarga o ver el registro. Antes el botón parecía no hacer
+  nada. Al terminar, la app se cierra, se instala y se vuelve a abrir sola; la versión portable se reemplaza sin
+  perder tus proyectos.
+- Un servidor MCP configurado para usar el Hub ya no arranca en silencio como servidor aislado si falta su
+  configuración: se detiene y explica el motivo.
+
+## [2.0.0] - 2026-11-16 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.1.0...v2.0.0)
+
+### Añadido
+- **Swarm Terminal Matrix**: hasta 6 terminales de agentes dentro de la app, con terminal real, tamaño ajustable,
+  pausa, reanudación y cierre limpio sin procesos huérfanos. El diseño se adapta solo al número de paneles.
+- **Catálogo de CLIs de agentes** (Claude Code, Gemini CLI, Codex, OpenCode, Antigravity y shell): elige CLI y carpeta,
+  la app encuentra el binario o ofrece instalarlo mostrando el comando exacto y pidiendo confirmación.
+- **Hub MCP embebido**: cada terminal se conecta al Hub de la app con una credencial propia, y los agentes pueden
+  coordinarse con herramientas como listar paneles, enviar mensajes y esperar la siguiente asignación.
+- **Panel lateral por vista**: Kanban, Cambios, Aprobaciones, Colaboradores, OKF y Terminales llevan sus
+  herramientas a una pestaña lateral derecha, y la pantalla queda para el contenido.
+- **Firma humana** protegida con frase: la clave se cifra, se desbloquea de forma explícita y se bloquea de nuevo
+  desde Configuración.
+- **Exportar e importar proyectos** desde la línea de comandos, con copia consistente y rutas reescritas.
+- Red P2P con varios pares a la vez y conexión directa 1:1; búsqueda y filtros por etiquetas en OKF, con frescura de
+  los documentos y verificación de firmas de las decisiones.
+- Un puente HTTP para que Antigravity use el Hub de MCP2P sin configuración manual.
 
 ### Mejorado
-- Polling de sincronización de la UI: el intervalo ya no se re-arma en cada render y no solapa llamadas al puente
-  PyWebView cuando este es lento (mitigación del parpadeo de paneles reportado en Windows; pendiente de verificación
-  manual en Windows).
+- Núcleo reorganizado en piezas independientes (puertos y adaptadores) para poder añadir módulos sin tocar el resto.
+- Base de datos más robusta con varias conexiones simultáneas, y una única regla de aprobación humana en todo el
+  sistema.
+- Barra superior más suave y navegable por iconos, con proyectos en un selector compacto.
 
-### Interno
-- `scripts/sync_version.py` (+ verificación en CI y test) para mantener sincronizadas las copias de la versión;
-  `get_version.py` ya no oculta errores con un valor por defecto.
-- CI: `concurrency`, `timeout-minutes`, cache de npm, tests de frontend con vitest.
-- 48 pruebas automatizadas nuevas (92 → 140), incluyendo pruebas multi-proceso de leases, autenticación del webhook
-  P2P y path traversal.
-- Eliminado código muerto del frontend (iconos y variables CSS sin uso).
-
-## [1.0.2] - 2026-11-06
 ### Corregido
-- Resolución de la UI en el build empaquetado de Windows (`get_ui_target`) y rutas de `mcp.json`/docs.
+- La app volvía a abrirse sin proyectos ni token de GitHub en algunos equipos por una política de seguridad demasiado
+  estricta; ya carga todo con normalidad.
+- Los atajos de teclado globales ya no interfieren con lo que escribes en una terminal.
+- Cierre de varios fallos de concurrencia al abrir paneles a la vez y al mover mensajes entre agentes.
 
-## [1.0.1] - 2026-11-06
-### Añadido
-- Auto-actualizador directo en caliente para Linux, sin descarga/reinstalo manual.
+### Seguridad
+- El Hub exige credencial por panel y rechaza las llamadas sin ella; la identidad del agente la fija el servidor.
+- Instalar un CLI, fijar su ruta o lanzar un comando propio requiere confirmación nativa de la app.
+- Las acciones de apertura de terminales y del puente con la interfaz quedan acotadas a lo que la app necesita.
 
-## [1.0.0] - 2026-11-05
+## [1.1.0] - 2026-11-14 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.8...v1.1.0)
+
 ### Añadido
-- Primera versión publicada: pipeline CI/CD, instalador Windows, paquete Linux y auto-actualizador.
+- **Solicitudes de acceso a proyectos**: quien quiere unirse a un proyecto envía una solicitud y el propietario la
+  aprueba o rechaza dentro de la app. Se muestra el estado pendiente, con reintento, y los bloqueos temporales tras
+  rechazos repetidos.
+- Conexión directa entre pares por WebRTC, con un servidor de señalización opcional configurable en Ajustes.
+- El propietario puede pegar el código de una solicitud recibida por otro canal.
+
+### Corregido
+- La actualización de la versión portable conserva tu base de datos y tus espacios de trabajo.
+
+## [1.0.8] - 2026-11-11 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.5...v1.0.8)
+
+### Corregido
+- Las conexiones seguras a GitHub funcionaban mal en el programa instalado; ahora usa los certificados correctos.
+- El servidor MCP va incluido en el programa instalado y se corrigieron detalles de la interfaz.
+- Sincronización de versiones en la comprobación automática de cada publicación.
+
+## [1.0.5] - 2026-11-10 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.3...v1.0.5)
+
+### Añadido
+- **Tribunal de honor**: las disputas se resuelven con un jurado de agentes y personas, votación a ciegas, quórum
+  humano, plazo de gracia y consenso ponderado, con veredictos firmados.
+- Nueva identidad visual MCP²P: logo, iconos y favicons.
+
+### Corregido
+- La app ya no se cierra al abrirse en Windows por un problema con el icono.
+- Se reduce el parpadeo de ventanas de consola en Windows.
+
+## [1.0.3] - 2026-11-09 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.2...v1.0.3)
+
+### Seguridad
+- La conexión P2P en red local solo acepta mensajes firmados por colaboradores aprobados y escucha por defecto solo en
+  tu equipo (se puede abrir a la red local con `MCP2P_LAN_BIND_HOST`).
+- Límite de tamaño en los mensajes recibidos y validación de nombres de tarjetas, proyectos y elementos para evitar
+  accesos a rutas fuera de lugar.
+
+### Corregido
+- Dos agentes ya no pueden tomar la misma tarjeta Kanban a la vez.
+- Aprobar un pull request ya no lo da por fusionado si la fusión real falló; se muestra el error.
+- Crear una tarea sin identificador ya no bloquea el tablero del proyecto.
+- Varios errores que ocultaban fallos al sincronizar, crear proyectos o aprobar colaboradores.
+- El aviso de actualización aparecía siempre por una versión mal sincronizada.
+
+### Mejorado
+- La interfaz deja de parpadear tanto al sincronizar.
+
+## [1.0.2] - 2026-11-06 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.1...v1.0.2)
+
+### Corregido
+- La interfaz no cargaba en el programa empaquetado de Windows.
+
+## [1.0.1] - 2026-11-06 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v1.0.0...v1.0.1)
+
+### Añadido
+- Actualización directa para Linux, sin descargar e instalar a mano.
+
+## [1.0.0] - 2026-11-06 · [commits](https://github.com/NMullerSM/Mcp2p/commits/v1.0.0)
+
+### Añadido
+- Primera versión publicada: instalador para Windows, paquete para Linux y actualizador automático.
+
+[Sin publicar]: https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...develop
+[2.0.0]: https://github.com/NMullerSM/Mcp2p/compare/v1.1.0...v2.0.0
+[1.1.0]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.8...v1.1.0
+[1.0.8]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.5...v1.0.8
+[1.0.5]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.3...v1.0.5
+[1.0.3]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/NMullerSM/Mcp2p/commits/v1.0.0

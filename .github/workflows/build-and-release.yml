@@ -261,26 +261,29 @@ jobs:
           fi
           echo "TAG_NAME=${TAG}" >> $GITHUB_ENV
 
+      - name: Generar Notas de la Release desde CHANGELOG.md
+        run: |
+          VER=$(python3 scripts/get_version.py)
+          {
+            python3 scripts/changelog_section.py "$VER"
+            echo
+            echo "---"
+            echo
+            echo "### Descargables"
+            echo "- **Windows**: \`Mcp2p-Setup-*.exe\` (instalador guiado) y \`Mcp2p-Windows-Portable.zip\` (portable)."
+            echo "- **Linux**: \`mcp2p_*_amd64.deb\` (Pop!_OS, Ubuntu, Mint, Debian) y \`Mcp2p-Linux-Portable.tar.gz\` (portable)."
+            echo "- \`SHA256SUMS\` con los hashes de cada archivo."
+            echo
+            echo "Historial completo de cambios: [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)"
+          } > release_notes.md
+          cat release_notes.md
+
       - name: Publicar Release Oficial en el Perfil Público
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG_NAME }}
-          name: "MCP2P ${{ env.TAG_NAME }} — Release Oficial"
-          body: |
-            ## MCP2P — Plataforma de Colaboración Agéntica (${{ env.TAG_NAME }})
-
-            Compilación oficial multiplataforma generada automáticamente para Windows y Linux.
-
-            ### Descargables Disponibles:
-            - **Windows**:
-              - `Mcp2p-Setup-*.exe` — Instalador guiado con accesos directos y desinstalador (Inno Setup).
-              - `Mcp2p-Windows-Portable.zip` — Versión portable lista para ejecutar.
-            - **Linux**:
-              - `mcp2p_*_amd64.deb` — Paquete oficial para Pop!_OS, Ubuntu, Linux Mint y Debian.
-              - `Mcp2p-Linux-Portable.tar.gz` — Paquete comprimido portable para cualquier distro Linux.
-
-            ### Integridad Criptográfica:
-            - `SHA256SUMS` incluido con los hashes criptográficos de cada binario publicado.
+          name: "MCP2P ${{ env.TAG_NAME }}"
+          body_path: release_notes.md
           draft: false
           prerelease: false
           make_latest: true
