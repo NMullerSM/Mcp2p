@@ -209,7 +209,8 @@ export function TerminalPane({
   onResize,
   onRequestOpenUrl,
   onRegisterAgyMcp,
-  registerTerminalRef
+  registerTerminalRef,
+  hidden = false
 }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -309,11 +310,14 @@ export function TerminalPane({
     <section
       data-testid={`terminal-pane-${paneId}`}
       data-focused={isFocused ? 'true' : 'false'}
+      data-hidden={hidden ? 'true' : 'false'}
+      aria-hidden={hidden ? 'true' : undefined}
       aria-label={label}
       onClick={() => onFocus(paneId)}
       style={{
         position: 'relative',
-        display: 'flex',
+        // D7: un panel de otro proyecto (o que no coincide con la busqueda) se oculta sin desmontarse.
+        display: hidden ? 'none' : 'flex',
         flexDirection: 'column',
         minHeight: 0,
         minWidth: 0,

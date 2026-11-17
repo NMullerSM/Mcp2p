@@ -54,13 +54,17 @@ describe('SwarmTerminalMatrix: panel vacio clicable y Auto-Relay en el slider', 
     expect(screen.getByTestId('terminals-slider').getAttribute('data-state')).toBe('open');
   });
 
-  it('el toggle de Auto-Relay vive dentro del panel del slider y ya no hay barra de controles en la vista', async () => {
-    const api = makeMatrixApi();
+  it('el toggle de Auto-Relay de cada terminal vive dentro del panel del slider y ya no hay barra de controles en la vista', async () => {
+    const api = makeMatrixApi({ pty_set_auto_relay: vi.fn(async () => ({ success: true })) });
     renderMatrix(api);
-    const toggle = await screen.findByTestId('auto-relay-toggle');
+    expect(await screen.findByTestId('auto-relay-section')).toBeTruthy();
+    // D2: ya no hay interruptor global; hay uno por terminal abierta.
+    expect(screen.queryByTestId('auto-relay-toggle')).toBeNull();
+    await openCli('claude', 'pane_1');
+    const toggle = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
 
     expect(screen.queryByTestId('matrix-controls-bar')).toBeNull();
-    expect(within(screen.getByTestId('view-slider-panel')).getByTestId('auto-relay-toggle')).toBe(toggle);
+    expect(within(screen.getByTestId('view-slider-panel')).getByTestId('pane-auto-relay-toggle-pane_1')).toBe(toggle);
     expect(screen.getByTestId('matrix-grid').contains(toggle)).toBe(false);
   });
 });
@@ -326,8 +330,10 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     await openCli('gemini', 'pane_2');
 
     rerenderMatrix({ searchQuery: 'gemini' });
-    expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull();
-    expect(screen.getByTestId('terminal-pane-pane_2')).toBeTruthy();
+    // Se oculta sin desmontarse (la terminal conserva su pantalla).
+    expect(screen.getByTestId('terminal-pane-pane_1').getAttribute('data-hidden')).toBe('true');
+    expect(screen.getByTestId('terminal-pane-pane_1').style.display).toBe('none');
+    expect(screen.getByTestId('terminal-pane-pane_2').getAttribute('data-hidden')).toBe('false');
 
     rerenderMatrix({ searchQuery: 'zzz-nada' });
     expect(screen.getByTestId('matrix-grid').textContent).toContain('Ninguna terminal coincide');
@@ -511,7 +517,10 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     fireEvent.change(screen.getByTestId('launch-role-select'), { target: { value: 'reviewer' } });
     await openCli('gemini', 'pane_1');
 
-    expect(api.pty_spawn_pane).toHaveBeenCalledWith('pane_1', 'gemini', 'reviewer', null, 100, 28, true, '/tmp/proyecto');
+    // Ola 2: el panel nace ligado al proyecto visible (ultimo argumento).
+    expect(api.pty_spawn_pane).toHaveBeenCalledWith(
+      'pane_1', 'gemini', 'reviewer', null, 100, 28, true, '/tmp/proyecto', false, PROJECT.project_uuid
+    );
     expect(screen.getByTestId('hub-status-badge').textContent).toContain('Hub activo: http://127.0.0.1:51234/mcp');
     expect(screen.getByTestId('pane-cwd-pane_1').textContent).toBe('/tmp/proyecto');
   });
@@ -928,30 +937,60 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     expect(screen.getByTestId('pane-activity-badge-pane_2').textContent).toBe('Trabajando');
   });
 
-  it('el toggle Auto-Relay invoca pty_set_auto_relay(true), explica que solo deja avisos en la bandeja y ya no muestra Gate 0c', async () => {
-    const pty_set_auto_relay = vi.fn(async (enabled) => ({
+  it('el Auto-Relay es por terminal: pty_set_auto_relay(panel, true) cambia solo esa, la descripcion habla de la bandeja y ya no hay Gate 0c', async () => {
+    const pty_set_auto_relay = vi.fn(async (paneId, enabled) => ({
       success: true,
-      auto_relay_enabled: Boolean(enabled),
-      tripped_cases: [],
-      inbox_pending: 0
+      pane_id: paneId,
+      auto_relay_enabled: Boolean(enabled)
     }));
     const api = makeMatrixApi({ pty_set_auto_relay });
     renderMatrix(api);
+    await openCli('claude', 'pane_1');
+    await openCli('gemini', 'pane_2');
 
-    const toggle = await screen.findByTestId('auto-relay-toggle');
-    expect(toggle.textContent).toContain('OFF');
+    const toggle1 = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
+    const toggle2 = screen.getByTestId('pane-auto-relay-toggle-pane_2');
+    expect(toggle1.textContent).toContain('OFF');
+    expect(toggle2.textContent).toContain('OFF');
     const description = screen.getByTestId('auto-relay-description').textContent;
     expect(description).toContain('bandeja');
-    expect(description).toContain('No escribe nada en su terminal');
+    expect(description).toContain('No escribe nada en');
+    expect(description).toContain('cada terminal');
     expect(description).not.toMatch(/cooldown|est[aá] libre/i);
 
-    fireEvent.click(toggle);
-    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(toggle.textContent).toContain('ON'));
+    fireEvent.click(toggle2);
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith('pane_2', true));
+    await waitFor(() => expect(toggle2.textContent).toContain('ON'));
+    expect(toggle2.getAttribute('aria-pressed')).toBe('true');
+    expect(toggle1.textContent).toContain('OFF');
     expect(screen.queryByTestId('auto-relay-gate0c-note')).toBeNull();
+
+    fireEvent.click(toggle2);
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenLastCalledWith('pane_2', false));
+    await waitFor(() => expect(toggle2.textContent).toContain('OFF'));
   });
 
-  it('si el dialogo nativo rechaza activar el Auto-Relay, el interruptor sigue en OFF y se avisa', async () => {
+  it('el estado de Auto-Relay de cada terminal viene del backend (persistido) al recargar', async () => {
+    const api = makeMatrixApi({
+      pty_set_auto_relay: vi.fn(async () => ({ success: true })),
+      pty_get_matrix_status: vi.fn(async () => ({
+        success: true, degraded: false, hub_url: null, hub_running: false,
+        panes: [
+          { pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'claude', project_uuid: PROJECT.project_uuid, auto_relay_enabled: true },
+          { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'claude', project_uuid: PROJECT.project_uuid, auto_relay_enabled: false }
+        ],
+        sessions: [
+          { pane_id: 'pane_1', session_id: 's1', alive: true, cli_profile: 'claude' },
+          { pane_id: 'pane_2', session_id: 's2', alive: true, cli_profile: 'claude' }
+        ]
+      }))
+    });
+    renderMatrix(api);
+    expect((await screen.findByTestId('pane-auto-relay-toggle-pane_1')).textContent).toContain('ON');
+    expect(screen.getByTestId('pane-auto-relay-toggle-pane_2').textContent).toContain('OFF');
+  });
+
+  it('si el dialogo nativo rechaza activar el Auto-Relay, el interruptor de esa terminal sigue en OFF y se avisa', async () => {
     const pty_set_auto_relay = vi.fn(async () => ({
       success: false,
       code: 'CONFIRMATION_DECLINED',
@@ -959,12 +998,14 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     }));
     const api = makeMatrixApi({ pty_set_auto_relay });
     renderMatrix(api);
+    await openCli('claude', 'pane_1');
 
-    const toggle = await screen.findByTestId('auto-relay-toggle');
+    const toggle = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
     fireEvent.click(toggle);
-    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith('pane_1', true));
     await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBe('false'));
     expect(toggle.textContent).toContain('OFF');
+    expect(toggle.disabled).toBe(false);
   });
 
   it('muestra banner y boton reset-loop-breaker-btn (EGM-87) cuando relay_status.tripped_cases no esta vacio', async () => {

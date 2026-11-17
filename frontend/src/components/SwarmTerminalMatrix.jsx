@@ -49,7 +49,11 @@ function createInitialPaneState(paneId) {
     exitCode: null,
     mcpInjection: null,
     activityState: null,
-    activitySource: ''
+    activitySource: '',
+    // Ola 2: proyecto al que pertenece el panel ('' = sin proyecto, visible siempre) y su Auto-Relay (D2).
+    projectUuid: '',
+    autoRelayEnabled: false,
+    autoRelayBusy: false
   };
 }
 
@@ -385,7 +389,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               registryStatus: r?.status || base.registryStatus,
               mcpInjection: s.mcp_injection ?? r?.mcp_injection ?? base.mcpInjection ?? null,
               activityState: s.activity_state ?? r?.activity_state ?? base.activityState ?? null,
-              activitySource: s.activity_source ?? r?.activity_source ?? base.activitySource ?? ''
+              activitySource: s.activity_source ?? r?.activity_source ?? base.activitySource ?? '',
+              projectUuid: r?.project_uuid ?? base.projectUuid ?? '',
+              autoRelayEnabled: Boolean(r?.auto_relay_enabled ?? base.autoRelayEnabled)
             };
           } else if (cur.open && cur.alive) {
             next[paneId] = { ...cur, alive: false, paused: false, rssMb: 0 };
@@ -397,7 +403,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               registryStatus: r.status || cur.registryStatus,
               mcpInjection: r.mcp_injection ?? cur.mcpInjection ?? null,
               activityState: r.activity_state ?? cur.activityState ?? null,
-              activitySource: r.activity_source ?? cur.activitySource ?? ''
+              activitySource: r.activity_source ?? cur.activitySource ?? '',
+              projectUuid: r.project_uuid ?? cur.projectUuid ?? '',
+              autoRelayEnabled: Boolean(r.auto_relay_enabled ?? cur.autoRelayEnabled)
             };
           }
         });
@@ -576,14 +584,19 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   // ---- Foco ---------------------------------------------------------------------------
 
   const openPaneIds = MATRIX_PANE_IDS.filter((id) => panes[id].open);
-  const openPaneIdsKey = openPaneIds.join(',');
+  // D7: al cambiar de proyecto, los paneles de otros proyectos siguen vivos pero ocultos (no se desmontan ni
+  // se cierran). Un panel sin proyecto (instalador, o abierto sin proyecto activo) se ve siempre.
+  const activeProjectUuid = project?.project_uuid || '';
+  const projectPaneIds = openPaneIds.filter((id) => !panes[id].projectUuid || panes[id].projectUuid === activeProjectUuid);
+  const hiddenPaneCount = openPaneIds.length - projectPaneIds.length;
+  const projectPaneIdsKey = projectPaneIds.join(',');
 
   useEffect(() => {
-    // Si el panel enfocado se cierra, el foco pasa al primero abierto.
-    if (!openPaneIds.length || openPaneIds.includes(focusedPaneId)) return;
-    setFocusedPaneId(openPaneIds[0]);
+    // Si el panel enfocado se cierra o pasa a otro proyecto, el foco pasa al primero visible.
+    if (!projectPaneIds.length || projectPaneIds.includes(focusedPaneId)) return;
+    setFocusedPaneId(projectPaneIds[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openPaneIdsKey, focusedPaneId]);
+  }, [projectPaneIdsKey, focusedPaneId]);
 
   const requestTerminalFocus = useCallback((paneId) => {
     setFocusedPaneId(paneId);
@@ -666,7 +679,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         DEFAULT_PTY_SIZE.cols,
         DEFAULT_PTY_SIZE.rows,
         true,
-        cwd
+        cwd,
+        false,
+        project?.project_uuid || null
       );
       if (!mountedRef.current) return;
 
@@ -697,7 +712,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         registryStatus: paneMeta.status || '',
         mcpInjection: res.mcp_injection ?? sess.mcp_injection ?? paneMeta.mcp_injection ?? null,
         activityState: sess.activity_state ?? paneMeta.activity_state ?? null,
-        activitySource: sess.activity_source ?? paneMeta.activity_source ?? ''
+        activitySource: sess.activity_source ?? paneMeta.activity_source ?? '',
+        projectUuid: res.project_uuid ?? paneMeta.project_uuid ?? project?.project_uuid ?? '',
+        autoRelayEnabled: Boolean(paneMeta.auto_relay_enabled)
       });
       setNotice(null);
       requestTerminalFocus(openedId);
@@ -710,7 +727,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       launchingRef.current = false;
       if (mountedRef.current) setLaunchingCliId(null);
     }
-  }, [api, cwdInput, roleInput, showNotice, markPaneOpened, requestTerminalFocus, closeSlider]);
+  }, [api, cwdInput, roleInput, showNotice, markPaneOpened, requestTerminalFocus, closeSlider, project?.project_uuid]);
 
   const handlePausePane = useCallback(async (paneId) => {
     if (!api?.pty_pause_pane) return;
@@ -930,36 +947,33 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     }
   }, [handlePrepareInstall]);
 
-  const handleToggleAutoRelay = useCallback(async () => {
-    if (!api?.pty_set_auto_relay || matrixStatus.autoRelayBusy) return;
-    const nextEnabled = !matrixStatus.autoRelayEnabled;
-    setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: true }));
+  // D2: Auto-Relay POR PANEL. Activarlo abre el dialogo nativo en el puente; el estado se persiste alli.
+  const patchPane = useCallback((paneId, patch) => {
+    setPanes((prev) => (prev[paneId] ? { ...prev, [paneId]: { ...prev[paneId], ...patch } } : prev));
+  }, []);
+
+  const handleTogglePaneAutoRelay = useCallback(async (paneId) => {
+    const pane = panesRef.current[paneId];
+    if (!api?.pty_set_auto_relay || !pane || pane.autoRelayBusy) return;
+    const nextEnabled = !pane.autoRelayEnabled;
+    patchPane(paneId, { autoRelayBusy: true });
     try {
-      const res = await api.pty_set_auto_relay(nextEnabled);
+      const res = await api.pty_set_auto_relay(paneId, nextEnabled);
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
-        setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: false }));
+        patchPane(paneId, { autoRelayBusy: false });
         return;
       }
       const enabledVal = typeof res?.auto_relay_enabled === 'boolean' ? res.auto_relay_enabled : nextEnabled;
-      setMatrixStatus((prev) => ({
-        ...prev,
-        autoRelayEnabled: enabledVal,
-        autoRelayBusy: false,
-        relayStatus: {
-          ...prev.relayStatus,
-          ...(res || {}),
-          auto_relay_enabled: enabledVal
-        }
-      }));
+      patchPane(paneId, { autoRelayEnabled: enabledVal, autoRelayBusy: false });
     } catch (err) {
       if (mountedRef.current) {
-        setMatrixStatus((prev) => ({ ...prev, autoRelayBusy: false }));
+        patchPane(paneId, { autoRelayBusy: false });
         showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
       }
     }
-  }, [api, matrixStatus.autoRelayBusy, matrixStatus.autoRelayEnabled, showNotice]);
+  }, [api, patchPane, showNotice]);
 
   const handleRegisterAgyMcp = useCallback(async () => {
     if (!api?.pty_register_agy_mcp) return;
@@ -1022,7 +1036,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
 
   const normalizedSearch = (searchQuery || '').trim().toLowerCase();
   const visibleOpenIds = normalizedSearch
-    ? openPaneIds.filter((paneId) => {
+    ? projectPaneIds.filter((paneId) => {
         const p = panes[paneId];
         const haystack = [
           p.paneId,
@@ -1038,12 +1052,13 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           .toLowerCase();
         return haystack.includes(normalizedSearch);
       })
-    : openPaneIds;
+    : projectPaneIds;
+  const visiblePaneSet = new Set(visibleOpenIds);
 
   const layout = computeGridLayout(visibleOpenIds.length);
   const emptySlots = Math.max(0, layout.cells - visibleOpenIds.length);
-  const noOpenTerminals = openPaneIds.length === 0;
-  const searchHidesAll = normalizedSearch && openPaneIds.length > 0 && visibleOpenIds.length === 0;
+  const noOpenTerminals = projectPaneIds.length === 0;
+  const searchHidesAll = normalizedSearch && projectPaneIds.length > 0 && visibleOpenIds.length === 0;
 
   const statusNotice = useMemo(() => {
     const extra = { manual_command: matrixStatus.manualCommand, mcp_config: matrixStatus.mcpConfig };
@@ -1056,7 +1071,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     return null;
   }, [matrixStatus, catalog.platformSupported]);
 
-  const activePanes = openPaneIds.map((id) => panes[id]);
+  const activePanes = projectPaneIds.map((id) => panes[id]);
 
   return (
     <div
@@ -1080,12 +1095,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       >
         <TerminalSliderControls
           status={matrixStatus}
-          autoRelay={{
-            enabled: Boolean(matrixStatus.autoRelayEnabled),
-            busy: Boolean(matrixStatus.autoRelayBusy),
-            available: Boolean(api?.pty_set_auto_relay)
-          }}
-          onToggleAutoRelay={() => void handleToggleAutoRelay()}
+          autoRelay={{ available: Boolean(api?.pty_set_auto_relay) }}
+          onToggleAutoRelay={(paneId) => void handleTogglePaneAutoRelay(paneId)}
+          hiddenPaneCount={hiddenPaneCount}
           statusNotice={statusNotice}
           catalog={catalog}
           maxPanes={maxPanes}
@@ -1179,7 +1191,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           gap: '10px'
         }}
       >
-        {searchHidesAll ? (
+        {searchHidesAll && (
           <div
             style={{
               gridColumn: '1 / -1',
@@ -1195,29 +1207,29 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           >
             Ninguna terminal coincide con «{searchQuery}».
           </div>
-        ) : (
-          <>
-            {visibleOpenIds.map((paneId) => (
-              <TerminalPane
-                key={paneId}
-                pane={panes[paneId]}
-                label={paneLabels[paneId]}
-                cli={catalogById[panes[paneId].cliProfile]}
-                isFocused={focusedPaneId === paneId}
-                focusToken={focusRequest.paneId === paneId ? focusRequest.nonce : 0}
-                onFocus={handleClickPane}
-                onInput={sendPaneInput}
-                onResize={handleResizePane}
-                onRequestOpenUrl={setPendingExternalUrl}
-                onRegisterAgyMcp={api?.pty_register_agy_mcp ? () => void handleRegisterAgyMcp() : undefined}
-                registerTerminalRef={registerTerminalRef}
-              />
-            ))}
-            {Array.from({ length: emptySlots }, (_, i) => (
-              <EmptyTerminalSlot key={`empty-${i}`} index={i} showHint={noOpenTerminals && i === 0} onAdd={openSlider} />
-            ))}
-          </>
         )}
+        {/* D7: todos los paneles abiertos siguen montados; los de otros proyectos (o fuera de la busqueda)
+            solo se ocultan, sin cerrar su proceso ni perder su pantalla. */}
+        {openPaneIds.map((paneId) => (
+          <TerminalPane
+            key={paneId}
+            hidden={!visiblePaneSet.has(paneId)}
+            pane={panes[paneId]}
+            label={paneLabels[paneId]}
+            cli={catalogById[panes[paneId].cliProfile]}
+            isFocused={focusedPaneId === paneId}
+            focusToken={focusRequest.paneId === paneId ? focusRequest.nonce : 0}
+            onFocus={handleClickPane}
+            onInput={sendPaneInput}
+            onResize={handleResizePane}
+            onRequestOpenUrl={setPendingExternalUrl}
+            onRegisterAgyMcp={api?.pty_register_agy_mcp ? () => void handleRegisterAgyMcp() : undefined}
+            registerTerminalRef={registerTerminalRef}
+          />
+        ))}
+        {!searchHidesAll && Array.from({ length: emptySlots }, (_, i) => (
+          <EmptyTerminalSlot key={`empty-${i}`} index={i} showHint={noOpenTerminals && i === 0} onAdd={openSlider} />
+        ))}
       </div>
 
       {/* Aviso discreto cuando el slider esta cerrado; el detalle completo vive en el slider. */}

@@ -552,7 +552,17 @@ function CliRow({
   );
 }
 
-function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePane, onClosePane }) {
+function ActiveTerminalRow({
+  pane,
+  cli,
+  label,
+  isFocused,
+  onFocusPane,
+  onPausePane,
+  onClosePane,
+  onToggleAutoRelay,
+  autoRelayAvailable
+}) {
   const paneId = pane.paneId;
   const stateLabel = pane.alive ? (pane.paused ? 'Pausado' : 'Activo') : 'Finalizado';
   const stateColor = pane.alive ? (pane.paused ? 'var(--accent-warning)' : 'var(--accent-success)') : 'var(--text-muted)';
@@ -628,6 +638,25 @@ function ActiveTerminalRow({ pane, cli, label, isFocused, onFocusPane, onPausePa
             <span>{pane.paused ? 'Reanudar' : 'Pausar'}</span>
           </button>
         )}
+        {/* D2: Auto-Relay por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
+        {pane.alive && pane.kind !== 'install' && onToggleAutoRelay && (
+          <button
+            type="button"
+            data-testid={`pane-auto-relay-toggle-${paneId}`}
+            aria-pressed={pane.autoRelayEnabled ? 'true' : 'false'}
+            disabled={!autoRelayAvailable || Boolean(pane.autoRelayBusy)}
+            title="Deja avisos de asignación en la bandeja de este agente; no escribe en su terminal."
+            onClick={() => onToggleAutoRelay(paneId)}
+            style={{
+              ...btnBase,
+              color: pane.autoRelayEnabled ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              border: `1px solid ${pane.autoRelayEnabled ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
+              cursor: !autoRelayAvailable || pane.autoRelayBusy ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <span>Auto-Relay: {pane.autoRelayEnabled ? 'ON' : 'OFF'}</span>
+          </button>
+        )}
         <button
           type="button"
           data-testid={`pane-close-btn-${paneId}`}
@@ -676,7 +705,8 @@ export function TerminalSliderControls({
   onConfirmInstall,
   onCancelInstall,
   onSetCliPath,
-  pathEditRequest
+  pathEditRequest,
+  hiddenPaneCount = 0
 }) {
   const [showManual, setShowManual] = useState(false);
 
@@ -697,61 +727,15 @@ export function TerminalSliderControls({
         onCopy={onCopy}
       />
 
-      {/* Auto-Relay (F0): deja avisos en la bandeja del agente destino; no escribe en ninguna terminal. Apagado por defecto. */}
+      {/* Auto-Relay (D2): por panel, apagado por defecto; el interruptor de cada terminal esta en «Terminales activas». */}
       {autoRelay && (
         <section data-testid="auto-relay-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <h4 style={sectionTitle}>Auto-Relay</h4>
-          <button
-            type="button"
-            data-testid="auto-relay-toggle"
-            aria-pressed={autoRelay.enabled ? 'true' : 'false'}
-            disabled={!autoRelay.available || autoRelay.busy}
-            onClick={onToggleAutoRelay}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '10px',
-              padding: '8px 12px',
-              fontSize: '12.5px',
-              fontWeight: 700,
-              borderRadius: 'var(--radius-md)',
-              border: `1px solid ${autoRelay.enabled ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
-              backgroundColor: autoRelay.enabled ? 'rgba(16, 185, 129, 0.14)' : 'var(--bg-subtle)',
-              color: autoRelay.enabled ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              cursor: !autoRelay.available || autoRelay.busy ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <span>Auto-Relay: {autoRelay.enabled ? 'ON' : 'OFF'}</span>
-            <span
-              aria-hidden="true"
-              style={{
-                width: '30px',
-                height: '16px',
-                borderRadius: '999px',
-                position: 'relative',
-                backgroundColor: autoRelay.enabled ? 'var(--accent-primary)' : 'var(--border-strong, var(--border-subtle))',
-                transition: 'background-color 0.2s ease'
-              }}
-            >
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '2px',
-                  left: autoRelay.enabled ? '16px' : '2px',
-                  width: '12px',
-                  height: '12px',
-                  borderRadius: '50%',
-                  backgroundColor: '#fff',
-                  transition: 'left 0.2s ease'
-                }}
-              />
-            </span>
-          </button>
           <p data-testid="auto-relay-description" style={{ ...mutedText, margin: 0 }}>
-            Deja un aviso en la bandeja del agente destino cuando le asignan una tarjeta. No escribe nada en su
-            terminal: el agente lo recoge con await_next_assignment. Los mensajes entre paneles llegan siempre a
-            la bandeja, con este interruptor activo o no. Respeta el Loop Breaker.
+            Se activa en cada terminal, desde «Terminales activas», y se recuerda para esa terminal en este
+            proyecto. Deja un aviso en la bandeja de ese agente cuando le asignan una tarjeta. No escribe nada en
+            su terminal: el agente lo recoge con await_next_assignment. Los mensajes entre paneles del mismo
+            proyecto llegan siempre a la bandeja, con el interruptor activo o no. Respeta el Loop Breaker.
           </p>
         </section>
       )}
@@ -809,7 +793,7 @@ export function TerminalSliderControls({
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
           <span data-testid="open-count" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-            {activePanes.length} de {maxPanes} terminales abiertas
+            {activePanes.length + hiddenPaneCount} de {maxPanes} terminales abiertas
           </span>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
             <span>Máximo de paneles</span>
@@ -826,6 +810,14 @@ export function TerminalSliderControls({
             </select>
           </label>
         </div>
+        {/* D7: los paneles de otros proyectos siguen vivos pero ocultos. */}
+        {hiddenPaneCount > 0 && (
+          <p data-testid="hidden-panes-count" style={{ ...mutedText, margin: 0 }}>
+            {hiddenPaneCount === 1
+              ? '1 terminal de otro proyecto sigue abierta (oculta).'
+              : `${hiddenPaneCount} terminales de otros proyectos siguen abiertas (ocultas).`}
+          </p>
+        )}
 
         <div>
           <button
@@ -933,6 +925,8 @@ export function TerminalSliderControls({
                 onFocusPane={onFocusPane}
                 onPausePane={onPausePane}
                 onClosePane={onClosePane}
+                onToggleAutoRelay={onToggleAutoRelay}
+                autoRelayAvailable={Boolean(autoRelay?.available)}
               />
             ))}
           </ul>
