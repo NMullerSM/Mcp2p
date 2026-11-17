@@ -64,3 +64,6 @@ ejecutables/linux/mcp2p_*_amd64.deb
 
 # Catalogo de CLIs propio del usuario (no verificado, no se versiona)
 cli_catalog.user.json
+
+# Registro del actualizador (src/app/auto_updater.py) en modo desarrollo
+logs/

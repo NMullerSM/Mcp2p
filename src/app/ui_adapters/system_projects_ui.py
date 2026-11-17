@@ -12,7 +12,6 @@ import sys
 from typing import Any, Dict, Optional, Tuple
 
 from src.app.identity import local_node_uuid
-from src.app.paths import is_system_installed
 from src.app.ui_adapters import _BaseUIAdapter
 from src.core.domain import join as _domain_join  # EGM-57: reglas puras del flujo de unión
 
@@ -221,8 +220,14 @@ class SystemProjectsUIAdapter(_BaseUIAdapter):
         return self._bridge._updater.apply_update_and_restart()
 
     def get_install_mode(self) -> Dict[str, Any]:
-        mode = "system" if is_system_installed() else ("portable" if getattr(sys, "frozen", False) else "dev")
-        return {"success": True, "platform": sys.platform, "mode": mode}
+        # `kind` (windows_installer / windows_portable / linux_deb / ...) decide el asset de la release.
+        return self._bridge._updater.get_install_info()
+
+    def open_release_page(self, url: Optional[str] = None) -> Dict[str, Any]:
+        return self._bridge._updater.open_release_page(url)
+
+    def get_update_log(self, max_lines: int = 200) -> Dict[str, Any]:
+        return self._bridge._updater.get_log(max_lines)
 
     def get_active_project(self) -> Dict[str, Any]:
         target_uuid = self._resolve_project_uuid()

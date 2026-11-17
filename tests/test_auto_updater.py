@@ -66,11 +66,14 @@ def test_frozen_paths_simulation(monkeypatch):
         sys.executable = orig_exe
 
 
-def test_api_bridge_auto_update_endpoints():
+def test_api_bridge_auto_update_endpoints(monkeypatch):
+    # En modo desarrollo con .git, apply_update_and_restart hace `git pull`: nunca contra el checkout real.
+    monkeypatch.setattr("src.app.auto_updater.run_hidden", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="main\n"))
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         test_db = os.path.join(tmp_dir, "test_api_updater.db")
         db = DatabaseManager(test_db)
         bridge = ApiBridge(db_manager=db)
+        bridge._updater._user_data_dir = tmp_dir  # el registro updater.log no ensucia el repo
 
         # Test initial progress
         progress = bridge.get_update_progress()

@@ -278,6 +278,12 @@ class ApiBridge:
     def get_install_mode(self) -> Dict[str, Any]:
         return self.system_ui.get_install_mode()
 
+    def open_release_page(self, url: Optional[str] = None) -> Dict[str, Any]:
+        return self.system_ui.open_release_page(url)
+
+    def get_update_log(self, max_lines: int = 200) -> Dict[str, Any]:
+        return self.system_ui.get_update_log(max_lines)
+
     def get_active_project(self) -> Dict[str, Any]:
         return self.system_ui.get_active_project()
 
