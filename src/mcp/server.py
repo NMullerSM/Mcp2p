@@ -16,6 +16,7 @@ import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 from mcp.server.mcpserver import MCPServer
 from src.mcp.pane_registry import pane_session_context
+from src.mcp.peer_binding import PeerBindingVerifier, peer_binding_context
 from src.mcp.tools import LOADED_COMMIT, MCP_API_VERSION, MCPToolsHandler
 from src.mcp.transport_options import (  # noqa: F401  (re-export para llamadores existentes)
     DEFAULT_HTTP_HOST,
@@ -911,9 +912,11 @@ class _PaneTokenAuthMiddleware:
     identidad autodeclarada y cualquier proceso local podia declarar el `node_uuid` de otro panel.
     """
 
-    def __init__(self, app: Any, pane_registry: Any) -> None:
+    def __init__(self, app: Any, pane_registry: Any, peer_verifier: Optional[PeerBindingVerifier] = None) -> None:
         self.app = app
         self.pane_registry = pane_registry
+        # Ola 3 (EGM-105): el token solo vale desde el arbol de procesos de su panel (ver `peer_binding.py`).
+        self.peer_verifier = peer_verifier
 
     @staticmethod
     async def _reject(send: Any, code: str, error: str) -> None:
@@ -950,7 +953,14 @@ class _PaneTokenAuthMiddleware:
             await self._reject(send, "INVALID_PANE_SESSION_TOKEN", "Unauthorized: invalid or revoked pane session token.")
             return
 
-        with pane_session_context(record):
+        binding = None
+        if self.peer_verifier is not None:
+            import anyio
+
+            binding = await anyio.to_thread.run_sync(
+                self.peer_verifier.verify, record, scope.get("client"), scope.get("server")
+            )
+        with pane_session_context(record), peer_binding_context(binding):
             await self.app(scope, receive, send)
 
 
@@ -979,7 +989,13 @@ def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tup
     app = server.streamable_http_app(host=bind_host)
     pane_registry = getattr(server, "mcp2p_pane_registry", None)
     if pane_registry is not None and callable(getattr(pane_registry, "authenticate_token", None)):
-        app = _PaneTokenAuthMiddleware(app, pane_registry)
+        resolver = getattr(pane_registry, "process_resolver", None)
+        if resolver is None:  # fallo cerrado: sin resolvedor propio, el portable (nunca «sin comprobar»)
+            from src.adapters.identity.peer_process import PsutilPeerProcessResolver
+
+            resolver = PsutilPeerProcessResolver()
+        verifier = PeerBindingVerifier(resolver)
+        app = _PaneTokenAuthMiddleware(app, pane_registry, verifier)
     config = uvicorn.Config(app, log_level=server.settings.log_level.lower(), log_config=None)
     url_host = f"[{bind_host}]" if family == socket.AF_INET6 else bind_host
     return uvicorn.Server(config), sock, f"http://{url_host}:{bound_port}/mcp"

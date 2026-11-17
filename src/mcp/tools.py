@@ -27,6 +27,7 @@ from src.mcp.pane_registry import (
     PaneSessionRecord,
     get_current_pane_session,
 )
+from src.mcp.peer_binding import legacy_peer_warning, peer_mismatch_response, relay_peer_allowed
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
@@ -316,6 +317,9 @@ class MCPToolsHandler:
             return None, self._auth_error_response(err_code)
         if rec is None:
             return None, self._hub_required_response()
+        if not relay_peer_allowed():
+            # Ola 3 (D13, EGM-105): el relevo exige que la llamada venga del arbol de procesos del panel.
+            return None, peer_mismatch_response()
         declared = node_uuid.strip() if isinstance(node_uuid, str) else ""
         if declared and declared != rec.node_uuid:
             return None, self._auth_error_response("NODE_UUID_SPOOFING_FORBIDDEN")
@@ -1898,8 +1902,9 @@ def _with_project_scope_guard(tool_name: str, method: Any) -> Any:
         decision = _PROJECT_SCOPE_GUARD.check(tool=tool_name, requested_project_uuid=requested, session=session)
         if not decision.allowed:
             return json.dumps(decision.error, indent=2, ensure_ascii=False)
+        peer_warning = legacy_peer_warning()  # Ola 3: vinculo de proceso en `warn` para las antiguas (D13/D8)
         result = method(self, *args, **kwargs)
-        if decision.warning is None or not isinstance(result, str):
+        if (decision.warning is None and peer_warning is None) or not isinstance(result, str):
             return result
         try:
             payload = json.loads(result)
@@ -1907,7 +1912,10 @@ def _with_project_scope_guard(tool_name: str, method: Any) -> Any:
             return result
         if not isinstance(payload, dict):
             return result
-        payload["scope_warning"] = decision.warning
+        if decision.warning is not None:
+            payload["scope_warning"] = decision.warning
+        if peer_warning is not None:
+            payload["peer_warning"] = peer_warning
         return json.dumps(payload, indent=2, ensure_ascii=False)
 
     guarded.__mcp2p_project_scope_guarded__ = True  # type: ignore[attr-defined]

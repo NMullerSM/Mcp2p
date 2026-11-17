@@ -105,6 +105,9 @@ def test_stdio_subprocess_proxies_to_live_embedded_hub_and_delivers_pane_message
     )
     desktop_kernel.db.add_or_request_collaborator(p_uuid, "node_agy", status="approved")
     desktop_kernel.db.add_or_request_collaborator(p_uuid, "node_opencode", status="approved")
+    # Ola 3 (EGM-105): el relevo exige que la llamada salga del arbol de procesos del panel. Aqui la raiz de
+    # ambos «PTY» es este proceso: el proxy stdio es su hijo y el cliente HTTP de pane_2 es el mismo.
+    assert reg.bind_process(1, os.getpid()) is not None and reg.bind_process(2, os.getpid()) is not None
 
     hub = EmbeddedMcpHub(kernel=desktop_kernel, pane_registry=reg, host="127.0.0.1", port=0)
     try:

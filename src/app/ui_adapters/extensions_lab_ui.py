@@ -1371,11 +1371,11 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 return cleaned
 
             pid = spawn_res.get("pid")
+            if pid is not None:
+                # Ola 3 (EGM-105): el token del panel solo vale desde el arbol de procesos de este PTY.
+                registry.bind_process(norm_pane_id, int(pid))
             rec = registry.get_pane(norm_pane_id)
             if rec is not None:
-                if pid is not None:
-                    with registry._lock:
-                        rec.pid = int(pid)
                 pane_meta = rec.to_dict(include_token=False)
             else:
                 pane_meta = {
@@ -1428,7 +1428,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         try:
             registry = self._get_pane_registry()
             if is_human:
-                registry.record_human_keystroke(pane_id)
+                # Enter del humano = turno humano: cierra la cadena causal del relevo en ese panel (Ola 3).
+                submitted = isinstance(data, str) and ("\r" in data or "\n" in data)
+                registry.record_human_keystroke(pane_id, submitted=submitted)
             terminal = self._get_terminal_connector()
             return _strip_secret_fields(dict(terminal.send_input(pane_id, data)))
         except Exception as exc:

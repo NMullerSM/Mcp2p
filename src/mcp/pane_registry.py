@@ -44,6 +44,11 @@ class PaneSessionRecord:
     cwd: Optional[str] = None
     # Auto-Relay POR PANEL (D2): apagado por defecto y persistido por (proyecto, ranura).
     auto_relay_enabled: bool = False
+    # Vinculo con el proceso raiz del PTY (Ola 3, EGM-105): `pid` + `create_time` contra la reutilizacion de pids.
+    # Sin `pid_create_time` el panel no esta ligado a ningun proceso y el relevo lo rechaza (fallo cerrado).
+    pid_create_time: Optional[float] = None
+    # Ultimo turno humano ENVIADO (tecleo con Enter en la GUI): cierra el contexto de cadena del panel (37 §3.5).
+    last_human_submit_at: float = 0.0
 
     def to_dict(self, include_token: bool = False) -> Dict[str, Any]:
         """Serializa la ficha del panel sin exponer `session_token` por defecto."""
@@ -118,8 +123,11 @@ class PaneRegistry:
         collab_repo: Optional[Any] = None,
         clock: Optional[Callable[[], float]] = None,
         identity_repo: Optional[Any] = None,
+        process_resolver: Optional[Any] = None,
     ) -> None:
         self._collab_repo = collab_repo
+        # `PeerProcessResolver` (Ola 3): perezoso, psutil por defecto.
+        self._process_resolver = process_resolver
         self._clock: Callable[[], float] = clock or time.time
         self._lock = threading.RLock()
         self._panes: Dict[str, PaneSessionRecord] = {}
@@ -129,6 +137,39 @@ class PaneRegistry:
         # si no, en memoria (estable mientras viva el proceso).
         self._identity_repo = identity_repo
         self._memory_identities: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    @property
+    def process_resolver(self) -> Any:
+        if self._process_resolver is None:
+            from src.adapters.identity.peer_process import PsutilPeerProcessResolver
+
+            self._process_resolver = PsutilPeerProcessResolver()
+        return self._process_resolver
+
+    def _process_create_time(self, pid: Optional[int]) -> Optional[float]:
+        if not pid:
+            return None
+        try:
+            ident = self.process_resolver.process_identity(int(pid))
+        except Exception:
+            return None
+        return float(ident.create_time) if ident is not None else None
+
+    def bind_process(
+        self, pane_id: int | str, pid: int, *, create_time: Optional[float] = None
+    ) -> Optional[PaneSessionRecord]:
+        """Liga la sesion del panel al proceso raiz de su PTY (pid + create_time). None si el panel no esta activo.
+
+        Si el proceso ya no existe, la sesion queda SIN vinculo y el relevo la rechaza (fallo cerrado)."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        ctime = float(create_time) if create_time is not None else self._process_create_time(pid)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+            rec.pid = int(pid)
+            rec.pid_create_time = ctime
+            return rec
 
     def resolve_pane_identity(
         self, pane_id: int | str, project_uuid: Optional[str] = "", *, touch: bool = False
@@ -181,6 +222,7 @@ class PaneRegistry:
                 bool(identity.get("auto_relay_enabled")) if auto_relay_enabled is None else bool(auto_relay_enabled)
             )
         resolved_agent = agent_name or f"{cli_profile}-{norm_pane_id}"
+        pid_ctime = self._process_create_time(pid)
 
         with self._lock:
             previous = self._panes.get(norm_pane_id)
@@ -198,6 +240,7 @@ class PaneRegistry:
                 cli_profile=cli_profile,
                 role=role,
                 pid=pid,
+                pid_create_time=pid_ctime,
                 status="active",
                 created_at=now,
                 last_seen_at=now,
@@ -290,8 +333,12 @@ class PaneRegistry:
         self,
         pane_id: int | str,
         timestamp: Optional[float] = None,
+        *,
+        submitted: bool = False,
     ) -> bool:
-        """Registra la marca temporal de la última pulsación humana sobre el panel."""
+        """Registra la marca temporal de la última pulsación humana sobre el panel.
+
+        `submitted=True` (el humano pulso Enter) marca ademas un TURNO humano: cierra la cadena causal del panel."""
         norm_pane_id, _ = _normalize_pane_id(pane_id)
         with self._lock:
             ts = float(timestamp) if timestamp is not None else float(self._clock())
@@ -299,7 +346,14 @@ class PaneRegistry:
             rec = self._panes.get(norm_pane_id)
             if rec is not None:
                 rec.last_human_keystroke_at = ts
+                if submitted:
+                    rec.last_human_submit_at = ts
             return True
+
+    def last_human_submit_at(self, node_uuid: str) -> float:
+        """Ultimo turno humano enviado en el panel ACTIVO de esa identidad (0.0 si ninguno)."""
+        rec = self.find_active_pane_by_node(node_uuid)
+        return float(rec.last_human_submit_at) if rec is not None else 0.0
 
     def is_human_typing_active(
         self,
