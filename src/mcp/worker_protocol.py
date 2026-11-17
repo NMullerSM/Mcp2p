@@ -25,9 +25,10 @@ from src.core.services.message_relay_service import MAX_WAIT_MS, TOOL_TIMEOUT_MS
 # Espera recomendada cuando no se pudo comprobar el limite real del CLI: por debajo del defecto mas bajo conocido
 # (Codex, 60 s). Cuesta una vuelta del modelo cada ~45 s, no un fallo.
 DEFAULT_WAIT_MS = 45_000
-# Espera recomendada donde se comprobo con el binario que la configuracion del Hub se respeta.
-LONG_WAIT_MS = 240_000
-_VERIFIED_LONG_WAIT_CLIS = frozenset()  # se rellena segun la medida de la ola (ver `recommended_wait_ms`)
+# Espera recomendada donde se comprobo con el binario real. Claude Code 2.1.325: una llamada MCP de 200 s termina bien
+# (con la configuracion por defecto y con `timeout: 330000` en el servidor); no se probo mas alla de 200 s.
+LONG_WAIT_MS = 180_000
+_VERIFIED_LONG_WAIT_CLIS = frozenset({"claude"})
 
 WORKER_INSTRUCTIONS = (
     "MCP2P (relevo entre agentes). Los mensajes de otros agentes llegan SOLO a tu bandeja, nunca a tu terminal: "
