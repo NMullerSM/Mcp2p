@@ -451,8 +451,9 @@ def test_egm63_pyproject_declares_pty_deps_and_editable_cli_works() -> None:
     deps = data["project"]["dependencies"]
 
     assert any(d.startswith("psutil") for d in deps), deps
-    # EGM-79: Windows no tiene conector ConPTY (degrada), asi que `pywinpty` no se declara hasta que algo lo importe.
-    assert not [d for d in deps if d.startswith("pywinpty")], deps
+    # Windows tiene conector ConPTY (WinPtyHostConnector, bloque 1 de la V2.1): `pywinpty` se declara SOLO en win32.
+    winpty_deps = [d for d in deps if d.startswith("pywinpty")]
+    assert len(winpty_deps) == 1 and "sys_platform == 'win32'" in winpty_deps[0] and ">=3.1.2" in winpty_deps[0], deps
 
     import_res = subprocess.run(
         [sys.executable, "-c", "import src.app.main, src.mcp.server; print('ok')"],

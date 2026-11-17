@@ -162,14 +162,17 @@ def test_matrix_status_sessions_include_cwd(tmp_path: Path) -> None:
 # -- EGM-79 ---------------------------------------------------------------------------------------------
 
 
-def test_egm79_pywinpty_is_not_declared_while_nothing_imports_it() -> None:
+def test_egm79_pywinpty_is_declared_only_for_windows_and_only_loaded_lazily() -> None:
+    """EGM-79 fijaba que pywinpty NO estuviera declarado porque nada lo usaba. Ahora lo usa el conector ConPTY."""
     import tomllib
 
     root = Path(__file__).resolve().parent.parent
     data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    text = (root / "pyproject.toml").read_text(encoding="utf-8")
-    assert not [d for d in data["project"]["dependencies"] if d.lower().startswith("pywinpty")]
-    assert "backend PTY nativo en Windows" not in text.lower()
-    assert "conpty" not in text.lower()
-    src_text = "\n".join(p.read_text(encoding="utf-8") for p in (root / "src").rglob("*.py"))
-    assert "import winpty" not in src_text and "from winpty" not in src_text
+    declared = [d for d in data["project"]["dependencies"] if d.lower().startswith("pywinpty")]
+    assert len(declared) == 1 and "sys_platform == 'win32'" in declared[0]  # nunca en Linux/macOS
+    # Import perezoso: ningun modulo de src/ importa `winpty` al cargarse (en Linux/macOS no existe).
+    for path in (root / "src").rglob("*.py"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            assert not (stripped.startswith("import winpty") or stripped.startswith("from winpty")), (path, line)
+    import src.adapters.terminal.winpty_host  # noqa: F401  (importable sin pywinpty)

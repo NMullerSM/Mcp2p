@@ -27,6 +27,7 @@ from src.adapters.outbound.extension_gate import (
     OutboundRestConnector,
     SignedConnectorManifest,
 )
+from src.runtime.terminal_platform import is_unsupported_terminal_platform
 from src.app import fast_cli
 from src.app.api_bridge import ApiBridge
 from src.core.domain.context import ActorContext
@@ -332,9 +333,9 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
     pre_unlock_resp = terminal.spawn_session()
     assert pre_unlock_resp["success"] is False
     assert pre_unlock_resp["degraded"] is True
-    # En Windows no hay conector PTY: el codigo es TERMINAL_PLATFORM_UNSUPPORTED (ver test_terminal_windows_degradation).
+    # En Windows SIN conector ConPTY (pywinpty ausente) el codigo es TERMINAL_PLATFORM_UNSUPPORTED (ver test_terminal_windows_degradation).
     assert pre_unlock_resp["code"] == (
-        "TERMINAL_PLATFORM_UNSUPPORTED" if sys.platform == "win32" else "TERMINAL_ADAPTER_DEGRADED"
+        "TERMINAL_PLATFORM_UNSUPPORTED" if is_unsupported_terminal_platform() else "TERMINAL_ADAPTER_DEGRADED"
     )
     assert pre_unlock_resp.get("manual_command")
     assert isinstance(pre_unlock_resp.get("mcp_config"), dict)
@@ -377,7 +378,7 @@ def test_extension_gate_default_deny_rejects_agents_and_forged_manifests(tmp_pat
     assert term_resp["success"] is False
     assert term_resp["degraded"] is True
     assert term_resp["code"] == (
-        "TERMINAL_PLATFORM_UNSUPPORTED" if sys.platform == "win32" else "TERMINAL_ADAPTER_DEGRADED"
+        "TERMINAL_PLATFORM_UNSUPPORTED" if is_unsupported_terminal_platform() else "TERMINAL_ADAPTER_DEGRADED"
     )
     assert term_resp.get("manual_command")
     assert isinstance(term_resp.get("mcp_config"), dict)

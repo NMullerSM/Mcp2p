@@ -328,6 +328,7 @@ def test_win32_returns_platform_unsupported_with_manual_command(monkeypatch: pyt
     bridge = ApiBridge(db_manager=make_test_db())
     try:
         monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "winpty", None)  # sin pywinpty no hay conector ConPTY
         res = bridge.pty_prepare_install("claude")
         assert res["success"] is False and res["code"] == "TERMINAL_PLATFORM_UNSUPPORTED"
         assert res["install_command"] == "winget install Anthropic.ClaudeCode"

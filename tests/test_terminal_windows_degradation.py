@@ -1,7 +1,10 @@
 """
-T4 (plan 2026-11-15, seccion 7): en Windows el puerto de terminales degrada a un mensaje claro
-(`TERMINAL_PLATFORM_UNSUPPORTED`) sin excepciones y sin confundirse con el degradado generico.
-No hay conector ConPTY: se simula `sys.platform` por monkeypatch.
+T4 (plan 2026-11-15, seccion 7): cuando en Windows NO hay conector ConPTY utilizable (pywinpty ausente o Windows
+anterior a 1809) el puerto de terminales degrada a un mensaje claro (`TERMINAL_PLATFORM_UNSUPPORTED`) sin
+excepciones y sin confundirse con el degradado generico. Se simula `sys.platform` y la ausencia de `pywinpty`
+(`sys.modules["winpty"] = None`) por monkeypatch, de modo que el caso vale tambien en un Windows real con pywinpty.
+
+Si el conector SI esta disponible (doble de `winpty` inyectado) la plataforma NO se declara no soportada.
 """
 
 from __future__ import annotations
@@ -18,6 +21,14 @@ from src.app.api_bridge import ApiBridge
 from src.core.factory import ApplicationFactory
 
 UNSUPPORTED = "TERMINAL_PLATFORM_UNSUPPORTED"
+
+
+@pytest.fixture(autouse=True)
+def _pywinpty_missing(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Estos casos son el de "pywinpty no disponible"; los de "conector disponible" lo desactivan con un marcador."""
+    if "connector_available" in request.keywords:
+        return
+    monkeypatch.setitem(sys.modules, "winpty", None)  # `import winpty` -> ImportError, tambien en Windows real
 
 
 def _assert_unsupported(res: Dict[str, Any]) -> None:
@@ -86,6 +97,72 @@ def test_bridge_pty_methods_report_unsupported_platform_on_win32(monkeypatch: py
         listing = bridge.pty_list_cli_catalog()
         assert listing["success"] is True and listing["terminal_platform_supported"] is False
         assert listing["platform"] == "win32"
+    finally:
+        monkeypatch.undo()
+        bridge.core_kernel.close()
+
+
+# -- Windows con pywinpty: el conector SI esta disponible ------------------------------------------------------
+
+
+class _FakeWinpty:
+    class PTY:  # solo hace falta que exista; estos casos no lanzan procesos
+        pass
+
+    class Backend:
+        ConPTY = 0
+        WinPTY = 1
+
+
+@pytest.mark.connector_available
+def test_windows_with_pywinpty_is_not_reported_as_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.runtime.terminal_platform import is_unsupported_terminal_platform, unsupported_reason
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winpty", _FakeWinpty)
+    assert is_unsupported_terminal_platform() is False and unsupported_reason() is None
+
+    monkeypatch.setitem(sys.modules, "winpty", None)
+    assert is_unsupported_terminal_platform() is True and unsupported_reason() == "PYWINPTY_MISSING"
+
+
+@pytest.mark.connector_available
+def test_windows_older_than_1809_is_unsupported_even_with_pywinpty(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.runtime.terminal_platform import unsupported_platform_response, unsupported_reason
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winpty", _FakeWinpty)
+    monkeypatch.setattr(sys, "getwindowsversion", lambda: type("V", (), {"build": 17134})(), raising=False)
+    assert unsupported_reason() == "WINDOWS_TOO_OLD"
+    res = unsupported_platform_response()
+    assert res["code"] == UNSUPPORTED and res["reason"] == "WINDOWS_TOO_OLD" and "1809" in res["message"]
+
+    monkeypatch.setattr(sys, "getwindowsversion", lambda: type("V", (), {"build": 26100})(), raising=False)
+    assert unsupported_reason() is None
+
+
+def test_unsupported_message_names_the_missing_component(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    res = NullAgentTerminalConnector().spawn_session(pane_id=1)
+    assert res["reason"] == "PYWINPTY_MISSING" and "pywinpty" in res["message"] and "Windows" in res["message"]
+
+
+@pytest.mark.connector_available
+def test_matrix_status_and_catalog_follow_the_real_connector_not_the_os(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = ApiBridge(db_manager=make_test_db())
+    try:
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "winpty", _FakeWinpty)
+        status = bridge.pty_get_matrix_status()
+        assert status["platform_unsupported"] is False and status["code"] == "OK" and status["message"] == ""
+        catalog_service = getattr(bridge.core_kernel.terminal_connector.primary, "catalog_service", None)
+        if catalog_service is not None:
+            catalog_service._which = lambda name: None
+        assert bridge.pty_list_cli_catalog()["terminal_platform_supported"] is True
+
+        monkeypatch.setitem(sys.modules, "winpty", None)
+        status = bridge.pty_get_matrix_status()
+        assert status["platform_unsupported"] is True and status["code"] == UNSUPPORTED
     finally:
         monkeypatch.undo()
         bridge.core_kernel.close()
