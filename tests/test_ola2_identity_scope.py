@@ -9,7 +9,9 @@ bloquea antes de ejecutar; la migracion de la tabla nueva es idempotente sobre u
 from __future__ import annotations
 
 import ast
+import inspect
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List
@@ -28,6 +30,13 @@ from src.core.events import DomainEvent, DomainEventBus
 from src.core.factory import ApplicationFactory
 from src.core.kernel import CoreKernel
 from src.core.services import SwarmRelayOrchestrator
+from src.core.services.project_scope_guard import (
+    PROJECT_SCOPE_ENV,
+    PROJECT_SCOPE_MODE,
+    ProjectScopeGuard,
+    resolve_project_scope_mode,
+)
+from src.mcp import tools as tools_module
 from src.mcp.pane_registry import PaneRegistry
 from src.mcp.tools import MCPToolsHandler
 from src.storage.db import DatabaseManager
@@ -490,3 +499,69 @@ def test_gui_auto_relay_toggle_is_per_pane_and_persists(gui, tmp_path: Path) -> 
     assert reopened["pane"]["auto_relay_enabled"] is True
     assert bridge.db.get_pane_identity(proj, "pane_2")["auto_relay_enabled"] is True
 
+
+# ----------------------------------------------------------------------------------------------------------------
+# D8 Guardia de alcance de las herramientas antiguas: warn registra sin romper, enforce bloquea
+# ----------------------------------------------------------------------------------------------------------------
+
+
+def test_every_tool_with_project_uuid_is_covered_by_the_scope_guard() -> None:
+    legacy = set(tools_module.PROJECT_SCOPED_LEGACY_TOOLS)
+    relay = set(tools_module.SELF_SCOPED_RELAY_TOOLS)
+    assert not legacy & relay
+    for name, member in inspect.getmembers(MCPToolsHandler, predicate=inspect.isfunction):
+        if name.startswith("_"):
+            continue
+        if "project_uuid" not in inspect.signature(member).parameters:
+            continue
+        assert name in legacy | relay, f"{name} recibe project_uuid y no pasa por la guardia de alcance"
+        if name in legacy:
+            assert getattr(member, "__mcp2p_project_scope_guarded__", False) is True, name
+
+
+def test_scope_mode_defaults_to_warn_and_ignores_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert PROJECT_SCOPE_MODE == "warn"
+    monkeypatch.delenv(PROJECT_SCOPE_ENV, raising=False)
+    assert resolve_project_scope_mode() == "warn"
+    monkeypatch.setenv(PROJECT_SCOPE_ENV, "ENFORCE")
+    assert resolve_project_scope_mode() == "enforce"
+    monkeypatch.setenv(PROJECT_SCOPE_ENV, "off")  # no existe un modo «sin guardia»
+    assert resolve_project_scope_mode() == "warn"
+    assert ProjectScopeGuard().check(tool="t", requested_project_uuid="B", session=None).allowed is True
+
+
+def test_warn_mode_logs_and_annotates_without_breaking(
+    two: _TwoProjects, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv(PROJECT_SCOPE_ENV, raising=False)
+    two.db.create_card(project_uuid=two.proj_b, card_id="CARD-B1", title="De B")
+    two.handler.bind_session_token(two.a1["session_token"])
+    with caplog.at_level(logging.WARNING, logger="mcp2p.core.services.project_scope"):
+        out = _j(two.handler.get_kanban_board(project_uuid=two.proj_b))
+    assert out["success"] is True and [c["card_id"] for c in out["cards"]] == ["CARD-B1"]
+    assert out["scope_warning"]["code"] == "PROJECT_SCOPE_MISMATCH"
+    assert out["scope_warning"]["session_project_uuid"] == two.proj_a
+    events = [r.mcp2p_scope for r in caplog.records if hasattr(r, "mcp2p_scope")]
+    assert events and events[-1]["tool"] == "get_kanban_board"
+    assert events[-1]["requested_project_uuid"] == two.proj_b and events[-1]["pane_id"] == "pane_1"
+
+    same = _j(two.handler.get_kanban_board(project_uuid=two.proj_a))
+    assert same["success"] is True and "scope_warning" not in same
+
+
+def test_enforce_mode_blocks_before_executing(two: _TwoProjects, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(PROJECT_SCOPE_ENV, "enforce")
+    two.handler.bind_session_token(two.a1["session_token"])
+    blocked = _j(two.handler.create_kanban_task(two.proj_b, "CARD-INJ", "Inyectada desde A"))
+    assert blocked["success"] is False and blocked["code"] == "PROJECT_SCOPE_FORBIDDEN"
+    assert two.db.get_cards(project_uuid=two.proj_b) == []
+    allowed = _j(two.handler.create_kanban_task(two.proj_a, "CARD-OWN", "Propia"))
+    assert allowed["success"] is True
+
+
+def test_no_pane_session_means_no_restriction(two: _TwoProjects, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(PROJECT_SCOPE_ENV, "enforce")
+    monkeypatch.delenv("MCP2P_SESSION_TOKEN", raising=False)
+    two.handler.bind_session_token(None)
+    out = _j(two.handler.get_kanban_board(project_uuid=two.proj_b))
+    assert out["success"] is True and "scope_warning" not in out

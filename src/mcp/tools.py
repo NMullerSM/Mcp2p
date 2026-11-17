@@ -1841,3 +1841,79 @@ class MCPToolsHandler:
             resp["tools"] = tools_list
 
         return json.dumps(resp, indent=2, ensure_ascii=False)
+
+
+# ----------------------------------------------------------------------------------------------------------------
+# Alcance por proyecto de las herramientas antiguas (Ola 2, D8): `warn` en esta version, `enforce` en 2.2.
+# Las tres herramientas del relevo NO estan aqui: aplican el alcance ellas mismas y siempre en `enforce`.
+# ----------------------------------------------------------------------------------------------------------------
+
+PROJECT_SCOPED_LEGACY_TOOLS: tuple[str, ...] = (
+    "get_kanban_board",
+    "create_kanban_task",
+    "edit_kanban_task",
+    "claim_kanban_task",
+    "release_kanban_task",
+    "get_project_context",
+    "send_coordination_rfc",
+    "get_coordination_session",
+    "inspect_okf_governance",
+    "get_task_full_context",
+    "manage_task_worktree",
+    "run_okf_micro_script",
+    "propose_or_apply_task_distribution",
+    "inspect_pr_and_recommend",
+    "open_dispute_ticket",
+    "get_dispute_ticket",
+    "get_jury_evaluation_prompt",
+    "sync_coordination_memory",
+    "list_dispute_tickets",
+    "submit_agent_jury_evaluation",
+    "submit_synthesis",
+    "scan_and_bootstrap_okf",
+    "get_alignment_dossier",
+    "audit_okf_drift",
+)
+# Herramientas con `project_uuid` que aplican el alcance por su cuenta (enforce desde el primer dia).
+SELF_SCOPED_RELAY_TOOLS: tuple[str, ...] = ("await_next_assignment", "list_swarm_panes", "send_pane_message")
+
+_PROJECT_SCOPE_GUARD = ProjectScopeGuard()
+
+
+def _with_project_scope_guard(tool_name: str, method: Any) -> Any:
+    """Envuelve una herramienta antigua: compara su `project_uuid` con el de la sesion de panel autenticada."""
+    import functools
+    import inspect
+
+    signature = inspect.signature(method)
+
+    @functools.wraps(method)
+    def guarded(self: "MCPToolsHandler", *args: Any, **kwargs: Any) -> Any:
+        try:
+            bound = signature.bind_partial(self, *args, **kwargs)
+            requested = bound.arguments.get("project_uuid")
+        except TypeError:
+            requested = kwargs.get("project_uuid")
+        session, _err = self._resolve_active_pane_session()
+        decision = _PROJECT_SCOPE_GUARD.check(tool=tool_name, requested_project_uuid=requested, session=session)
+        if not decision.allowed:
+            return json.dumps(decision.error, indent=2, ensure_ascii=False)
+        result = method(self, *args, **kwargs)
+        if decision.warning is None or not isinstance(result, str):
+            return result
+        try:
+            payload = json.loads(result)
+        except (TypeError, ValueError):
+            return result
+        if not isinstance(payload, dict):
+            return result
+        payload["scope_warning"] = decision.warning
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    guarded.__mcp2p_project_scope_guarded__ = True  # type: ignore[attr-defined]
+    return guarded
+
+
+for _tool_name in PROJECT_SCOPED_LEGACY_TOOLS:
+    setattr(MCPToolsHandler, _tool_name, _with_project_scope_guard(_tool_name, getattr(MCPToolsHandler, _tool_name)))
+del _tool_name
