@@ -39,6 +39,13 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
   terminal. Si el agente se lanzó con los permisos saltados, MCP2P te pide confirmar antes en un diálogo del sistema.
 - Parada del relevo: un interruptor general detiene la entrega de mensajes entre agentes sin perder ninguno, y un
   agente puede pausar su propia bandeja con `relay_pause_self`. Solo tú puedes reanudarlos, con confirmación.
+- Canal del operador: tu propio asistente (Claude Code, Claude Desktop u otro cliente MCP) puede enviar tareas a los
+  agentes de tus terminales y leer sus respuestas. Se registra como servidor MCP con `mcp2p --operator-proxy` y se
+  conecta a la ventana de MCP2P abierta, sin código ni contraseña guardados en ningún archivo. Tiene cuatro
+  herramientas: ver las terminales disponibles, enviar una tarea, consultar su estado y esperar la respuesta.
+- La primera vez que un programa se conecta como operador, MCP2P te pregunta en un diálogo del sistema mostrando qué
+  programa es, desde qué carpeta y quién lo lanzó, y qué proyectos podrá usar. Las tareas llegan a la bandeja del
+  agente marcadas como enviadas por tu operador, nunca se teclean en su terminal.
 
 ### Mejorado
 - Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que la
@@ -73,6 +80,11 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 - Registro de auditoría encadenado de todos los mensajes entre agentes (enviado, entregado, confirmado, retenido,
   rechazado) que permite detectar si alguien editó o borró una entrada. El texto de los mensajes se borra a los
   30 días; el registro de que existieron se conserva.
+- El permiso de un operador vale solo para el programa que aprobaste mientras siga abierto: si se cierra, si lo
+  revocas o tras dos horas sin uso deja de valer, y una revocación no se puede saltar reconectando. Solo tu usuario
+  puede conectarse al canal, y un agente de una terminal de MCP2P no puede hacerse pasar por operador.
+- Las tareas del operador para un agente que corre con los permisos saltados, o para una terminal de shell, esperan
+  en tu bandeja hasta que las apruebes; el operador también puede pedir esa confirmación para cualquier tarea.
 
 ## [2.0.1] - 2026-11-17 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1)
 
