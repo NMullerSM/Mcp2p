@@ -719,6 +719,34 @@ class DatabaseManager:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_borda_unique ON jury_borda_scores(ticket_id, juror_id, evaluated_option);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_human_votes_unique ON human_jury_votes(ticket_id, node_uuid);
                 """)
+                self._migrate_pane_identities(conn)
+
+    @staticmethod
+    def _migrate_pane_identities(conn: sqlite3.Connection) -> None:
+        """Tabla `pane_identities` (Ola 2): identidad estable y Auto-Relay por (proyecto, ranura de panel).
+
+        Idempotente: crea la tabla si falta y añade las columnas que una version anterior no tuviera. No toca filas.
+        `project_uuid = ''` es un panel abierto sin proyecto activo.
+        """
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pane_identities (
+                project_uuid TEXT NOT NULL,
+                pane_slot TEXT NOT NULL,
+                node_uuid TEXT NOT NULL UNIQUE,
+                auto_relay_enabled INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                last_spawned_at TEXT,
+                PRIMARY KEY (project_uuid, pane_slot)
+            );
+            """
+        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(pane_identities);").fetchall()}
+        if "auto_relay_enabled" not in cols:
+            conn.execute("ALTER TABLE pane_identities ADD COLUMN auto_relay_enabled INTEGER NOT NULL DEFAULT 0;")
+        if "last_spawned_at" not in cols:
+            conn.execute("ALTER TABLE pane_identities ADD COLUMN last_spawned_at TEXT;")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_pane_identities_node ON pane_identities(node_uuid);")
 
     def _ensure_default_project(self) -> None:
         """Asegura la existencia de un proyecto por defecto si la base está vacía."""
@@ -2441,6 +2469,97 @@ class DatabaseManager:
     def get_project_collaborators_map(self, project_uuid: str) -> Dict[str, Dict[str, Any]]:
         """Devuelve un diccionario indexado por node_uuid con los colaboradores del proyecto."""
         return {c["node_uuid"]: c for c in self.get_project_collaborators(project_uuid)}
+
+    # ==========================
+    # Identidad estable de paneles de terminal (Ola 2)
+    # ==========================
+
+    @staticmethod
+    def _pane_identity_row(row: Any) -> Dict[str, Any]:
+        return {
+            "project_uuid": row["project_uuid"],
+            "pane_slot": row["pane_slot"],
+            "node_uuid": row["node_uuid"],
+            "auto_relay_enabled": bool(row["auto_relay_enabled"]),
+            "created_at": row["created_at"],
+            "last_spawned_at": row["last_spawned_at"],
+        }
+
+    def get_pane_identity(self, project_uuid: str, pane_slot: str) -> Optional[Dict[str, Any]]:
+        """Identidad guardada de (proyecto, ranura) o None."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM pane_identities WHERE project_uuid = ? AND pane_slot = ?;",
+                (project_uuid or "", pane_slot),
+            ).fetchone()
+        return self._pane_identity_row(row) if row else None
+
+    def get_or_create_pane_identity(
+        self, project_uuid: str, pane_slot: str, *, touch: bool = False
+    ) -> Dict[str, Any]:
+        """Devuelve la identidad de (proyecto, ranura) creandola la primera vez (atomico bajo el cerrojo de escritura).
+
+        `touch=True` anota `last_spawned_at` (cada vez que se abre el panel).
+        """
+        from src.core.domain.pane_identity import new_pane_node_uuid
+
+        proj = project_uuid or ""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                row = conn.execute(
+                    "SELECT * FROM pane_identities WHERE project_uuid = ? AND pane_slot = ?;", (proj, pane_slot)
+                ).fetchone()
+                if row is None:
+                    for _attempt in range(8):
+                        candidate = new_pane_node_uuid(proj, pane_slot)
+                        try:
+                            conn.execute(
+                                """
+                                INSERT INTO pane_identities
+                                    (project_uuid, pane_slot, node_uuid, auto_relay_enabled, created_at, last_spawned_at)
+                                VALUES (?, ?, ?, 0, ?, ?);
+                                """,
+                                (proj, pane_slot, candidate, now_str, now_str if touch else None),
+                            )
+                            break
+                        except sqlite3.IntegrityError:
+                            continue  # colision del sufijo aleatorio: otro intento
+                    else:  # pragma: no cover - 8 colisiones de 32 bits seguidas
+                        raise RuntimeError("No se pudo generar una identidad de panel unica.")
+                elif touch:
+                    conn.execute(
+                        "UPDATE pane_identities SET last_spawned_at = ? WHERE project_uuid = ? AND pane_slot = ?;",
+                        (now_str, proj, pane_slot),
+                    )
+                row = conn.execute(
+                    "SELECT * FROM pane_identities WHERE project_uuid = ? AND pane_slot = ?;", (proj, pane_slot)
+                ).fetchone()
+        return self._pane_identity_row(row)
+
+    def set_pane_auto_relay(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]:
+        """Persiste el interruptor Auto-Relay del panel (proyecto, ranura); crea la identidad si faltaba."""
+        self.get_or_create_pane_identity(project_uuid, pane_slot)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    "UPDATE pane_identities SET auto_relay_enabled = ? WHERE project_uuid = ? AND pane_slot = ?;",
+                    (1 if enabled else 0, project_uuid or "", pane_slot),
+                )
+        identity = self.get_pane_identity(project_uuid, pane_slot)
+        assert identity is not None
+        return identity
+
+    def list_pane_identities(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Identidades guardadas (de un proyecto o de todos)."""
+        with self.get_connection() as conn:
+            if project_uuid is None:
+                rows = conn.execute("SELECT * FROM pane_identities ORDER BY project_uuid, pane_slot;").fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM pane_identities WHERE project_uuid = ? ORDER BY pane_slot;", (project_uuid,)
+                ).fetchall()
+        return [self._pane_identity_row(r) for r in rows]
 
     # ==========================
     # Extensiones, Tablas Dinámicas y Seeds P2P

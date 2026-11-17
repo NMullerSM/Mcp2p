@@ -600,3 +600,21 @@ class SqliteExtensionRegistryRepository(_BaseSqliteRepository):
 
     def list_seed_nodes(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
         return self.db.list_seed_nodes(project_uuid)
+
+
+class SqlitePaneIdentityRepository(_BaseSqliteRepository):
+    """Repositorio SQLite de la identidad estable y el Auto-Relay de cada (proyecto, ranura de panel)."""
+
+    def get_pane_identity(self, project_uuid: str, pane_slot: str) -> Optional[Dict[str, Any]]:
+        return self.db.get_pane_identity(project_uuid, pane_slot)
+
+    def get_or_create_pane_identity(
+        self, project_uuid: str, pane_slot: str, *, touch: bool = False
+    ) -> Dict[str, Any]:
+        return self.db.get_or_create_pane_identity(project_uuid, pane_slot, touch=touch)
+
+    def set_pane_auto_relay(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]:
+        return self.db.set_pane_auto_relay(project_uuid, pane_slot, enabled)
+
+    def list_pane_identities(self, project_uuid: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self.db.list_pane_identities(project_uuid)

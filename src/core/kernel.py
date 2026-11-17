@@ -81,6 +81,7 @@ class CoreKernel:
         profile: str = "custom",
         connectors: Optional[Dict[str, Any]] = None,
         collaboration_service: Optional[Any] = None,
+        pane_identity_repo: Optional[Any] = None,
     ) -> None:
         self._lock = threading.RLock()
         self._closed = False
@@ -96,6 +97,8 @@ class CoreKernel:
         self.collab_repo = collab_repo
         self.okf_meta_repo = okf_meta_repo
         self.extension_repo = extension_repo
+        # Identidad estable de paneles por (proyecto, ranura) y su Auto-Relay (Ola 2); None sin persistencia.
+        self.pane_identity_repo = pane_identity_repo
 
         # Mensajería y eventos
         self.event_bus = event_bus

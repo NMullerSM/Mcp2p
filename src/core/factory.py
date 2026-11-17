@@ -22,6 +22,7 @@ from src.adapters.persistence.sqlite_repositories import (
     SqliteExtensionRegistryRepository,
     SqliteKanbanRepository,
     SqliteOkfMetadataRepository,
+    SqlitePaneIdentityRepository,
     SqliteProjectRepository,
     SqliteTribunalRepository,
 )
@@ -224,6 +225,7 @@ class ApplicationFactory:
         collab_repo = SqliteCollaborationRepository(db)
         okf_meta_repo = SqliteOkfMetadataRepository(db)
         extension_repo = SqliteExtensionRegistryRepository(db)
+        pane_identity_repo = SqlitePaneIdentityRepository(db)
 
         # Buses
         resolved_event_bus = event_bus if event_bus is not None else DomainEventBus()
@@ -345,6 +347,7 @@ class ApplicationFactory:
             collab_repo=collab_repo,
             okf_meta_repo=okf_meta_repo,
             extension_repo=extension_repo,
+            pane_identity_repo=pane_identity_repo,
             event_bus=resolved_event_bus,
             bus=resolved_bus,
             kanban_service=kanban_service,

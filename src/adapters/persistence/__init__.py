@@ -5,6 +5,7 @@ from src.adapters.persistence.sqlite_repositories import (
     SqliteExtensionRegistryRepository,
     SqliteKanbanRepository,
     SqliteOkfMetadataRepository,
+    SqlitePaneIdentityRepository,
     SqliteProjectRepository,
     SqliteTribunalRepository,
 )
@@ -16,4 +17,5 @@ __all__ = [
     "SqliteCollaborationRepository",
     "SqliteOkfMetadataRepository",
     "SqliteExtensionRegistryRepository",
+    "SqlitePaneIdentityRepository",
 ]
