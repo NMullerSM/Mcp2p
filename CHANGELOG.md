@@ -17,8 +17,14 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 - La opción `--hub-proxy-only` conecta un CLI externo al Hub de MCP2P sin abrir tu base de datos; también funciona con
   la aplicación empaquetada (`mcp2p --mcp-server --hub-proxy-only`). Abierto fuera de un panel, avisa de que hay que
   abrir el CLI desde MCP2P en lugar de usar datos que no son del panel.
+- Auto-Relay por terminal: cada terminal tiene su propio interruptor en «Terminales activas», empieza apagado, pide
+  confirmación al encenderlo y MCP2P lo recuerda para esa terminal en ese proyecto aunque cierres la aplicación.
 
 ### Mejorado
+- Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar
+  MCP2P, así que las tarjetas asignadas a ese agente siguen siendo suyas.
+- Al cambiar de proyecto, las terminales del proyecto anterior siguen abiertas pero ocultas, y el panel lateral
+  indica cuántas hay; al volver aparecen tal como estaban.
 - La conexión de los CLI externos con el Hub aguanta esperas largas del agente (hasta unos 5 minutos), se reconecta
   sola si el Hub se reinicia en la misma dirección y avisa al instante cuando MCP2P está cerrado, en lugar de quedarse
   colgada.
@@ -26,6 +32,11 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
   la primera vez, no sigue enlaces simbólicos y respeta una entrada `mcp2p` que hayas puesto a mano.
 - En la aplicación empaquetada, un CLI cuya integración MCP aún no está comprobada ya no se anuncia como «MCP Hub»:
   la etiqueta del panel dice «MCP sin verificar».
+
+### Seguridad
+- Cada terminal pertenece al proyecto en el que se abrió: un agente solo ve las terminales de su proyecto y solo
+  puede enviar mensajes o recibir asignaciones dentro de él. Si un agente consulta o modifica otro proyecto, la
+  acción queda registrada y la respuesta lo avisa; en una versión próxima se bloqueará.
 
 ## [2.0.1] - 2026-11-17 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1)
 
