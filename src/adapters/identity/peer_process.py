@@ -192,3 +192,109 @@ class PsutilPeerProcessResolver:
         if not self._owners_in([proc], client, server):
             return False
         return self._in_tree(proc, root)
+
+    # -- canal del operador (Ola 4, F2.1) ------------------------------------------------------------------------
+
+    def connection_owner(self, client: Endpoint, server: Endpoint) -> Optional[ProcessIdentity]:
+        """Proceso dueño de la conexion TCP loopback `client -> server` (Windows: canal del operador por TCP).
+        None si no se encuentra, si hay varios dueños distintos o si es de otro usuario (sin pid visible)."""
+        if not is_loopback_endpoint(client) or not server:
+            return None
+        ps = self.ps
+        try:
+            owners = self._owners_global(client, server)
+        except ps.Error:
+            return None
+        if not owners or any(pid is None for pid in owners) or len(set(owners)) != 1:
+            return None
+        return self.process_identity(int(owners[0]))
+
+    def is_alive(self, ident: ProcessIdentity) -> bool:
+        return self._live(ident) is not None
+
+    def descends_from(self, ident: ProcessIdentity, root: ProcessIdentity) -> bool:
+        """¿`ident` (vivo) es `root` o desciende de el? (pid + `create_time` en ambos)."""
+        proc = self._live(ident)
+        return proc is not None and self._in_tree(proc, root)
+
+    def parent_of(self, ident: ProcessIdentity) -> Optional[ProcessIdentity]:
+        """Padre vivo de `ident`; None si el padre murio o su pid se reutilizo (padre nacido despues del hijo)."""
+        proc = self._live(ident)
+        if proc is None:
+            return None
+        ps = self.ps
+        try:
+            parent = proc.parent()
+            if parent is None:
+                return None
+            ctime = float(parent.create_time())
+        except ps.Error:
+            return None
+        if ctime > float(ident.create_time) + _CREATE_TIME_TOLERANCE:
+            return None
+        return ProcessIdentity(int(parent.pid), ctime)
+
+    def describe(self, ident: ProcessIdentity) -> Optional[dict]:
+        """Ficha de un proceso VIVO (para el dialogo de emparejamiento): ejecutable, nombre, usuario y cwd."""
+        proc = self._live(ident)
+        if proc is None:
+            return None
+        ps = self.ps
+
+        def _safe(fn: Any, default: Any = "") -> Any:
+            try:
+                value = fn()
+            except (ps.Error, OSError):
+                return default
+            return default if value is None else value
+
+        return {
+            "pid": int(ident.pid),
+            "create_time": float(ident.create_time),
+            "exe": str(_safe(proc.exe)),
+            "name": str(_safe(proc.name)),
+            "username": str(_safe(proc.username)),
+            "cwd": str(_safe(proc.cwd)),
+            "cmdline": [str(a) for a in _safe(proc.cmdline, [])][:16],
+        }
+
+    def ancestors(self, ident: ProcessIdentity, limit: int = 8) -> List[dict]:
+        """`ident` y sus ascendientes (hasta `limit`), cada uno con pid, nombre y ejecutable."""
+        out: List[dict] = []
+        current: Optional[ProcessIdentity] = ident
+        while current is not None and len(out) < max(1, int(limit)):
+            info = self.describe(current)
+            if info is None:
+                break
+            out.append({"pid": info["pid"], "name": info["name"], "exe": info["exe"]})
+            current = self.parent_of(current)
+        return out
+
+    def current_username(self) -> str:
+        import os
+
+        ps = self.ps
+        try:
+            return str(ps.Process(os.getpid()).username())
+        except ps.Error:
+            return ""
+
+    def tree_cmdlines(self, root: ProcessIdentity) -> Optional[List[List[str]]]:
+        """`argv` de la raiz y de todos sus descendientes vivos; None si la raiz no existe o no se puede leer."""
+        proc = self._live(root)
+        if proc is None:
+            return None
+        ps = self.ps
+        out: List[List[str]] = []
+        try:
+            procs = [proc, *proc.children(recursive=True)]
+        except ps.Error:
+            return None
+        for item in procs:
+            try:
+                out.append([str(a) for a in item.cmdline()])
+            except ps.NoSuchProcess:
+                continue
+            except ps.Error:
+                return None
+        return out
