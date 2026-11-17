@@ -32,9 +32,8 @@
 
 ```text
 Mcp2p/
-├── docs/                                 # Documentación técnica, arquitectura y auditoría
+├── docs/                                 # Documentación técnica y de arquitectura
 │   ├── okf/                              # Gobernanza viva OKF (ADRs, decisiones, requirements, mcps)
-│   ├── PLAN_MAESTRO_MCP2P.md             # Plan maestro ODD y roadmap
 │   └── GUIA_DE_USUARIO_Y_UX.md           # Heurísticas de Nielsen y diseño UX
 ├── frontend/                             # Interfaz de usuario SPA en React + Vite + Tailwind/Lucide
 │   ├── src/                              # Componentes visuales conectados de verdad al puente PyWebView

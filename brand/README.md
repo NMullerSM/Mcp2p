@@ -11,7 +11,5 @@ Repositorio oficial de assets de marca y diseño para **MCP²P**.
 - [`preview.html`](preview.html): Galería visual interactiva para ver todos los assets en local.
 - [`BRAND_SYSTEM.md`](BRAND_SYSTEM.md): Manual de identidad corporativa y tokens de diseño.
 
-## Guía de Implementación en Código
-La guía paso a paso para sustituir los iconos del frontend y desktop se encuentra en:
-- [`docs/okf/GUIA_IMPLEMENTACION_REDISENO_MARCA_MCP2P.md`](../docs/okf/GUIA_IMPLEMENTACION_REDISENO_MARCA_MCP2P.md)
-- [`docs/GUIA_IMPLEMENTACION_REDISENO_MARCA_MCP2P.md`](../docs/GUIA_IMPLEMENTACION_REDISENO_MARCA_MCP2P.md)
+## Uso en el código
+Los iconos del frontend y del escritorio salen de `core/`, `png/` y `favicons/`; el manual de identidad es `BRAND_SYSTEM.md`.

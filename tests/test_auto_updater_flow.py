@@ -3,7 +3,6 @@ Flujo completo del actualizador (src/app/auto_updater.py) contra un servidor HTT
 el lanzado del instalador simulado por plataforma. Nada de aquí ejecuta un instalador real
 ni toca la red: `OFFICIAL_RELEASE_PREFIX` apunta a 127.0.0.1.
 
-Contexto: docs/okf/auditoria_2026-11/39_ACTUALIZACION_AUTOMATICA_WINDOWS.md
 """
 import hashlib
 import http.server

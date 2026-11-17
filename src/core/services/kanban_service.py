@@ -2,7 +2,7 @@
 Servicio de Gobernanza Kanban con aplicación estricta de invariantes HITL (EGM-35).
 
 Es la ÚNICA implementación de "qué transiciones requieren firma humana" del sistema
-(EGM-35 / EGM-49, ver `docs/okf/auditoria_2026-11/24_...`). Los adaptadores primarios
+(EGM-35 / EGM-49). Los adaptadores primarios
 (`ApiBridge`/UI, `MCPToolsHandler`, `fast_cli`) construyen un `ActorContext` y delegan
 aquí; ninguno debe reimplementar la lista de estados reservados.
 

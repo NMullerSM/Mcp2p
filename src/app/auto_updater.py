@@ -9,7 +9,7 @@ Estados de `get_progress()["status"]`:
                       \\-> error (con `error` = causa legible; reintentable)
 
 Cada paso queda registrado en `<user_data_dir>/logs/updater.log` (rotación simple, sin
-secretos) para poder diagnosticar un fallo posterior (ver docs/okf/auditoria_2026-11/39).
+secretos) para poder diagnosticar un fallo posterior.
 """
 import os
 import re

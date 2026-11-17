@@ -9,7 +9,7 @@ created_at: 2026-11-04T00:00:00Z
 
 ## Contexto
 
-`docs/PROMPT_REPARACION_JURADO_DINAMICO.md` (sesión de auditoría del 2026-11-04) dejó 4 decisiones de diseño abiertas (§3.1-§3.4) sobre el motor de jurado dinámico implementado en `docs/okf/auditoria_2026-11/07_PLAN_REPARACION_JURADO_DINAMICO.md`. Esta ADR resuelve 3 de las 4, en una sesión de diseño entre el usuario y Claude, usando el código ya implementado y verificado (69→73 tests en verde a lo largo de los planes v1-v5) como base — no se trata de construir algo nuevo, sino de confirmar y documentar cómo se usa lo que ya existe.
+Una sesión de auditoría del 2026-11-04 dejó 4 decisiones de diseño abiertas (§3.1-§3.4) sobre el motor de jurado dinámico. Esta ADR resuelve 3 de las 4, en una sesión de diseño entre el usuario y Claude, usando el código ya implementado y verificado (69→73 tests en verde a lo largo de los planes v1-v5) como base — no se trata de construir algo nuevo, sino de confirmar y documentar cómo se usa lo que ya existe.
 
 ## Decisión
 

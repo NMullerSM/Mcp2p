@@ -1,6 +1,6 @@
 """
 Pruebas del puerto único de red `PeerNetworkPort` (EGM-48) y de las correcciones EGM-47
-cableadas en `ApiBridge`/`CollabMeshUIAdapter` (ver `docs/okf/auditoria_2026-11/25_`).
+cableadas en `ApiBridge`/`CollabMeshUIAdapter`.
 
 Además verifican (sin modificar código) el estado de EGM-46 en `WebRTCTransportAdapter`:
 rol Answerer real y cierre del par anterior en cada `try_connect`.

@@ -258,7 +258,7 @@ def test_get_install_mode_dev_mode():
 )
 def test_updater_target_file_never_escapes_temp_dir(tag_name, monkeypatch):
     """`version` (tag_name remoto) forma parte del nombre del archivo temporal: nunca debe
-    producir una ruta fuera de `_temp_dir` (ver docs/okf/auditoria_2026-11/26_)."""
+    producir una ruta fuera de `_temp_dir`."""
     monkeypatch.setattr(AutoUpdateManager, "_download_worker", lambda self, url, dest: None)
     manager = AutoUpdateManager(base_dir=".", user_data_dir=tempfile.gettempdir())
     url = f"{OFFICIAL_RELEASE_PREFIX}v1.0.1/Mcp2p-Setup-1.0.1.tar.gz"

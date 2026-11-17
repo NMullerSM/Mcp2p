@@ -67,3 +67,10 @@ cli_catalog.user.json
 
 # Registro del actualizador (src/app/auto_updater.py) en modo desarrollo
 logs/
+
+# Material interno (planes, prompts, auditorias, specs de trabajo): vive en el repo privado de notas
+docs/superpowers/
+docs/okf/auditoria_*/
+*.docx
+REPORTE_EJECUCION_*.md
+PLAN_*.md
