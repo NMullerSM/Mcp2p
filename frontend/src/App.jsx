@@ -97,8 +97,21 @@ export default function App() {
     return () => { isMounted = false; };
   }, []);
 
+  // Estado inicial del actualizador (p. ej. una descarga ya lista o fallida de antes de remontar).
   useEffect(() => {
-    if (updateProgress.status !== 'downloading' || !isReady || !api) return;
+    if (!isReady || !api || typeof api.get_update_progress !== 'function') return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const prog = await api.get_update_progress();
+        if (isMounted && prog && prog.status && prog.status !== 'idle') setUpdateProgress(prog);
+      } catch { /* noop */ }
+    })();
+    return () => { isMounted = false; };
+  }, [isReady, api]);
+
+  useEffect(() => {
+    if (!['downloading', 'verifying'].includes(updateProgress.status) || !isReady || !api) return;
     const interval = setInterval(async () => {
       try {
         setUpdateProgress(await api.get_update_progress());
@@ -492,6 +505,7 @@ export default function App() {
           api={api}
           installMode={installMode}
           progress={updateProgress}
+          onProgressChange={setUpdateProgress}
           onIgnoreVersion={(v) => {
             localStorage.setItem('mcp2p_ignored_update_version', v);
             setAvailableRelease(null);

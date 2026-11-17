@@ -1,13 +1,24 @@
 import React from 'react';
 
 export function UpdateNotificationPill({ release, onOpenModal, onDismiss, progress }) {
-  const isDownloading = progress?.status === 'downloading';
-  const isReady = progress?.status === 'ready_to_restart';
+  const status = progress?.status;
+  const isDownloading = status === 'downloading';
+  const isVerifying = status === 'verifying';
+  const isInstalling = status === 'installing';
+  const isReady = status === 'ready_to_restart';
+  const isError = status === 'error';
+  const isBusy = isDownloading || isVerifying || isInstalling;
 
   const label = isReady
     ? 'Actualización lista'
     : isDownloading
     ? `Descargando... ${progress.percent}%`
+    : isVerifying
+    ? 'Verificando actualización...'
+    : isInstalling
+    ? 'Instalando actualización...'
+    : isError
+    ? 'Falló la actualización'
     : 'Nueva versión disponible';
 
   return (
@@ -24,7 +35,7 @@ export function UpdateNotificationPill({ release, onOpenModal, onDismiss, progre
         gap: '10px',
         padding: '10px 14px',
         borderRadius: 'var(--radius-lg)',
-        border: `1px solid ${isReady ? 'var(--accent-success)' : 'var(--border-subtle)'}`,
+        border: `1px solid ${isReady ? 'var(--accent-success)' : isError ? 'var(--accent-danger)' : 'var(--border-subtle)'}`,
         background: 'var(--bg-card)',
         boxShadow: 'var(--shadow-lg)',
         fontFamily: 'var(--font-ui)',
@@ -48,9 +59,9 @@ export function UpdateNotificationPill({ release, onOpenModal, onDismiss, progre
           cursor: 'pointer',
         }}
       >
-        {isReady ? 'Reiniciar' : isDownloading ? 'Ver progreso' : 'Actualizar'}
+        {isReady ? 'Reiniciar' : isBusy ? 'Ver progreso' : isError ? 'Ver detalle' : 'Actualizar'}
       </button>
-      {!isDownloading && !isReady && (
+      {!isBusy && !isReady && (
         <button
           type="button"
           onClick={onDismiss}
