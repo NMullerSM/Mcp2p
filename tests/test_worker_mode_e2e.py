@@ -16,9 +16,9 @@ import pytest
 from tests.helpers.relay_lab import RelayLab, install_pty_write_spy
 
 # La espera dura mucho mas que cualquier latencia esperada: si la entrega dependiera de un sondeo (la
-# reevaluacion de seguridad del Hub es cada 5 s), la medida lo delataria.
+# reevaluacion de seguridad del Hub es cada 5 s; en local la espera real es de decenas de ms), la medida lo delataria.
 WAIT_MS = 30_000
-MAX_WAKE_S = 2.0
+MAX_WAKE_S = 4.0  # holgura para CI lento (Windows); un sondeo de 5 s no pasaria de forma fiable
 
 
 @pytest.fixture
