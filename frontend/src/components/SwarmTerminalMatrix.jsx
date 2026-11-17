@@ -961,6 +961,25 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     }
   }, [api, matrixStatus.autoRelayBusy, matrixStatus.autoRelayEnabled, showNotice]);
 
+  const handleRegisterAgyMcp = useCallback(async () => {
+    if (!api?.pty_register_agy_mcp) return;
+    try {
+      const res = await api.pty_register_agy_mcp();
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        showNotice(res);
+        return;
+      }
+      setNotice({
+        ...describeTerminalError({ code: 'AGY_MCP_REGISTERED', message: res?.message || 'MCP2P registrado en Antigravity.' }),
+        tone: 'info',
+        title: 'Antigravity'
+      });
+    } catch (err) {
+      if (mountedRef.current) showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
+    }
+  }, [api, showNotice]);
+
   const trippedCases = useMemo(() => {
     const raw = matrixStatus.relayStatus?.tripped_cases;
     if (!Array.isArray(raw)) return [];
@@ -1190,6 +1209,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
                 onInput={sendPaneInput}
                 onResize={handleResizePane}
                 onRequestOpenUrl={setPendingExternalUrl}
+                onRegisterAgyMcp={api?.pty_register_agy_mcp ? () => void handleRegisterAgyMcp() : undefined}
                 registerTerminalRef={registerTerminalRef}
               />
             ))}

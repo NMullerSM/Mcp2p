@@ -1003,3 +1003,84 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     await waitFor(() => expect(screen.queryByTestId('loop-breaker-banner')).toBeNull());
   });
 });
+
+describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R1.5)', () => {
+  const statusWith = (mcpInjection) => ({
+    success: true,
+    degraded: false,
+    hub_url: 'http://127.0.0.1:8765/mcp',
+    hub_running: true,
+    auto_relay_enabled: false,
+    relay_status: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 },
+    panes: [{ pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'antigravity', role: 'implementer', pid: 101 }],
+    sessions: [
+      {
+        pane_id: 'pane_1',
+        session_id: 's1',
+        alive: true,
+        paused: false,
+        cli_profile: 'antigravity',
+        role: 'implementer',
+        cwd: '/tmp/p1',
+        mcp_injection: mcpInjection
+      }
+    ]
+  });
+
+  it('needs_consent muestra «MCP pendiente» y el boton registra con el dialogo nativo del puente', async () => {
+    const pty_register_agy_mcp = vi.fn(async () => ({ success: true, code: 'OK', message: 'MCP2P registrado en Antigravity.' }));
+    const api = makeMatrixApi({
+      pty_register_agy_mcp,
+      pty_get_matrix_status: vi.fn(async () =>
+        statusWith({ status: 'needs_consent', method: 'stdio_env_proxy', verified: true, reason: 'needs_consent' })
+      )
+    });
+    renderMatrix(api);
+
+    const badge = await screen.findByTestId('pane-mcp-badge-pane_1');
+    expect(badge.textContent).toBe('MCP pendiente');
+    const button = screen.getByTestId('pane-mcp-register-pane_1');
+    expect(button.textContent).toBe('Registrar MCP2P en Antigravity');
+    fireEvent.click(button);
+    await waitFor(() => expect(pty_register_agy_mcp).toHaveBeenCalledTimes(1));
+  });
+
+  it('un rechazo del dialogo se muestra como aviso y no rompe el panel', async () => {
+    const pty_register_agy_mcp = vi.fn(async () => ({
+      success: false,
+      code: 'CONFIRMATION_DECLINED',
+      message: 'La accion fue rechazada en el dialogo de confirmacion.'
+    }));
+    const api = makeMatrixApi({
+      pty_register_agy_mcp,
+      pty_get_matrix_status: vi.fn(async () => statusWith({ status: 'needs_consent', verified: true }))
+    });
+    renderMatrix(api);
+    fireEvent.click(await screen.findByTestId('pane-mcp-register-pane_1'));
+    await waitFor(() => expect(pty_register_agy_mcp).toHaveBeenCalled());
+    expect(screen.getByTestId('terminal-pane-pane_1')).toBeTruthy();
+  });
+
+  it('sin el metodo del puente no hay boton de registro', async () => {
+    const api = makeMatrixApi({
+      pty_get_matrix_status: vi.fn(async () => statusWith({ status: 'needs_consent', verified: true }))
+    });
+    delete api.pty_register_agy_mcp;
+    renderMatrix(api);
+    await screen.findByTestId('pane-mcp-badge-pane_1');
+    expect(screen.queryByTestId('pane-mcp-register-pane_1')).toBeNull();
+  });
+
+  it('injected con verified=false (binario empaquetado) NO se anuncia como «MCP Hub»', async () => {
+    const api = makeMatrixApi({
+      pty_get_matrix_status: vi.fn(async () =>
+        statusWith({ status: 'injected', method: 'stdio_env_proxy', verified: false, reason: 'stdio_hub_proxy' })
+      )
+    });
+    renderMatrix(api);
+    const badge = await screen.findByTestId('pane-mcp-badge-pane_1');
+    expect(badge.textContent).toBe('MCP sin verificar');
+    expect(badge.textContent).not.toMatch(/MCP Hub/);
+    expect(badge.getAttribute('title')).toContain('verified=false');
+  });
+});

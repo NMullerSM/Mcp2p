@@ -25,6 +25,19 @@ const MCP_BADGE_MAP = {
     bg: 'rgba(245, 158, 11, 0.14)',
     border: 'rgba(245, 158, 11, 0.35)'
   },
+  needs_consent: {
+    label: 'MCP pendiente',
+    color: '#fbbf24',
+    bg: 'rgba(245, 158, 11, 0.14)',
+    border: 'rgba(245, 158, 11, 0.35)'
+  },
+  // `injected` con verified=false (p. ej. el binario empaquetado con `agy`): no se anuncia como «MCP Hub».
+  unverified: {
+    label: 'MCP sin verificar',
+    color: '#fbbf24',
+    bg: 'rgba(245, 158, 11, 0.14)',
+    border: 'rgba(245, 158, 11, 0.35)'
+  },
   skipped: {
     label: 'Sin MCP',
     color: '#9ca3af',
@@ -69,7 +82,8 @@ const ACTIVITY_BADGE_MAP = {
 function resolveMcpBadge(mcpInjection) {
   if (!mcpInjection) return null;
   const status = typeof mcpInjection === 'string' ? mcpInjection : mcpInjection.status;
-  const spec = MCP_BADGE_MAP[status];
+  const unverified = status === 'injected' && typeof mcpInjection === 'object' && mcpInjection.verified === false;
+  const spec = MCP_BADGE_MAP[unverified ? 'unverified' : status];
   if (!spec) return null;
   const details = [];
   if (typeof mcpInjection === 'object') {
@@ -194,6 +208,7 @@ export function TerminalPane({
   onInput,
   onResize,
   onRequestOpenUrl,
+  onRegisterAgyMcp,
   registerTerminalRef
 }) {
   const containerRef = useRef(null);
@@ -375,6 +390,31 @@ export function TerminalPane({
               >
                 {mcpBadge.label}
               </span>
+            )}
+            {mcpBadge?.status === 'needs_consent' && onRegisterAgyMcp && (
+              <button
+                type="button"
+                data-testid={`pane-mcp-register-${paneId}`}
+                title="Abre un dialogo del sistema con el archivo y la entrada exactos antes de escribir nada"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRegisterAgyMcp(paneId);
+                }}
+                style={{
+                  fontSize: '9.5px',
+                  fontWeight: 700,
+                  lineHeight: 1.2,
+                  padding: '1px 6px',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                  backgroundColor: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                Registrar MCP2P en Antigravity
+              </button>
             )}
             {activityBadge && (
               <span
