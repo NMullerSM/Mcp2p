@@ -744,6 +744,15 @@ class ApiBridge:
     def pty_set_auto_relay(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
         return self.extensions_ui.pty_set_auto_relay(pane_id=pane_id, enabled=enabled)
 
+    def pty_register_agy_mcp(self) -> Dict[str, Any]:
+        return self.extensions_ui.pty_register_agy_mcp()
+
+    def pty_unregister_agy_mcp(self) -> Dict[str, Any]:
+        return self.extensions_ui.pty_unregister_agy_mcp()
+
+    def pty_get_agy_mcp_status(self) -> Dict[str, Any]:
+        return self.extensions_ui.pty_get_agy_mcp_status()
+
     def pty_get_kanban_swarm_snapshot(
         self, project_uuid: Optional[str] = None, all_projects: bool = False
     ) -> Dict[str, Any]:

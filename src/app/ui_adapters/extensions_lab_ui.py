@@ -5,6 +5,7 @@ Multi-Seed P2P, Puerta con Llave (ExtensionSecurityGate) y Diagnóstico del Sist
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -26,6 +27,7 @@ from src.adapters.terminal.cli_catalog import (
     validate_install_command,
 )
 from src.adapters.terminal.cli_install import InstallConfirmationBroker, build_install_command
+from src.adapters.terminal import mcp_injection as _mcp_injection
 from src.adapters.terminal.pty_host import (
     DEFAULT_MANUAL_COMMAND,
     HARD_MAX_PANES,
@@ -809,6 +811,121 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion nativa; la accion se rechaza.")
         return confirmations.confirm(title, message)
 
+    # ------------------------------------------------------------------
+    # Registro GLOBAL de MCP2P en Antigravity (agy): opt-in con dialogo nativo (D3 del dossier 36, R1.4)
+    # ------------------------------------------------------------------
+
+    _AGY_CONSENT_KEY = "agy_global_mcp_consent"  # en el espacio MAX_PANES_SETTING_NAMESPACE: "granted" | "declined"
+
+    def _agy_consent_state(self) -> Optional[str]:
+        repo = getattr(self.core_kernel, "extension_repo", None)
+        getter = getattr(repo, "get_extension_setting", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter(MAX_PANES_SETTING_NAMESPACE, self._AGY_CONSENT_KEY, None)
+        except Exception:
+            return None
+        return value if value in ("granted", "declined") else None
+
+    def _set_agy_consent_state(self, value: str) -> None:
+        repo = getattr(self.core_kernel, "extension_repo", None)
+        setter = getattr(repo, "set_extension_setting", None)
+        if callable(setter):
+            try:
+                setter(MAX_PANES_SETTING_NAMESPACE, self._AGY_CONSENT_KEY, value)
+            except Exception as exc:
+                logger.warning("No se pudo recordar el consentimiento del registro de agy: %s", exc)
+
+    def _confirm_agy_registration(self) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """Dialogo nativo con el archivo global y la entrada EXACTA. Devuelve `(error|None, estado)`."""
+        state = _mcp_injection.agy_registration_state()
+        if state.get("state") == "error":
+            return _fail("AGY_REGISTRATION_FAILED", f"No se puede usar la configuracion de Antigravity: {state.get('reason')}.",
+                         reason=state.get("reason"), path=state.get("path")), state
+        replace_manual = state.get("state") == "manual" and not state.get("hub_proxy_only")
+        entry = _mcp_injection.build_agy_entry()
+        shown = json.dumps({"mcpServers": {_mcp_injection.MCP_SERVER_NAME: entry}}, indent=2, ensure_ascii=False)
+        message = (
+            "MCP2P quiere registrarse en el archivo GLOBAL de Antigravity, que afecta a TODAS sus sesiones de agy:\n\n"
+            f"{state.get('path')}\n\nEntrada que se escribira (no lleva token):\n\n{shown}\n\n"
+            "Se guarda una copia del original en mcp_config.json.mcp2p.bak la primera vez y puede quitarlo cuando quiera."
+        )
+        if replace_manual:
+            message += (
+                "\n\nATENCION: ya existe una entrada 'mcp2p' manual que NO usa --hub-proxy-only (puede abrir su base "
+                "de datos real). Se reemplazara por la de arriba; la anterior queda en la copia .mcp2p.bak."
+            )
+        message += "\n\nAcepte solo si reconoce este archivo y esta entrada."
+        return self._confirm_native("Registrar MCP2P en Antigravity", message), state
+
+    def _spawn_session_with_agy_consent(self, terminal: Any, **kwargs: Any) -> Any:
+        """`terminal.spawn_session(**kwargs)`; para `antigravity` resuelve antes el consentimiento del registro global.
+
+        Sin consentimiento el panel abre igualmente (`mcp_injection.status = needs_consent`) y no se escribe nada
+        fuera del perfil del panel. Un rechazo se recuerda para no preguntar en cada spawn.
+        """
+        consent = False
+        if kwargs.get("cli_profile") == "antigravity":
+            remembered = self._agy_consent_state()
+            if remembered == "granted":
+                consent = True
+            elif remembered is None:
+                declined, _state = self._confirm_agy_registration()
+                if declined is None:
+                    self._set_agy_consent_state("granted")
+                    consent = True
+                elif declined.get("code") == "CONFIRMATION_DECLINED":
+                    self._set_agy_consent_state("declined")
+        with _mcp_injection.global_registration_consent(consent):
+            return terminal.spawn_session(**kwargs)
+
+    def pty_register_agy_mcp(self) -> Dict[str, Any]:
+        """Boton «Registrar MCP2P en Antigravity»: pide el dialogo nativo y, si se acepta, registra y lo recuerda."""
+        try:
+            declined, state = self._confirm_agy_registration()
+            if declined is not None:
+                return declined
+            replace_manual = state.get("state") == "manual" and not state.get("hub_proxy_only")
+            res = _mcp_injection.ensure_agy_mcp_registered(replace_unmanaged=replace_manual)
+            if not res.get("registered"):
+                return _fail("AGY_REGISTRATION_FAILED", "No se pudo registrar MCP2P en Antigravity.",
+                             reason=res.get("reason"), path=res.get("path"))
+            self._set_agy_consent_state("granted")
+            return {"success": True, "code": "OK", "message": "MCP2P registrado en Antigravity. Abra el panel de nuevo.",
+                    "path": res.get("path"), "managed": bool(res.get("managed")),
+                    "already_present": bool(res.get("already_present"))}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_unregister_agy_mcp(self) -> Dict[str, Any]:
+        """Revoca el consentimiento y quita la entrada de MCP2P (solo si lleva nuestro marcador)."""
+        try:
+            self._set_agy_consent_state("declined")
+            res = _mcp_injection.unregister_agy_mcp()
+            if res.get("removed"):
+                return {"success": True, "code": "OK", "removed": True, "path": res.get("path"),
+                        "message": "MCP2P quitado de la configuracion de Antigravity."}
+            if res.get("reason") in ("not_registered", "not_managed"):
+                note = ("La entrada 'mcp2p' no la creo MCP2P; no se toco." if res["reason"] == "not_managed"
+                        else "MCP2P no estaba registrado en Antigravity.")
+                return {"success": True, "code": "OK", "removed": False, "reason": res["reason"],
+                        "path": res.get("path"), "message": note}
+            return _fail("AGY_REGISTRATION_FAILED", "No se pudo quitar MCP2P de Antigravity.",
+                         reason=res.get("reason"), path=res.get("path"))
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_get_agy_mcp_status(self) -> Dict[str, Any]:
+        """Estado de solo lectura del registro global de agy y del consentimiento recordado."""
+        try:
+            state = _mcp_injection.agy_registration_state()
+            return {"success": True, "code": "OK", "consent": self._agy_consent_state() or "unset",
+                    "registration": state.get("state"), "path": state.get("path"),
+                    "hub_proxy_only": state.get("hub_proxy_only")}
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
     def pty_set_cli_path(self, cli_id: Any, path: Any) -> Dict[str, Any]:
         """Fija (o borra con cadena vacia) la ruta del binario de un CLI del catalogo.
 
@@ -1032,11 +1149,10 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 cleaned["success"] = False
                 cleaned["cli_id"] = spec.id
                 return cleaned
-            if spec.id == "antigravity":
+            if spec.id == "antigravity" and self._agy_consent_state() == "granted":
+                # Solo con el consentimiento ya concedido en esta maquina; si no, el primer panel de agy lo pedira.
                 try:
-                    from src.adapters.terminal.mcp_injection import ensure_agy_mcp_registered
-
-                    ensure_agy_mcp_registered()
+                    _mcp_injection.ensure_agy_mcp_registered()
                 except Exception:
                     pass
             return {
@@ -1221,7 +1337,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 hub_url = hub.url if (hub is not None and hub.is_running()) else None
 
             spawn_res = dict(
-                terminal.spawn_session(
+                self._spawn_session_with_agy_consent(
+                    terminal,
                     pane_id=norm_pane_id,
                     cli_profile=cli_profile,
                     role=role,

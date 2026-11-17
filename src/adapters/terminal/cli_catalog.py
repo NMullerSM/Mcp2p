@@ -265,6 +265,18 @@ class CliSpec:
     verified: bool = True
     shell_env: Optional[str] = None
 
+    def mcp_verified(self, frozen: Optional[bool] = None) -> bool:
+        """True si la integracion MCP de este CLI esta verificada para el modo de ejecucion pedido.
+
+        `verified_dev` rige al correr desde fuentes y `verified_frozen` en el binario empaquetado (R1.5): una
+        verificacion medida en desarrollo no vale para el binario congelado. Solo cuentan las del catalogo del repo.
+        """
+        if self.source != "repo":
+            return False
+        is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
+        key = "verified_frozen" if is_frozen else "verified_dev"
+        return bool(self.mcp.get(key, self.mcp.get("verified", False)))
+
     @property
     def binary_names(self) -> Tuple[str, ...]:
         return (self.binary, *self.binary_aliases)
@@ -294,7 +306,12 @@ _ENTRY_KEYS = (
     "launch_flags", "mcp", "resume", "install", "shell_env",
 )
 _INSTALL_KEYS = ("method", "command", "verified", "source_url", "note")
-_MCP_KEYS = ("method", "format", "argv", "env", "path", "verified", "note")
+_MCP_KEYS = (
+    "method", "format", "argv", "env", "path", "verified", "note",
+    "verified_dev", "verified_frozen", "verified_with_cli_version", "verified_on",
+)
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_CLI_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,31}")
 _RESUME_KEYS = ("argv", "verified", "note")
 
 
@@ -386,12 +403,42 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
         raise CatalogValidationError(f"{where}.mcp: method=env exige env (sin argv).")
     if mcp_method in ("none", "unsupported", "stdio_env_proxy") and (mcp_argv or mcp_env):
         raise CatalogValidationError(f"{where}.mcp: method={mcp_method} no admite argv ni env.")
+    split = "verified_dev" in mcp_raw or "verified_frozen" in mcp_raw
+    if split and "verified" in mcp_raw:
+        raise CatalogValidationError(f"{where}.mcp: usa verified o verified_dev/verified_frozen, no ambos.")
+    if split:
+        for key in ("verified_dev", "verified_frozen"):
+            if not isinstance(mcp_raw.get(key), bool):
+                raise CatalogValidationError(f"{where}.mcp.{key}: se esperaba true o false (y ambos campos juntos).")
+        verified_dev = mcp_raw["verified_dev"] and source == "repo"
+        verified_frozen = mcp_raw["verified_frozen"] and source == "repo"
+    else:
+        legacy = bool(mcp_raw.get("verified", False)) and source == "repo"
+        verified_dev = verified_frozen = legacy
+    verified_cli_version = ""
+    verified_on = ""
+    if "verified_with_cli_version" in mcp_raw or "verified_on" in mcp_raw:
+        verified_cli_version = _text(mcp_raw.get("verified_with_cli_version"), f"{where}.mcp.verified_with_cli_version", max_len=32)
+        if _CLI_VERSION_RE.fullmatch(verified_cli_version) is None:
+            raise CatalogValidationError(f"{where}.mcp.verified_with_cli_version invalido.")
+        verified_on = _text(mcp_raw.get("verified_on"), f"{where}.mcp.verified_on", max_len=10)
+        if _DATE_RE.fullmatch(verified_on) is None:
+            raise CatalogValidationError(f"{where}.mcp.verified_on: se esperaba AAAA-MM-DD.")
+    if split and (verified_dev or verified_frozen) and not (verified_cli_version and verified_on):
+        raise CatalogValidationError(
+            f"{where}.mcp: una verificacion exige verified_with_cli_version y verified_on (version del CLI y fecha)."
+        )
     mcp: Dict[str, Any] = {
         "method": mcp_method,
         "format": mcp_format,
         "argv": mcp_argv,
         "env": mcp_env,
-        "verified": bool(mcp_raw.get("verified", False)) and source == "repo",
+        "verified_dev": verified_dev,
+        "verified_frozen": verified_frozen,
+        # `verified` es el valor efectivo en ESTE modo de ejecucion (fuentes o congelado).
+        "verified": verified_frozen if getattr(sys, "frozen", False) else verified_dev,
+        "verified_with_cli_version": verified_cli_version,
+        "verified_on": verified_on,
         "note": _text(mcp_raw.get("note", ""), f"{where}.mcp.note", max_len=300, allow_empty=True),
     }
     if "path" in mcp_raw:

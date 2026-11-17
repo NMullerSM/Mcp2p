@@ -16,6 +16,8 @@ Garantias:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -41,6 +43,22 @@ _ORPHAN_DIR_RE = re.compile(r"(\d+)-[A-Za-z0-9_.-]+")
 _SAFE_URL_RE = re.compile(r"https?://[A-Za-z0-9.\[\]:-]+(?::\d+)?(?:/[A-Za-z0-9._~/-]*)?")
 
 
+# Consentimiento del usuario para escribir el archivo GLOBAL de Antigravity durante el spawn en curso. Lo fija la capa
+# de UI (tras el dialogo nativo o el consentimiento recordado) con `global_registration_consent(...)`; sin el, el
+# valor es siempre False: ningun hilo ni prueba hereda un consentimiento ajeno.
+_GLOBAL_CONSENT: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp2p_agy_global_consent", default=False)
+
+
+@contextlib.contextmanager
+def global_registration_consent(granted: bool):
+    """Dentro del bloque, `PaneMcpConfigStore.prepare` puede registrar `mcp2p` en la config global de `agy`."""
+    token = _GLOBAL_CONSENT.set(bool(granted))
+    try:
+        yield
+    finally:
+        _GLOBAL_CONSENT.reset(token)
+
+
 class McpInjectionError(RuntimeError):
     """No se pudo preparar la configuracion MCP del panel (no se lanza el CLI a medias)."""
 
@@ -49,7 +67,7 @@ class McpInjectionError(RuntimeError):
 class McpInjection:
     """Resultado de preparar la inyeccion; `argv`/`env` se anaden al lanzamiento del CLI."""
 
-    status: str  # injected | unsupported | not_applicable | skipped
+    status: str  # injected | unsupported | not_applicable | skipped | needs_consent
     method: str = "none"
     verified: bool = False
     reason: str = ""
@@ -94,25 +112,177 @@ def _restrict_to_owner(fd: int, path: Path) -> None:
         pass
 
 
+AGY_MANAGED_KEY = "x-mcp2p-managed"
+AGY_MANAGED_BY = "mcp2p"
+AGY_BACKUP_SUFFIX = ".mcp2p.bak"
+HUB_PROXY_ONLY_FLAG = "--hub-proxy-only"
+
+
+def default_agy_config_path() -> Path:
+    """Archivo GLOBAL de Antigravity donde se registra el servidor `mcp2p` (fuera del perfil del panel)."""
+    return Path.home() / ".gemini" / "config" / "mcp_config.json"
+
+
+def _app_version() -> str:
+    try:
+        from src.app.version import __version__
+
+        return str(__version__)
+    except Exception:  # pragma: no cover - la version es informativa
+        return "unknown"
+
+
+def build_agy_entry(
+    *,
+    python_executable: Optional[str] = None,
+    repo_root: Optional[Path] = None,
+    frozen: Optional[bool] = None,
+    executable: Optional[str] = None,
+    version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Entrada exacta que MCP2P escribe para `agy`: solo proxy al Hub (`--hub-proxy-only`), nunca la BD.
+
+    * Empaquetado (congelado): `<ejecutable> --mcp-server --hub-proxy-only`, sin `cwd` ni `PYTHONPATH`.
+    * Desde fuentes: `<python> -m src.mcp.server --hub-proxy-only` con `cwd`/`PYTHONPATH` en el repo.
+    """
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
+    marker = {"installed_by": AGY_MANAGED_BY, "version": version or _app_version()}
+    if is_frozen:
+        return {
+            "command": executable or sys.executable,
+            "args": ["--mcp-server", HUB_PROXY_ONLY_FLAG],
+            AGY_MANAGED_KEY: marker,
+        }
+    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
+    entry: Dict[str, Any] = {
+        "command": python_executable or sys.executable,
+        "args": ["-m", "src.mcp.server", HUB_PROXY_ONLY_FLAG],
+    }
+    if root.exists():
+        entry["cwd"] = str(root)
+        entry["env"] = {"PYTHONPATH": str(root)}
+    entry[AGY_MANAGED_KEY] = marker
+    return entry
+
+
+def _is_managed(entry: Any) -> bool:
+    marker = entry.get(AGY_MANAGED_KEY) if isinstance(entry, dict) else None
+    return isinstance(marker, dict) and marker.get("installed_by") == AGY_MANAGED_BY
+
+
+def _same_launch(current: Dict[str, Any], desired: Dict[str, Any]) -> bool:
+    """True si la entrada propia ya lanza exactamente lo deseado (la version del marcador no cuenta)."""
+    keys = ("command", "args", "cwd", "env")
+    return all(current.get(k) == desired.get(k) for k in keys)
+
+
+def _indent_of(text: str) -> Any:
+    match = re.search(r'^([ \t]+)"', text, re.MULTILINE)
+    return match.group(1) if match else 2
+
+
+def _read_config_file(target: Path) -> tuple[Optional[bytes], Optional[str]]:
+    """Bytes del archivo (None si no existe) o la razon del rechazo. Nunca sigue enlaces simbolicos."""
+    try:
+        st = os.lstat(target)
+    except FileNotFoundError:
+        return None, None
+    except OSError:
+        return None, "unreadable_config"
+    if stat.S_ISLNK(st.st_mode):
+        return None, "symlink_rejected"
+    if not stat.S_ISREG(st.st_mode):
+        return None, "invalid_existing_config"
+    try:
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None, "symlink_rejected" if target.is_symlink() else "unreadable_config"
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None, "invalid_existing_config"
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            return fh.read(), None
+    finally:
+        os.close(fd)
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Escribe en un temporal del MISMO directorio y lo renombra encima: el original nunca queda truncado."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        _restrict_to_owner(fd, tmp)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _backup_once(target: Path, original: bytes) -> None:
+    """Copia exacta `<archivo>.mcp2p.bak` la PRIMERA vez que se toca el archivo; luego no se vuelve a escribir."""
+    backup = target.with_name(target.name + AGY_BACKUP_SUFFIX)
+    try:
+        fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError:
+        return
+    _restrict_to_owner(fd, backup)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(original)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _load_agy_config(target: Path) -> tuple[Dict[str, Any], Optional[bytes], Optional[Dict[str, Any]]]:
+    """`(datos, bytes_originales, error)`; `error` es la respuesta de fallo ya armada."""
+    raw, reason = _read_config_file(target)
+    if reason is not None:
+        return {}, None, {"registered": False, "reason": reason, "path": str(target)}
+    if raw is None:
+        return {}, None, None
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return {}, raw, {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
+    if not isinstance(parsed, dict):
+        return {}, raw, {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
+    return parsed, raw, None
+
+
+def _save_agy_config(target: Path, data: Dict[str, Any], original: Optional[bytes]) -> None:
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if original is not None:
+        _backup_once(target, original)
+    indent = _indent_of(original.decode("utf-8", errors="replace")) if original is not None else 2
+    _atomic_write_text(target, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
+
+
 def ensure_agy_mcp_registered(
     config_path: Optional[Path] = None,
     *,
     python_executable: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    frozen: Optional[bool] = None,
+    executable: Optional[str] = None,
+    replace_unmanaged: bool = False,
 ) -> Dict[str, Any]:
-    """Registra de forma idempotente la entrada stdio estatica de `mcp2p` para Antigravity (`agy`)."""
-    target = Path(config_path) if config_path is not None else (Path.home() / ".gemini" / "config" / "mcp_config.json")
-    existed = target.exists()
-    data: Dict[str, Any] = {}
-    if existed:
-        try:
-            raw_text = target.read_text(encoding="utf-8")
-            parsed = json.loads(raw_text)
-        except (OSError, ValueError):
-            return {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
-        if not isinstance(parsed, dict):
-            return {"registered": False, "reason": "invalid_existing_config", "path": str(target)}
-        data = dict(parsed)
+    """Registra la entrada stdio de `mcp2p` en el archivo GLOBAL de Antigravity (`agy`). Llamar solo con consentimiento.
+
+    * Escritura atomica (temporal + `os.replace`), `0600`, y copia `<archivo>.mcp2p.bak` la primera vez.
+    * Rechaza enlaces simbolicos; no toca el resto de servidores del usuario.
+    * La entrada lleva el marcador `x-mcp2p-managed`: si es nuestra y esta vieja o apunta a una ruta muerta se
+      actualiza; una entrada `mcp2p` SIN marcador (manual) se respeta, salvo `replace_unmanaged=True`.
+    """
+    target = Path(config_path) if config_path is not None else default_agy_config_path()
+    data, original, error = _load_agy_config(target)
+    if error is not None:
+        return error
 
     servers = data.get("mcpServers")
     if servers is None:
@@ -122,33 +292,75 @@ def ensure_agy_mcp_registered(
     else:
         servers = dict(servers)
 
-    existing_entry = servers.get(MCP_SERVER_NAME)
-    if isinstance(existing_entry, dict) and existing_entry:
-        return {"registered": True, "already_present": True, "path": str(target)}
+    desired = build_agy_entry(python_executable=python_executable, repo_root=repo_root, frozen=frozen, executable=executable)
+    existing = servers.get(MCP_SERVER_NAME)
+    updated = False
+    if isinstance(existing, dict) and existing:
+        if _is_managed(existing):
+            if _same_launch(existing, desired):
+                return {"registered": True, "already_present": True, "managed": True, "path": str(target)}
+            updated = True  # nuestra, pero vieja o con una ruta muerta
+        elif not replace_unmanaged:
+            args = existing.get("args")
+            return {
+                "registered": True,
+                "already_present": True,
+                "managed": False,
+                "hub_proxy_only": isinstance(args, list) and HUB_PROXY_ONLY_FLAG in args,
+                "path": str(target),
+            }
 
-    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
-    entry: Dict[str, Any] = {
-        "command": python_executable or sys.executable,
-        "args": ["-m", "src.mcp.server"],
-    }
-    if root.exists():
-        entry["cwd"] = str(root)
-        entry["env"] = {"PYTHONPATH": str(root)}
-
-    servers[MCP_SERVER_NAME] = entry
+    servers[MCP_SERVER_NAME] = desired
     data["mcpServers"] = servers
+    try:
+        _save_agy_config(target, data, original)
+    except OSError as exc:
+        return {"registered": False, "reason": "write_failed", "error": str(exc), "path": str(target)}
+    result: Dict[str, Any] = {"registered": True, "already_present": False, "managed": True, "path": str(target)}
+    if updated:
+        result["updated"] = True
+    return result
 
-    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    serialized = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    if not existed:
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        _restrict_to_owner(fd, target)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(serialized)
-    else:
-        target.write_text(serialized, encoding="utf-8")
 
-    return {"registered": True, "already_present": False, "path": str(target)}
+def unregister_agy_mcp(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Quita la entrada `mcp2p` SOLO si lleva nuestro marcador `x-mcp2p-managed`; una manual no se toca."""
+    target = Path(config_path) if config_path is not None else default_agy_config_path()
+    data, original, error = _load_agy_config(target)
+    if error is not None:
+        return {"removed": False, "reason": error["reason"], "path": str(target)}
+    servers = data.get("mcpServers")
+    entry = servers.get(MCP_SERVER_NAME) if isinstance(servers, dict) else None
+    if entry is None:
+        return {"removed": False, "reason": "not_registered", "path": str(target)}
+    if not _is_managed(entry):
+        return {"removed": False, "reason": "not_managed", "path": str(target)}
+    remaining = {k: v for k, v in servers.items() if k != MCP_SERVER_NAME}
+    data["mcpServers"] = remaining
+    try:
+        _save_agy_config(target, data, original)
+    except OSError as exc:
+        return {"removed": False, "reason": "write_failed", "error": str(exc), "path": str(target)}
+    return {"removed": True, "path": str(target)}
+
+
+def agy_registration_state(config_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Estado de solo lectura del registro: `not_registered` | `managed` | `manual` | error (`reason`)."""
+    target = Path(config_path) if config_path is not None else default_agy_config_path()
+    data, _original, error = _load_agy_config(target)
+    if error is not None:
+        return {"state": "error", "reason": error["reason"], "path": str(target)}
+    servers = data.get("mcpServers")
+    entry = servers.get(MCP_SERVER_NAME) if isinstance(servers, dict) else None
+    if not isinstance(entry, dict) or not entry:
+        return {"state": "not_registered", "path": str(target)}
+    if _is_managed(entry):
+        return {"state": "managed", "path": str(target)}
+    args = entry.get("args")
+    return {
+        "state": "manual",
+        "hub_proxy_only": isinstance(args, list) and HUB_PROXY_ONLY_FLAG in args,
+        "path": str(target),
+    }
 
 
 def _default_base_dir() -> Path:
@@ -212,22 +424,46 @@ class PaneMcpConfigStore:
 
     # -- API ---------------------------------------------------------------
 
-    def prepare(self, spec: Optional[CliSpec], *, session_id: str, hub_url: Optional[str], token: Optional[str]) -> McpInjection:
-        """Escribe la config del panel y devuelve lo que hay que anadir a `argv`/`env` del CLI."""
+    def prepare(
+        self,
+        spec: Optional[CliSpec],
+        *,
+        session_id: str,
+        hub_url: Optional[str],
+        token: Optional[str],
+        global_registration_consent: Optional[bool] = None,
+    ) -> McpInjection:
+        """Escribe la config del panel y devuelve lo que hay que anadir a `argv`/`env` del CLI.
+
+        Los CLI de `stdio_env_proxy` (Antigravity) solo se configuran con un archivo GLOBAL del usuario: sin
+        consentimiento (argumento o `global_registration_consent(...)` de la UI) NO se escribe nada y el estado es
+        `needs_consent` (D3 del dossier 36).
+        """
         if spec is None:
             return McpInjection("skipped", reason="comando propio: sin configuracion MCP")
         mcp = spec.mcp
         method = str(mcp.get("method", "none"))
-        verified = bool(mcp.get("verified")) and spec.source == "repo"
+        verified = spec.mcp_verified() and spec.source == "repo"
         if method == "unsupported":
             return McpInjection("unsupported", method, verified, str(mcp.get("note", "")))
         if method == "stdio_env_proxy":
             if spec.source != "repo":
                 return McpInjection("not_applicable", method, verified, "este CLI no recibe configuracion MCP del host")
+            consent = _GLOBAL_CONSENT.get() if global_registration_consent is None else bool(global_registration_consent)
+            if not consent:
+                return McpInjection("needs_consent", "stdio_env_proxy", verified, "needs_consent")
             try:
-                ensure_agy_mcp_registered()
+                registered = ensure_agy_mcp_registered()
             except Exception as exc:
                 logger.warning("No se pudo registrar mcp2p en mcp_config.json de Antigravity: %s", exc)
+                return McpInjection("skipped", "stdio_env_proxy", verified, "registration_failed")
+            if not registered.get("registered"):
+                reason = str(registered.get("reason", "registration_failed"))
+                logger.warning("No se registro mcp2p en la config de Antigravity: %s", reason)
+                return McpInjection("skipped", "stdio_env_proxy", verified, reason)
+            if registered.get("managed") is False and not registered.get("hub_proxy_only"):
+                # Entrada manual antigua (sin --hub-proxy-only): fuera de un panel abre la BD real. La UI ofrece migrarla.
+                return McpInjection("injected", "stdio_env_proxy", verified, "manual_entry")
             return McpInjection("injected", "stdio_env_proxy", verified, "stdio_hub_proxy")
         if method not in ("flag", "env") or spec.source != "repo":
             return McpInjection("not_applicable", method, verified, "este CLI no recibe configuracion MCP del host")

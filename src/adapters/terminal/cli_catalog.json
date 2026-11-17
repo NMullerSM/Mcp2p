@@ -334,8 +334,11 @@
       "launch_flags": [],
       "mcp": {
         "method": "stdio_env_proxy",
-        "verified": true,
-        "note": "Usa ~/.gemini/config/mcp_config.json (stdio estático sin tokens) + proxy automático por entorno MCP2P_HUB_URL/MCP2P_SESSION_TOKEN al Hub de la sesión."
+        "verified_dev": true,
+        "verified_frozen": false,
+        "verified_with_cli_version": "1.5.9",
+        "verified_on": "2026-11-16",
+        "note": "Registro global opt-in en ~/.gemini/config/mcp_config.json (stdio --hub-proxy-only sin tokens) + proxy por entorno MCP2P_HUB_URL/MCP2P_SESSION_TOKEN al Hub del panel. Medido solo desde fuentes; el binario empaquetado aun no esta verificado con agy."
       },
       "resume": {
         "argv": ["--continue"],
