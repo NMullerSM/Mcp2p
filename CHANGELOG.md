@@ -19,6 +19,14 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
   abrir el CLI desde MCP2P en lugar de usar datos que no son del panel.
 - Auto-Relay por terminal: cada terminal tiene su propio interruptor en «Terminales activas», empieza apagado, pide
   confirmación al encenderlo y MCP2P lo recuerda para esa terminal en ese proyecto aunque cierres la aplicación.
+- Bandeja de mensajes entre agentes que no se pierde al cerrar MCP2P. Los agentes la usan con `send_message`,
+  `inbox_next`, `inbox_wait` (espera hasta que llega algo), `inbox_ack` e `inbox_reply`. Cada mensaje llega con su
+  remitente verificado por MCP2P y separado del texto, que el agente recibe como dato y no como orden tuya.
+- Los mensajes que MCP2P retiene para ti (una conversación automática entre agentes que ya dio su vuelta, o un mensaje
+  que el agente pidió confirmar) quedan guardados en tu bandeja: no se entregan solos. La pantalla para revisarlos y
+  entregarlos o descartarlos, siempre tras ver el texto exacto en un diálogo del sistema, llega en una próxima versión.
+- Parada del relevo: un interruptor general detiene la entrega de mensajes entre agentes sin perder ninguno, y un
+  agente puede pausar su propia bandeja con `relay_pause_self`. Solo tú puedes reanudarlos, con confirmación.
 
 ### Mejorado
 - Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar
@@ -32,11 +40,25 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
   la primera vez, no sigue enlaces simbólicos y respeta una entrada `mcp2p` que hayas puesto a mano.
 - En la aplicación empaquetada, un CLI cuya integración MCP aún no está comprobada ya no se anuncia como «MCP Hub»:
   la etiqueta del panel dice «MCP sin verificar».
+- `send_pane_message` y `await_next_assignment` siguen funcionando durante esta versión, usan la nueva bandeja y avisan
+  en su respuesta de que serán retiradas; conviene pasar a `send_message` e `inbox_next`.
 
 ### Seguridad
 - Cada terminal pertenece al proyecto en el que se abrió: un agente solo ve las terminales de su proyecto y solo
   puede enviar mensajes o recibir asignaciones dentro de él. Si un agente consulta o modifica otro proyecto, la
   acción queda registrada y la respuesta lo avisa; en una versión próxima se bloqueará.
+- El código de sesión de una terminal solo sirve desde los procesos de esa terminal. Si otro programa de tu equipo lo
+  copia e intenta enviar o leer mensajes como si fuera ese agente, MCP2P lo rechaza; las demás herramientas lo
+  registran y lo avisan en la respuesta.
+- Cada mensaje entre agentes va firmado por tu equipo con una clave propia, guardada en el llavero del sistema (o en
+  un archivo cifrado si no hay llavero, con un aviso). Un mensaje alterado después de enviarse llega marcado como no
+  verificado y un mensaje repetido se rechaza.
+- Dos agentes ya no pueden mantener una conversación automática sin fin: tras una respuesta automática, el siguiente
+  mensaje de la misma conversación espera en tu bandeja. Cambiar de tarjeta no lo evita, y cuando escribes tú en esa
+  terminal empieza una conversación nueva.
+- Registro de auditoría encadenado de todos los mensajes entre agentes (enviado, entregado, confirmado, retenido,
+  rechazado) que permite detectar si alguien editó o borró una entrada. El texto de los mensajes se borra a los
+  30 días; el registro de que existieron se conserva.
 
 ## [2.0.1] - 2026-11-17 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1)
 
