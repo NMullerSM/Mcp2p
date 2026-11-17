@@ -59,6 +59,9 @@ def _hermetic_home(tmp_path_factory):
     mp = pytest.MonkeyPatch()
     mp.setenv("HOME", str(home))
     mp.setenv("USERPROFILE", str(home))
+    # La clave del dispositivo (Ola 3) nunca debe ir al llavero real del desarrollador: sin backend utilizable cae
+    # al archivo cifrado dentro de este HOME temporal.
+    mp.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
     try:
         yield home
     finally:

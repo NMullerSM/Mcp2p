@@ -24,7 +24,15 @@ hiddenimports = [
     'src.adapters.terminal', 'src.adapters.terminal.cli_catalog', 'src.adapters.terminal.cli_install', 'src.adapters.terminal.pty_host',
     'src.adapters.terminal.pty_common', 'src.adapters.terminal.winpty_host', 'src.adapters.terminal.win_job',
     'src.adapters.terminal.win_launch',
-    'src.runtime.terminal_platform', 'src.core.services.project_portability_service'
+    'src.runtime.terminal_platform', 'src.core.services.project_portability_service',
+    # Ola 3: identidad de proceso, sobre firmado y bandeja persistente del relevo.
+    'src.adapters.identity', 'src.adapters.identity.peer_process', 'src.adapters.identity.envelope_crypto',
+    'src.adapters.identity.ed25519_identity', 'src.mcp.peer_binding',
+    # `keyring` se importa de forma perezosa: se declara para que el hook de PyInstaller copie sus metadatos (los
+    # backends se descubren por entry points) y se anaden los backends que trae keyring 25 (keyring/backends/).
+    'keyring', 'keyring.backends', 'keyring.backends.chainer', 'keyring.backends.fail', 'keyring.backends.null',
+    'keyring.backends.SecretService', 'keyring.backends.libsecret', 'keyring.backends.kwallet',
+    'keyring.backends.Windows', 'keyring.backends.macOS', 'keyring.backends.macOS.api',
 ]
 # 'av' is collected explicitly even though nothing in this project imports it
 # directly: it is a MANDATORY transitive dependency of aiortc (av<20.0.0,>=14.0.0
