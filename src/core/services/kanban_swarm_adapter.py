@@ -7,6 +7,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("mcp2p.core.services.kanban_swarm_adapter")
 
+# Datos del panel que NUNCA se proyectan hacia agentes (F0.4): el pid permite leer /proc/<pid>/environ de otro
+# panel (EGM-105) y la marca de tecleo es telemetria del humano. El token tampoco sale jamas por aqui.
+_PRIVATE_PANE_KEYS = ("pid", "last_human_keystroke_at", "session_token")
+
 
 class KanbanSwarmAdapter:
     """Proyecta el estado de los paneles del enjambre junto con sus tarjetas Kanban."""
@@ -40,6 +44,8 @@ class KanbanSwarmAdapter:
             status = str(entry.get("status") or "active").lower()
             if status == "closed":
                 continue
+            for private_key in _PRIVATE_PANE_KEYS:
+                entry.pop(private_key, None)
             panes.append(entry)
         return panes
 

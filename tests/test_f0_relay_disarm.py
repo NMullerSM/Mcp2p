@@ -401,3 +401,29 @@ def test_explicit_standalone_stdio_server_still_starts_without_hub_variables(tmp
     finally:
         proc.kill()
         proc.wait(timeout=10)
+
+
+# ----------------------------------------------------------------------------------------------------------
+# F0.4 Ocultar lo que no debe verse
+# ----------------------------------------------------------------------------------------------------------
+
+
+def test_list_swarm_panes_hides_pid_keystroke_and_tokens(swarm_no_pty: Swarm) -> None:
+    swarm = swarm_no_pty
+    swarm.registry.record_human_keystroke("pane_2")
+    raw = swarm.handler.list_swarm_panes(project_uuid=swarm.proj, session_token="tok-1")
+    out = json.loads(raw)
+    assert out["success"] is True and out["count"] == 2
+    for pane in out["panes"]:
+        assert not {"pid", "last_human_keystroke_at", "session_token"} & set(pane)
+    # ninguna respuesta del flujo de relevo filtra pid, tokens ni telemetria de tecleo
+    responses = [
+        raw,
+        swarm.handler.send_pane_message(
+            project_uuid=swarm.proj, target_node_uuid="node-2", message="hola", session_token="tok-1"
+        ),
+        swarm.handler.await_next_assignment(project_uuid=swarm.proj, session_token="tok-2"),
+    ]
+    for text in responses:
+        for secret in ("tok-1", "tok-2", "4242", "pid", "keystroke"):
+            assert secret not in text, f"{secret!r} aparece en una respuesta MCP"
