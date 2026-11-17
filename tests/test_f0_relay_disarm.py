@@ -427,3 +427,59 @@ def test_list_swarm_panes_hides_pid_keystroke_and_tokens(swarm_no_pty: Swarm) ->
     for text in responses:
         for secret in ("tok-1", "tok-2", "4242", "pid", "keystroke"):
             assert secret not in text, f"{secret!r} aparece en una respuesta MCP"
+
+
+# ----------------------------------------------------------------------------------------------------------
+# F0.5 Activar Auto-Relay exige confirmacion NATIVA (patron EGM-74); apagarlo no pregunta
+# ----------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def bridge(monkeypatch: pytest.MonkeyPatch):
+    from conftest import make_test_db
+    from src.app.api_bridge import ApiBridge
+
+    monkeypatch.delenv("MCP2P_TEST_AUTO_CONFIRM", raising=False)
+    b = ApiBridge(db_manager=make_test_db())
+    try:
+        yield b
+    finally:
+        b._close_terminal_matrix()
+        b.core_kernel.close()
+
+
+class _Dialog:
+    def __init__(self, answers: List[Any]) -> None:
+        self.answers = list(answers)
+        self.calls: List[Any] = []
+
+    def __call__(self, title: str, message: str) -> Any:
+        self.calls.append((title, message))
+        return self.answers.pop(0) if self.answers else False
+
+
+def test_enabling_auto_relay_needs_native_confirmation_and_disabling_does_not(bridge) -> None:
+    # sin ventana: se rechaza y el relevo sigue apagado
+    res = bridge.pty_set_auto_relay(True)
+    assert res["success"] is False and res["code"] == "CONFIRMATION_UNAVAILABLE"
+    assert bridge.extensions_ui._embedded_hub is None or not bridge.extensions_ui._embedded_hub.is_running()
+
+    dialog = _Dialog([False, True])
+    bridge.confirmations.dialog = dialog
+    declined = bridge.pty_set_auto_relay(True)
+    assert declined["success"] is False and declined["code"] == "CONFIRMATION_DECLINED"
+    hub = bridge.extensions_ui._embedded_hub
+    assert hub is None or not hub.is_running() or hub.relay_orchestrator().get_auto_relay_status()[
+        "auto_relay_enabled"
+    ] is False
+
+    accepted = bridge.pty_set_auto_relay(True)
+    assert accepted["success"] is True and accepted["auto_relay_enabled"] is True
+    assert "key_encrypted" not in accepted and "deferred_count" not in accepted  # Gate 0c ya no aplica
+    title, message = dialog.calls[-1]
+    assert "bandeja" in message and "ninguna terminal" in message
+
+    calls_before = len(dialog.calls)
+    off = bridge.pty_set_auto_relay(False)
+    assert off["success"] is True and off["auto_relay_enabled"] is False
+    assert len(dialog.calls) == calls_before  # apagar no abre dialogo

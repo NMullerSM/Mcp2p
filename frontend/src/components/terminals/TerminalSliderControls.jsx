@@ -697,7 +697,7 @@ export function TerminalSliderControls({
         onCopy={onCopy}
       />
 
-      {/* Auto-Relay: reenvio automatico entre terminales (apagado por defecto) */}
+      {/* Auto-Relay (F0): deja avisos en la bandeja del agente destino; no escribe en ninguna terminal. Apagado por defecto. */}
       {autoRelay && (
         <section data-testid="auto-relay-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <h4 style={sectionTitle}>Auto-Relay</h4>
@@ -748,18 +748,11 @@ export function TerminalSliderControls({
               />
             </span>
           </button>
-          <p style={{ ...mutedText, margin: 0 }}>
-            Cuando una tarjeta cambia de responsable, avisa a la terminal del agente si está libre. Respeta el
-            cooldown de tecleo humano y el Loop Breaker.
+          <p data-testid="auto-relay-description" style={{ ...mutedText, margin: 0 }}>
+            Deja un aviso en la bandeja del agente destino cuando le asignan una tarjeta. No escribe nada en su
+            terminal: el agente lo recoge con await_next_assignment. Los mensajes entre paneles llegan siempre a
+            la bandeja, con este interruptor activo o no. Respeta el Loop Breaker.
           </p>
-          {autoRelay.warning && (
-            <p
-              data-testid="auto-relay-gate0c-note"
-              style={{ ...mutedText, margin: 0, color: 'var(--accent-warning)' }}
-            >
-              {autoRelay.warning} Configúrala en Configuración → Terminales &amp; MCP → Firma humana.
-            </p>
-          )}
         </section>
       )}
 

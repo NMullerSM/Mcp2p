@@ -35,7 +35,7 @@ const MCP_BADGE_MAP = {
 
 const ACTIVITY_BADGE_MAP = {
   idle: {
-    label: 'Libre',
+    label: 'Sin actividad',
     color: '#34d399',
     bg: 'rgba(16, 185, 129, 0.12)',
     border: 'rgba(16, 185, 129, 0.3)'
@@ -380,7 +380,7 @@ export function TerminalPane({
               <span
                 data-testid={`pane-activity-badge-${paneId}`}
                 data-activity-state={pane.activityState}
-                title={pane.activitySource ? `Actividad (${pane.activitySource})` : 'Actividad'}
+                title={`Solo informativo: lo declara el propio agente y no autoriza ninguna accion${pane.activitySource ? ` (fuente: ${pane.activitySource})` : ''}`}
                 style={{
                   fontFamily: 'var(--font-mono)',
                   fontSize: '9.5px',

@@ -248,8 +248,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     loading: false,
     autoRelayEnabled: false,
     autoRelayBusy: false,
-    autoRelayWarning: '',
-    relayStatus: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 }
+    relayStatus: { auto_relay_enabled: false, tripped_cases: [] }
   });
   const [catalog, setCatalog] = useState(INITIAL_CATALOG);
   const [notice, setNotice] = useState(null);
@@ -332,8 +331,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
 
       const relayStatus = res.relay_status || {
         auto_relay_enabled: Boolean(res.auto_relay_enabled),
-        tripped_cases: [],
-        deferred_count: 0
+        tripped_cases: []
       };
       const autoRelayEnabled = Boolean(
         res.auto_relay_enabled !== undefined ? res.auto_relay_enabled : relayStatus.auto_relay_enabled
@@ -348,10 +346,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         mcpConfig: res.mcp_config || null,
         loading: false,
         autoRelayEnabled,
-        autoRelayWarning:
-          autoRelayEnabled && relayStatus.key_encrypted === false
-            ? prev.autoRelayWarning || 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.'
-            : '',
         relayStatus
       }));
 
@@ -949,15 +943,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         return;
       }
       const enabledVal = typeof res?.auto_relay_enabled === 'boolean' ? res.auto_relay_enabled : nextEnabled;
-      const keyEncrypted = res?.key_encrypted;
-      const gate0cNote = enabledVal && keyEncrypted === false
-        ? (res?.warning || 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.')
-        : '';
       setMatrixStatus((prev) => ({
         ...prev,
         autoRelayEnabled: enabledVal,
         autoRelayBusy: false,
-        autoRelayWarning: gate0cNote,
         relayStatus: {
           ...prev.relayStatus,
           ...(res || {}),
@@ -1075,8 +1064,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           autoRelay={{
             enabled: Boolean(matrixStatus.autoRelayEnabled),
             busy: Boolean(matrixStatus.autoRelayBusy),
-            available: Boolean(api?.pty_set_auto_relay),
-            warning: matrixStatus.autoRelayWarning
+            available: Boolean(api?.pty_set_auto_relay)
           }}
           onToggleAutoRelay={() => void handleToggleAutoRelay()}
           statusNotice={statusNotice}

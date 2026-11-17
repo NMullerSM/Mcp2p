@@ -142,7 +142,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     // Pegado (xterm ya lo entrega como datos, con saltos de linea como Enter).
     term.emitData('echo hola\rls');
     await waitFor(() => expect(api.pty_write_input).toHaveBeenCalledWith('pane_1', 'echo hola\rls', true));
-    // Siempre con el tercer argumento (alimenta el cooldown de tecleo humano del relevo).
+    // Siempre con el tercer argumento (marca el tecleo como humano; solo telemetria de la GUI).
     api.pty_write_input.mock.calls.forEach((call) => expect(call[2]).toBe(true));
   });
 
@@ -917,32 +917,54 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     const mcp1 = await screen.findByTestId('pane-mcp-badge-pane_1');
     expect(mcp1.textContent).toBe('MCP Hub');
     expect(mcp1.getAttribute('title')).toContain('verified=true');
-    expect(screen.getByTestId('pane-activity-badge-pane_1').textContent).toBe('Libre');
+    const idleBadge = screen.getByTestId('pane-activity-badge-pane_1');
+    expect(idleBadge.textContent).toBe('Sin actividad');
+    expect(idleBadge.textContent).not.toMatch(/Libre/);
+    // F0: la actividad es solo informativa y el tooltip lo dice (no autoriza escribir en la terminal).
+    expect(idleBadge.getAttribute('title')).toContain('Solo informativo');
 
     const mcp2 = screen.getByTestId('pane-mcp-badge-pane_2');
     expect(mcp2.textContent).toBe('MCP manual');
     expect(screen.getByTestId('pane-activity-badge-pane_2').textContent).toBe('Trabajando');
   });
 
-  it('el toggle Auto-Relay invoca pty_set_auto_relay(true) y muestra nota Gate 0c si la clave no esta cifrada', async () => {
+  it('el toggle Auto-Relay invoca pty_set_auto_relay(true), explica que solo deja avisos en la bandeja y ya no muestra Gate 0c', async () => {
     const pty_set_auto_relay = vi.fn(async (enabled) => ({
       success: true,
       auto_relay_enabled: Boolean(enabled),
-      key_encrypted: false,
-      deferred_count: 0,
       tripped_cases: [],
-      warning: 'Gate 0c: clave Ed25519 sin cifrar; el despacho PTY exige clave cifrada.'
+      inbox_pending: 0
     }));
     const api = makeMatrixApi({ pty_set_auto_relay });
     renderMatrix(api);
 
     const toggle = await screen.findByTestId('auto-relay-toggle');
     expect(toggle.textContent).toContain('OFF');
+    const description = screen.getByTestId('auto-relay-description').textContent;
+    expect(description).toContain('bandeja');
+    expect(description).toContain('No escribe nada en su terminal');
+    expect(description).not.toMatch(/cooldown|est[aá] libre/i);
 
     fireEvent.click(toggle);
     await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith(true));
     await waitFor(() => expect(toggle.textContent).toContain('ON'));
-    expect(screen.getByTestId('auto-relay-gate0c-note').textContent).toContain('Gate 0c');
+    expect(screen.queryByTestId('auto-relay-gate0c-note')).toBeNull();
+  });
+
+  it('si el dialogo nativo rechaza activar el Auto-Relay, el interruptor sigue en OFF y se avisa', async () => {
+    const pty_set_auto_relay = vi.fn(async () => ({
+      success: false,
+      code: 'CONFIRMATION_DECLINED',
+      message: 'Operacion cancelada: no se confirmo en el dialogo del sistema.'
+    }));
+    const api = makeMatrixApi({ pty_set_auto_relay });
+    renderMatrix(api);
+
+    const toggle = await screen.findByTestId('auto-relay-toggle');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBe('false'));
+    expect(toggle.textContent).toContain('OFF');
   });
 
   it('muestra banner y boton reset-loop-breaker-btn (EGM-87) cuando relay_status.tripped_cases no esta vacio', async () => {

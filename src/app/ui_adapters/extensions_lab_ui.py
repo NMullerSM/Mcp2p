@@ -701,7 +701,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             default_relay_status: Dict[str, Any] = {
                 "auto_relay_enabled": False,
                 "tripped_cases": [],
-                "deferred_count": 0,
             }
             relay_status: Dict[str, Any] = dict(default_relay_status)
             if hub is not None and hub_running:
@@ -747,7 +746,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "hub_url": None,
                 "hub_running": False,
                 "auto_relay_enabled": False,
-                "relay_status": {"auto_relay_enabled": False, "tripped_cases": [], "deferred_count": 0},
+                "relay_status": {"auto_relay_enabled": False, "tripped_cases": []},
                 "panes": [],
                 "sessions": [],
                 "manual_command": instructions["manual_command"],
@@ -1380,9 +1379,23 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             return _fail("INTERNAL_ERROR", str(exc))
 
     def pty_set_auto_relay(self, enabled: bool) -> Dict[str, Any]:
-        """Activa o desactiva el Auto-Relay del Hub embebido (con verificación Gate 0c)."""
+        """Activa o desactiva el Auto-Relay del Hub embebido.
+
+        F0: activarlo solo significa «dejar avisos en la bandeja del agente destino»; nunca escribe en un PTY.
+        Activarlo exige confirmacion NATIVA (EGM-74); apagarlo no pregunta (es la direccion segura).
+        """
         try:
             target_enabled = bool(enabled)
+            if target_enabled:
+                declined = self._confirm_native(
+                    "Activar Auto-Relay",
+                    "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja de los agentes "
+                    "destino, ademas de los mensajes directos que ya reciben.\n\n"
+                    "No escribe nada en ninguna terminal: cada agente decide cuando recoger los avisos. "
+                    "Acepte solo si quiere ese comportamiento.",
+                )
+                if declined is not None:
+                    return declined
             hub = self._embedded_hub
             if target_enabled and (hub is None or not hub.is_running()):
                 self._ensure_hub_started()
@@ -1394,23 +1407,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                     "El Hub embebido no está en marcha o no pudo iniciar; Auto-Relay no disponible.",
                 )
 
-            key_encrypted = bool(getattr(self.crypto, "is_encrypted", False))
             relay.set_auto_relay_enabled(target_enabled)
-            status = dict(relay.get_auto_relay_status())
-            effective_key_encrypted = bool(status.get("key_encrypted", key_encrypted))
-            if not key_encrypted:
-                effective_key_encrypted = False
-            result: Dict[str, Any] = {
-                "success": True,
-                **status,
-                "key_encrypted": effective_key_encrypted,
-            }
-            if target_enabled and not effective_key_encrypted:
-                result["warning"] = (
-                    "Gate 0c: la clave privada local no está cifrada; "
-                    "el despacho automático al PTY exige clave Ed25519 cifrada."
-                )
-            return result
+            return {"success": True, **dict(relay.get_auto_relay_status())}
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
