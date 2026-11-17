@@ -4,15 +4,15 @@ Dominio puro: sin E/S, sin criptografia. La procedencia (`from`) y el nivel de c
 calcula SIEMPRE el Hub a partir de la autenticacion (sesion de panel + vinculo de proceso, sesion de operador o accion
 del humano en la GUI). Ningun parametro de una herramienta MCP puede fijarlos (hay prueba AST).
 
-Niveles (de menos a mas confianza). Solo se usan hoy ``unverified``, ``pane_authenticated``/``operator_delegated`` y
-``system``; el resto queda reservado para olas posteriores y NO lo emite ningun codigo de esta version:
+Niveles (de menos a mas confianza). Solo se usan hoy ``unverified``, ``pane_authenticated``, ``operator_delegated`` (Ola
+4) y ``system``; el resto queda reservado para olas posteriores y NO lo emite ningun codigo de esta version:
 
 ======  =====================  ==========================================================================
 Nivel   Nombre                 Base de la prueba
 ======  =====================  ==========================================================================
 T0      ``unverified``         Nada verificable (p. ej. contenido importado, firma ausente o invalida)
 T1      ``pane_authenticated`` Token del panel + proceso par dentro del arbol del panel (EGM-105)
-T1      ``operator_delegated`` Sesion de operador emparejada (reservado: canal del operador, Ola 4)
+T1      ``operator_delegated`` Sesion de operador emparejada por proceso y aprobada por el humano (Ola 4, F2)
 T2      ``device_certified``   Sobre de otro dispositivo con certificado firmado por su humano (reservado, P2P)
 T3      ``human_confirmed``    Firma o clic del humano sobre el texto exacto (reservado, Ola 4)
 T4      ``system``             Generado por el propio Hub (avisos, eventos Kanban dirigidos)
@@ -60,7 +60,9 @@ TRUST_RANK = {
 
 # Niveles que el Hub puede emitir en esta version. Los reservados existen en el enum (para leer sobres de versiones
 # futuras sin romper) pero ningun camino de codigo los asigna hoy.
-ACTIVE_TRUST_LEVELS = frozenset({TrustLevel.UNVERIFIED, TrustLevel.PANE_AUTHENTICATED, TrustLevel.SYSTEM})
+ACTIVE_TRUST_LEVELS = frozenset(
+    {TrustLevel.UNVERIFIED, TrustLevel.PANE_AUTHENTICATED, TrustLevel.OPERATOR_DELEGATED, TrustLevel.SYSTEM}
+)
 # Lo maximo que vale algo que emite un agente de panel, diga lo que diga su texto.
 MAX_AGENT_TRUST = TrustLevel.PANE_AUTHENTICATED
 
@@ -117,6 +119,11 @@ class Principal:
     @classmethod
     def device(cls, device_id: str) -> "Principal":
         return cls(PrincipalKind.DEVICE, device_id)
+
+    @classmethod
+    def operator(cls, session_id: str, *, project_uuid: str = "", label: str = "") -> "Principal":
+        """Operador emparejado (Ola 4): la identidad es la SESION aprobada, ligada al proceso del harness."""
+        return cls(PrincipalKind.OPERATOR, session_id, project_uuid=project_uuid, label=label)
 
     @classmethod
     def human(cls, fingerprint: str) -> "Principal":

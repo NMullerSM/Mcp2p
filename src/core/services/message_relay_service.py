@@ -34,10 +34,11 @@ CONTENT_RETENTION_MS = CONTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
 MAX_WAIT_MS = 300_000
 TOOL_TIMEOUT_MS = MAX_WAIT_MS + 30_000  # limite por llamada MCP que se escribe en la configuracion de cada CLI
 AGENT_KINDS = frozenset({"note", "task.request", "task.reply"})
+OPERATOR_KINDS = frozenset({"note", "task.request"})  # el operador abre cadenas; no responde a nadie
 GLOBAL_PAUSE_SCOPE = "global"
 HUMAN_UI_ACTOR = "human_ui"
-_PURGE_INTERVAL_MS = 60 * 60 * 1000
 HUMAN_PRINCIPAL_ID = "local"  # remitente `human:local` de los mensajes que escribe el humano en la GUI
+_PURGE_INTERVAL_MS = 60 * 60 * 1000
 
 
 def _now_ms() -> int:
@@ -86,6 +87,8 @@ class MessageRelayService:
         self._cond = threading.Condition()
         self._wake_listeners: List[Callable[[str], None]] = []
         self._last_purge_ms = 0
+        # Canal del operador (Ola 4): `accepts_reply(session_id, project_uuid) -> bool` y `label(session_id) -> dict`.
+        self.operator_directory: Any = None
 
     # -- composicion ---------------------------------------------------------------------------------------------
 
@@ -194,6 +197,14 @@ class MessageRelayService:
             else:
                 out["pane_id"] = None
                 out["agent_name"] = None
+        elif kind == "operator":
+            out["session_id"] = ident
+            label_fn = getattr(self.operator_directory, "label", None)
+            if callable(label_fn):
+                try:
+                    out.update(label_fn(ident) or {})
+                except Exception:
+                    logger.debug("Etiqueta del operador no disponible", exc_info=True)
         return out
 
     # -- envio ---------------------------------------------------------------------------------------------------
@@ -210,6 +221,8 @@ class MessageRelayService:
         confirm_with_human: bool = False,
         parent: Optional[Dict[str, Any]] = None,
         target_rec: Any = None,
+        sender_principal: Optional[Principal] = None,
+        trust_override: Optional[TrustLevel] = None,
     ) -> Dict[str, Any]:
         """`sender` es la sesion de panel AUTENTICADA (nunca algo declarado por el agente).
 
@@ -224,8 +237,6 @@ class MessageRelayService:
         try:
             size = len(text.encode("utf-8"))
         except UnicodeEncodeError:
-        sender_principal: Optional[Principal] = None,
-        trust_override: Optional[TrustLevel] = None,
             return _err("INVALID_MESSAGE", "El mensaje no es texto UTF-8 valido.")
         if size > MAX_MESSAGE_BYTES:
             return _err(
@@ -336,17 +347,6 @@ class MessageRelayService:
             result["held"] = "RELAY_PAUSED"
         return result
 
-    def reply(self, sender: Any, *, msg_id: Any, text: Any, kind: str = "task.reply") -> Dict[str, Any]:
-        """Respuesta a un sobre RECIBIDO por `sender`: hereda la cadena y sube el salto."""
-        from_p = self.principal_of(sender)
-        original = self.store.get_message(str(msg_id or "")) if msg_id else None
-        if (
-            original is None
-            or original["to_principal"] != from_p.uri
-            or original["state"] not in ("delivered", "acked")
-        ):
-            return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje recibido con ese msg_id.")
-        if not str(original["from_principal"]).startswith("pane:"):
     def human_key_unlocked(self) -> bool:
         """True si la clave humana del kernel esta disponible y desbloqueada (hay certificado de dispositivo)."""
         try:
@@ -372,6 +372,19 @@ class MessageRelayService:
             trust_override=trust,
         )
 
+    def reply(self, sender: Any, *, msg_id: Any, text: Any, kind: str = "task.reply") -> Dict[str, Any]:
+        """Respuesta a un sobre RECIBIDO por `sender`: hereda la cadena y sube el salto."""
+        from_p = self.principal_of(sender)
+        original = self.store.get_message(str(msg_id or "")) if msg_id else None
+        if (
+            original is None
+            or original["to_principal"] != from_p.uri
+            or original["state"] not in ("delivered", "acked")
+        ):
+            return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje recibido con ese msg_id.")
+        if str(original["from_principal"]).startswith("operator:"):
+            return self._reply_to_operator(sender, original, text)
+        if not str(original["from_principal"]).startswith("pane:"):
             return _err("NOT_REPLYABLE", "Ese mensaje no admite respuesta.")
         target = self._pane_by_node(str(original["from_principal"])[5:], from_p.project_uuid)
         if target is None:
@@ -384,6 +397,219 @@ class MessageRelayService:
             parent={"msg_id": original["msg_id"], "chain_id": original["chain_id"], "hop": int(original["hop"])},
             target_rec=target,
         )
+
+    # -- canal del operador (Ola 4, F2.2) -----------------------------------------------------------------------------
+
+    @staticmethod
+    def _check_text(text: Any, kind: str, kinds: frozenset) -> Optional[Dict[str, Any]]:
+        if not isinstance(text, str) or not text.strip():
+            return _err("EMPTY_MESSAGE", "El mensaje no puede estar vacío.")
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeEncodeError:
+            return _err("INVALID_MESSAGE", "El mensaje no es texto UTF-8 valido.")
+        if size > MAX_MESSAGE_BYTES:
+            return _err(
+                "MESSAGE_TOO_LARGE", f"El mensaje supera el maximo de {MAX_MESSAGE_BYTES} bytes.", max_bytes=MAX_MESSAGE_BYTES
+            )
+        if kind not in kinds:
+            return _err("INVALID_KIND", f"kind debe ser uno de {sorted(kinds)}.")
+        return None
+
+    def _seal_and_store(
+        self,
+        *,
+        from_uri: str,
+        to_uri: str,
+        project: str,
+        text: str,
+        kind: str,
+        card_id: Optional[str],
+        link: Any,
+        trust: TrustLevel,
+        park_reason: Optional[str],
+        submit_event: str,
+        now: int,
+        parent_msg_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Sella (`from`, cadena y confianza los pone el Hub), firma, audita y guarda en una transaccion."""
+        msg_id = str(uuid.uuid4())
+        identity = self.identity
+        try:
+            header = build_header(
+                msg_id=msg_id, kind=kind, from_uri=from_uri, from_device=identity.device_uri(), to_uri=to_uri,
+                project_uuid=project, chain_id=link.chain_id, hop=link.hop, parent_msg_id=parent_msg_id, content=text,
+                created_at=now, expires_at=now + self.message_ttl_ms, trust=trust.value,
+                device_cert=identity.device_certificate(),
+            )
+        except EnvelopeError as exc:
+            return _err("INVALID_ENVELOPE", f"No se pudo sellar el sobre ({exc.code}).")
+        envelope = identity.sign_header(header)
+        state = "parked" if park_reason else "queued"
+        row = {
+            "msg_id": msg_id, "project_uuid": project, "from_principal": from_uri, "to_principal": to_uri, "kind": kind,
+            "chain_id": link.chain_id, "hop": link.hop, "parent_msg_id": parent_msg_id, "trust": trust.value,
+            "content_hash": header["content_hash"], "content": text,
+            "envelope_json": json.dumps(envelope, sort_keys=True, ensure_ascii=False), "state": state,
+            "state_reason": park_reason, "card_id": str(card_id) if card_id else None, "created_at_ms": now,
+            "expires_at_ms": header["expires_at"], "updated_at_ms": now,
+        }
+        base_audit = {
+            "msg_id": msg_id, "chain_id": link.chain_id, "hop": link.hop, "project_uuid": project,
+            "from_principal": from_uri, "to_principal": to_uri, "trust": trust.value,
+            "content_hash": header["content_hash"], "actor": from_uri,
+        }
+        audit = [{**base_audit, "event": submit_event, "decision": state}]
+        if park_reason:
+            audit.append({**base_audit, "event": "parked", "reason_code": park_reason})
+        if not self.store.insert_message(row, audit):
+            self.store.append_audit({**base_audit, "event": "rejected", "reason_code": "REPLAY_DETECTED", "ts_ms": now})
+            return _err("REPLAY_DETECTED", "Ese sobre ya existe.")
+        return {
+            "success": True, "msg_id": msg_id, "state": state,
+            "chain": {"chain_id": link.chain_id, "hop": link.hop, "max_depth": link.max_depth}, "trust": trust.value,
+        }
+
+    def submit_from_operator(
+        self,
+        operator_uri: str,
+        *,
+        project_uuid: str,
+        target_rec: Any,
+        text: Any,
+        kind: str = "task.request",
+        card_id: Optional[str] = None,
+        park_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Sobre del operador emparejado (`from = operator:<sesion>`, `trust = operator_delegated`). El operador abre
+        SIEMPRE una cadena nueva (salto 0): nunca recibe sobres, asi que no tiene contexto que heredar. Con
+        `park_reason` el sobre espera al humano (destino `elevated` o `confirm_with_human`)."""
+        now = int(self._clock_ms())
+        self._maintenance(now)
+        bad = self._check_text(text, kind, OPERATOR_KINDS)
+        if bad is not None:
+            return bad
+        if target_rec is None or str(getattr(target_rec, "project_uuid", "") or "") != project_uuid:
+            return _err("TARGET_NOT_FOUND", "No hay ningun panel activo con ese destino en este proyecto.")
+        to_p = Principal.pane(str(target_rec.node_uuid), project_uuid=project_uuid)
+        if self.store.count_pending(to_p.uri) >= self.max_inbox_depth:
+            self.store.append_audit(
+                {"event": "rejected", "from_principal": operator_uri, "to_principal": to_p.uri,
+                 "project_uuid": project_uuid, "reason_code": "INBOX_FULL", "actor": operator_uri, "ts_ms": now}
+            )
+            return _err("INBOX_FULL", f"Bandeja del destino llena (maximo {self.max_inbox_depth}).", blocked=True)
+        link = self.tracker.next_link(operator_uri)
+        sealed = self._seal_and_store(
+            from_uri=operator_uri, to_uri=to_p.uri, project=project_uuid, text=text, kind=kind, card_id=card_id,
+            link=link, trust=TrustLevel.OPERATOR_DELEGATED, park_reason=park_reason, submit_event="operator_submitted",
+            now=now,
+        )
+        if not sealed.get("success"):
+            return sealed
+        common = {**sealed, "target_node_uuid": to_p.id}
+        if park_reason:
+            return {**common, "code": "PARKED_FOR_HUMAN", "delivered": False, "parked": True, "reason": park_reason}
+        held = self._paused(GLOBAL_PAUSE_SCOPE) or self._paused(f"pane:{to_p.id}")
+        self._notify(to_p.id)
+        result = {**common, "queued": True, "delivered": not held}
+        if held:
+            result["held"] = "RELAY_PAUSED"
+        return result
+
+    def _reply_to_operator(self, sender: Any, original: Dict[str, Any], text: Any) -> Dict[str, Any]:
+        """`inbox_reply` a un sobre del operador: va a su bandeja (la recoge con `operator_await_reply`)."""
+        now = int(self._clock_ms())
+        from_p = self.principal_of(sender)
+        to_uri = str(original["from_principal"])
+        session_id = to_uri.partition(":")[2]
+        accepts = getattr(self.operator_directory, "accepts_reply", None)
+        if not callable(accepts) or not accepts(session_id, from_p.project_uuid):
+            return _err("TARGET_NOT_FOUND", "El operador que envio ese mensaje ya no tiene una sesion activa.")
+        bad = self._check_text(text, "task.reply", AGENT_KINDS)
+        if bad is not None:
+            return bad
+        if self._paused(f"pane:{from_p.id}"):
+            return _err("RELAY_PAUSED", "El relevo de este panel esta en pausa; solo el humano puede reanudarlo.")
+        link = self.tracker.next_link(
+            from_p.uri,
+            human_turn_at_ms=self._human_turn_ms(from_p.id),
+            parent_chain_id=original["chain_id"],
+            parent_hop=int(original["hop"]),
+        )
+        trust = cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
+        park = CHAIN_DEPTH_EXCEEDED if link.exceeded else None
+        sealed = self._seal_and_store(
+            from_uri=from_p.uri, to_uri=to_uri, project=from_p.project_uuid, text=text, kind="task.reply",
+            card_id=original.get("card_id"), link=link, trust=trust, park_reason=park, submit_event="submitted",
+            now=now, parent_msg_id=original["msg_id"],
+        )
+        if not sealed.get("success"):
+            return sealed
+        if park:
+            return {**sealed, "success": False, "code": CHAIN_DEPTH_EXCEEDED, "delivered": False, "parked": True,
+                    "error": "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano."}
+        self._notify(session_id)
+        return {**sealed, "queued": True, "inbox": True, "delivered": True, "to": to_uri, "message_uuid": sealed["msg_id"]}
+
+    def _operator_row(self, operator_uri: str, msg_id: Any) -> Optional[Dict[str, Any]]:
+        row = self.store.get_message(str(msg_id)) if isinstance(msg_id, str) and msg_id.strip() else None
+        if row is None or row["from_principal"] != operator_uri:
+            return None  # no se revela si existe un sobre de otro remitente
+        return row
+
+    def operator_status(self, operator_uri: str, msg_id: Any) -> Dict[str, Any]:
+        """Estado de un sobre que envio ESTE operador: queued/delivered/acked/replied/parked/expired/discarded."""
+        row = self._operator_row(operator_uri, msg_id)
+        if row is None:
+            return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje tuyo con ese msg_id.")
+        replies = self.store.replies_to(row["msg_id"], operator_uri)
+        return {
+            "success": True,
+            "msg_id": row["msg_id"],
+            "state": "replied" if replies else row["state"],
+            "message_state": row["state"],
+            "state_reason": row.get("state_reason"),
+            "reply_count": len(replies),
+            "released_by_human": row.get("state_reason") == "HUMAN_RELEASED",
+            "trust": row["trust"],
+            "chain": {"chain_id": row["chain_id"], "hop": int(row["hop"]), "max_depth": self.tracker.max_depth},
+            "target": self._label(row["to_principal"]),
+            "project_uuid": row["project_uuid"],
+            "created_at": int(row["created_at_ms"]),
+            "expires_at": int(row["expires_at_ms"]),
+        }
+
+    def await_operator_reply(self, operator_uri: str, msg_id: Any, *, timeout_ms: Any = 0) -> Dict[str, Any]:
+        """Espera (sin sondeo; tope 300 s) a que el panel destino responda con `inbox_reply` y entrega la respuesta."""
+        row = self._operator_row(operator_uri, msg_id)
+        if row is None:
+            return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje tuyo con ese msg_id.")
+        applied = _clamp_wait(timeout_ms)
+        deadline = time.monotonic() + applied / 1000.0
+        final_states = ("expired", "discarded")
+        with self._cond:
+            while True:
+                paused = self._paused(GLOBAL_PAUSE_SCOPE)
+                ready = not paused and bool(self.store.replies_to(row["msg_id"], operator_uri))
+                current = self.store.get_message(row["msg_id"]) or row
+                remaining = deadline - time.monotonic()
+                if ready or current["state"] in final_states or remaining <= 0:
+                    break
+                self._cond.wait(timeout=min(remaining, 5.0))
+        replies: List[Dict[str, Any]] = []
+        if not self._paused(GLOBAL_PAUSE_SCOPE):
+            kind, _, ident = operator_uri.partition(":")
+            recipient = Principal(kind, ident)
+            taken = self.store.take_replies(row["msg_id"], operator_uri, now_ms=int(self._clock_ms()), actor=operator_uri)
+            replies = [self._present(r, recipient) for r in taken]
+        status = self.operator_status(operator_uri, row["msg_id"])
+        return {
+            **status,
+            "replies": replies,
+            "timed_out": not replies and status["message_state"] not in final_states,
+            "timeout_ms_applied": applied,
+            "relay_paused": self._paused(GLOBAL_PAUSE_SCOPE),
+        }
 
     # -- entrega -------------------------------------------------------------------------------------------------
 

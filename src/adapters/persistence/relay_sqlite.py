@@ -252,6 +252,42 @@ class SqliteRelayStore:
                 acked.append(msg_id)
         return acked
 
+    def replies_to(self, parent_msg_id: str, to_principal: str) -> List[Dict[str, Any]]:
+        """Respuestas (`parent_msg_id`) dirigidas a `to_principal` que siguen vivas (canal del operador, Ola 4)."""
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM relay_messages WHERE parent_msg_id = ? AND to_principal = ? "
+                "AND state IN ('queued', 'delivered', 'acked') ORDER BY created_at_ms, msg_id;",
+                (parent_msg_id, to_principal),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def take_replies(self, parent_msg_id: str, to_principal: str, *, now_ms: int, actor: str) -> List[Dict[str, Any]]:
+        """Entrega Y confirma las respuestas a `parent_msg_id` para `to_principal` (el operador las recoge con
+        `operator_await_reply`); devuelve tambien las ya entregadas antes (lectura idempotente)."""
+        with self._tx() as conn:
+            self._expire_in(conn, now_ms, " AND to_principal = ?", (to_principal,))
+            rows = conn.execute(
+                "SELECT * FROM relay_messages WHERE parent_msg_id = ? AND to_principal = ? "
+                "AND state IN ('queued', 'delivered', 'acked') ORDER BY created_at_ms, msg_id;",
+                (parent_msg_id, to_principal),
+            ).fetchall()
+            out: List[Dict[str, Any]] = []
+            for raw in rows:
+                row = dict(raw)
+                if row["state"] == "queued":
+                    self._append_audit_in(conn, _audit_from_message(row, "delivered", actor=actor, decision="delivered"), now_ms)
+                if row["state"] in ("queued", "delivered"):
+                    conn.execute(
+                        "UPDATE relay_messages SET state = 'acked', delivered_at_ms = COALESCE(delivered_at_ms, ?), "
+                        "acked_at_ms = ?, updated_at_ms = ? WHERE msg_id = ?;",
+                        (int(now_ms), int(now_ms), int(now_ms), row["msg_id"]),
+                    )
+                    self._append_audit_in(conn, _audit_from_message(row, "acked", actor=actor), now_ms)
+                    row["state"] = "acked"
+                out.append(row)
+        return out
+
     def list_parked(self, project_uuid: Optional[str]) -> List[Dict[str, Any]]:
         with self.db.get_connection() as conn:
             if project_uuid is None:
