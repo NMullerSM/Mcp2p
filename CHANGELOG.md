@@ -10,6 +10,8 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 
 ## [Sin publicar]
 
+## [2.0.1] - 2026-11-17 · [commits](https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1)
+
 ### Añadido
 - Terminales integradas en **Windows**: los paneles de Swarm Terminal Matrix ahora funcionan también allí (Claude,
   Gemini, Codex, OpenCode, Antigravity o una shell), con instalación guiada de los CLI que falten.
@@ -127,7 +129,8 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 ### Añadido
 - Primera versión publicada: instalador para Windows, paquete para Linux y actualizador automático.
 
-[Sin publicar]: https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...develop
+[Sin publicar]: https://github.com/NMullerSM/Mcp2p/compare/v2.0.1...develop
+[2.0.1]: https://github.com/NMullerSM/Mcp2p/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/NMullerSM/Mcp2p/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.8...v1.1.0
 [1.0.8]: https://github.com/NMullerSM/Mcp2p/compare/v1.0.5...v1.0.8
