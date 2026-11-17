@@ -561,7 +561,9 @@ function ActiveTerminalRow({
   onPausePane,
   onClosePane,
   onToggleAutoRelay,
-  autoRelayAvailable
+  autoRelayAvailable,
+  onToggleWorkerMode,
+  workerModeAvailable
 }) {
   const paneId = pane.paneId;
   const stateLabel = pane.alive ? (pane.paused ? 'Pausado' : 'Activo') : 'Finalizado';
@@ -657,6 +659,25 @@ function ActiveTerminalRow({
             <span>Auto-Relay: {pane.autoRelayEnabled ? 'ON' : 'OFF'}</span>
           </button>
         )}
+        {/* F2.4: modo trabajador por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
+        {pane.alive && pane.kind !== 'install' && onToggleWorkerMode && (
+          <button
+            type="button"
+            data-testid={`pane-worker-mode-toggle-${paneId}`}
+            aria-pressed={pane.workerMode ? 'true' : 'false'}
+            disabled={!workerModeAvailable || Boolean(pane.workerModeBusy)}
+            title="El agente espera mensajes de otros agentes en su bandeja (inbox_wait) y responde con inbox_reply; no escribe en su terminal."
+            onClick={() => onToggleWorkerMode(paneId)}
+            style={{
+              ...btnBase,
+              color: pane.workerMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              border: `1px solid ${pane.workerMode ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
+              cursor: !workerModeAvailable || pane.workerModeBusy ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <span>Modo trabajador: {pane.workerMode ? 'ON' : 'OFF'}</span>
+          </button>
+        )}
         <button
           type="button"
           data-testid={`pane-close-btn-${paneId}`}
@@ -675,6 +696,9 @@ export function TerminalSliderControls({
   status,
   autoRelay,
   onToggleAutoRelay,
+  workerMode,
+  onToggleWorkerMode,
+  relaySection = null,
   catalog,
   maxPanes,
   hardMaxPanes = HARD_MAX_PANES,
@@ -739,6 +763,23 @@ export function TerminalSliderControls({
           </p>
         </section>
       )}
+
+      {/* F2.4: modo trabajador por panel; el interruptor de cada terminal esta en «Terminales activas». */}
+      {workerMode?.available && (
+        <section data-testid="worker-mode-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <h4 style={sectionTitle}>Modo trabajador</h4>
+          <p data-testid="worker-mode-description" style={{ ...mutedText, margin: 0 }}>
+            Se activa en cada terminal, desde «Terminales activas». El agente se queda esperando mensajes de otros
+            agentes en su bandeja (inbox_wait) y responde con inbox_reply, sin que usted escriba nada. MCP2P no
+            escribe en ninguna terminal: el agente recibe las instrucciones al conectarse y en cada respuesta de su
+            bandeja. Mientras espera, el agente gasta un turno del modelo cada pocos minutos. Una conversación entre
+            dos agentes se detiene sola tras una respuesta automática y espera su confirmación en la bandeja del
+            humano.
+          </p>
+        </section>
+      )}
+
+      {relaySection}
 
       {/* Estado general del enjambre */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
@@ -927,6 +968,8 @@ export function TerminalSliderControls({
                 onClosePane={onClosePane}
                 onToggleAutoRelay={onToggleAutoRelay}
                 autoRelayAvailable={Boolean(autoRelay?.available)}
+                onToggleWorkerMode={onToggleWorkerMode}
+                workerModeAvailable={Boolean(workerMode?.available)}
               />
             ))}
           </ul>

@@ -11,6 +11,8 @@ import {
   writeTerminalNotice
 } from './terminals/terminalRegistry';
 import { TerminalSliderControls } from './terminals/TerminalSliderControls';
+import { RelayPanel } from './relay/RelayPanel';
+import { useRelayState } from './relay/useRelayState';
 import {
   DEFAULT_MAX_PANES,
   DEFAULT_PTY_SIZE,
@@ -53,7 +55,10 @@ function createInitialPaneState(paneId) {
     // Ola 2: proyecto al que pertenece el panel ('' = sin proyecto, visible siempre) y su Auto-Relay (D2).
     projectUuid: '',
     autoRelayEnabled: false,
-    autoRelayBusy: false
+    autoRelayBusy: false,
+    // F2.4: modo trabajador por panel (persistido en el backend junto al Auto-Relay).
+    workerMode: false,
+    workerModeBusy: false
   };
 }
 
@@ -274,6 +279,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   catalogRef.current = catalog;
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Relevo entre agentes (F1.6): bandeja del humano, auditoria y paradas; solo sondea con la vista a la vista.
+  const relay = useRelayState(api, project?.project_uuid, { enabled: active });
   const pollersRef = useRef({});
   // Un emisor de entrada por panel: una sola llamada pty_write_input en vuelo y lo tecleado
   // mientras tanto sale agrupado en la siguiente, en orden (EGM-80: cada llamada del puente
@@ -391,7 +398,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               activityState: s.activity_state ?? r?.activity_state ?? base.activityState ?? null,
               activitySource: s.activity_source ?? r?.activity_source ?? base.activitySource ?? '',
               projectUuid: r?.project_uuid ?? base.projectUuid ?? '',
-              autoRelayEnabled: Boolean(r?.auto_relay_enabled ?? base.autoRelayEnabled)
+              autoRelayEnabled: Boolean(r?.auto_relay_enabled ?? base.autoRelayEnabled),
+              workerMode: Boolean(r?.worker_mode ?? base.workerMode)
             };
           } else if (cur.open && cur.alive) {
             next[paneId] = { ...cur, alive: false, paused: false, rssMb: 0 };
@@ -405,7 +413,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
               activityState: r.activity_state ?? cur.activityState ?? null,
               activitySource: r.activity_source ?? cur.activitySource ?? '',
               projectUuid: r.project_uuid ?? cur.projectUuid ?? '',
-              autoRelayEnabled: Boolean(r.auto_relay_enabled ?? cur.autoRelayEnabled)
+              autoRelayEnabled: Boolean(r.auto_relay_enabled ?? cur.autoRelayEnabled),
+              workerMode: Boolean(r.worker_mode ?? cur.workerMode)
             };
           }
         });
@@ -714,7 +723,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         activityState: sess.activity_state ?? paneMeta.activity_state ?? null,
         activitySource: sess.activity_source ?? paneMeta.activity_source ?? '',
         projectUuid: res.project_uuid ?? paneMeta.project_uuid ?? project?.project_uuid ?? '',
-        autoRelayEnabled: Boolean(paneMeta.auto_relay_enabled)
+        autoRelayEnabled: Boolean(paneMeta.auto_relay_enabled),
+        workerMode: Boolean(paneMeta.worker_mode)
       });
       setNotice(null);
       requestTerminalFocus(openedId);
@@ -975,6 +985,30 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     }
   }, [api, patchPane, showNotice]);
 
+  // F2.4: modo trabajador POR PANEL. Activarlo abre el dialogo nativo en el puente; el estado se persiste alli.
+  const handleTogglePaneWorkerMode = useCallback(async (paneId) => {
+    const pane = panesRef.current[paneId];
+    if (!api?.pty_set_worker_mode || !pane || pane.workerModeBusy) return;
+    const nextEnabled = !pane.workerMode;
+    patchPane(paneId, { workerModeBusy: true });
+    try {
+      const res = await api.pty_set_worker_mode(paneId, nextEnabled);
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        showNotice(res);
+        patchPane(paneId, { workerModeBusy: false });
+        return;
+      }
+      const enabledVal = typeof res?.worker_mode === 'boolean' ? res.worker_mode : nextEnabled;
+      patchPane(paneId, { workerMode: enabledVal, workerModeBusy: false });
+    } catch (err) {
+      if (mountedRef.current) {
+        patchPane(paneId, { workerModeBusy: false });
+        showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
+      }
+    }
+  }, [api, patchPane, showNotice]);
+
   const handleRegisterAgyMcp = useCallback(async () => {
     if (!api?.pty_register_agy_mcp) return;
     try {
@@ -1072,6 +1106,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   }, [matrixStatus, catalog.platformSupported]);
 
   const activePanes = projectPaneIds.map((id) => panes[id]);
+  const relayTargets = activePanes
+    .filter((p) => p.alive)
+    .map((p) => ({ paneId: p.paneId, label: `${paneLabels[p.paneId]} · ${catalogById[p.cliProfile]?.display_name || p.cliProfile}` }));
 
   return (
     <div
@@ -1097,6 +1134,11 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           status={matrixStatus}
           autoRelay={{ available: Boolean(api?.pty_set_auto_relay) }}
           onToggleAutoRelay={(paneId) => void handleTogglePaneAutoRelay(paneId)}
+          workerMode={{ available: Boolean(api?.pty_set_worker_mode) }}
+          onToggleWorkerMode={api?.pty_set_worker_mode ? (paneId) => void handleTogglePaneWorkerMode(paneId) : undefined}
+          relaySection={
+            <RelayPanel api={api} projectUuid={project?.project_uuid} relay={relay} targets={relayTargets} />
+          }
           hiddenPaneCount={hiddenPaneCount}
           statusNotice={statusNotice}
           catalog={catalog}
@@ -1225,6 +1267,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
             onRequestOpenUrl={setPendingExternalUrl}
             onRegisterAgyMcp={api?.pty_register_agy_mcp ? () => void handleRegisterAgyMcp() : undefined}
             registerTerminalRef={registerTerminalRef}
+            relayPaused={relay.pausedPanes.includes(panes[paneId].nodeUuid)}
+            globalPaused={relay.globalPaused}
           />
         ))}
         {!searchHidesAll && Array.from({ length: emptySlots }, (_, i) => (

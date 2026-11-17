@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { Plus } from 'lucide-react';
 import { CliLogo } from './CliLogo';
+import { PaneProvenance } from './PaneProvenance';
 import { acquireTerminal, attachTerminal, detachTerminal } from './terminalRegistry';
 import './terminal.css';
 
@@ -210,7 +211,9 @@ export function TerminalPane({
   onRequestOpenUrl,
   onRegisterAgyMcp,
   registerTerminalRef,
-  hidden = false
+  hidden = false,
+  relayPaused = false,
+  globalPaused = false
 }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -347,6 +350,13 @@ export function TerminalPane({
         <span data-testid={`pane-logo-${paneId}`} data-cli={pane.cliProfile} title={logoName} style={{ display: 'inline-flex' }}>
           <CliLogo cliId={pane.cliProfile} icon={cli?.icon} name={logoName} size={13} />
         </span>
+        <PaneProvenance
+          paneId={paneId}
+          nodeUuid={pane.nodeUuid}
+          workerMode={Boolean(pane.workerMode)}
+          relayPaused={relayPaused}
+          globalPaused={globalPaused}
+        />
         {pane.cwd && (
           <span
             data-testid={`pane-cwd-${paneId}`}
