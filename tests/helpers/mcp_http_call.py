@@ -33,12 +33,19 @@ async def _call(url: str, token: str, tool: str, args: dict) -> dict:
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=30.0) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                res = await session.call_tool(tool, args)
-                return json.loads(res.content[0].text)
+    got: dict = {}
+    try:
+        async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=60.0) as http_client:
+            async with streamable_http_client(url, http_client=http_client) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    res = await session.call_tool(tool, args)
+                    got["value"] = json.loads(res.content[0].text)
+    except BaseException:
+        # Un error al CERRAR la sesion (DELETE, cancelacion del grupo de tareas) no invalida un resultado ya recibido.
+        if "value" not in got:
+            raise
+    return got["value"]
 
 
 def main() -> int:
@@ -56,7 +63,7 @@ def main() -> int:
         payload = {"ok": True, "pid": os.getpid(), "result": asyncio.run(_call(ns.url, ns.token, ns.tool, json.loads(ns.args)))}
     except Exception as exc:  # la prueba decide; aqui solo se informa
         payload = {"ok": False, "pid": os.getpid(), "error": f"{type(exc).__name__}: {exc}"}
-    line = json.dumps(payload, ensure_ascii=False)
+    line = json.dumps(payload)  # ASCII: la consola de Windows (cp1252) no rompe con caracteres raros
     if ns.out:
         tmp = ns.out + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

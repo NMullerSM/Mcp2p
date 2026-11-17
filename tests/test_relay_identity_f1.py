@@ -5,6 +5,7 @@ herramientas del relevo. EGM-105 con procesos reales esta en `test_peer_process.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -161,7 +162,7 @@ def test_relay_schema_migration_is_idempotent_and_reserves_pointer_columns(tmp_p
     from src.storage.db import DatabaseManager
 
     path = tmp_path / "old.db"
-    with _sqlite3.connect(str(path)) as conn:  # tabla de una version anterior, sin columnas de reserva
+    with contextlib.closing(_sqlite3.connect(str(path))) as conn, conn:  # tabla de una version anterior
         conn.execute(
             "CREATE TABLE relay_messages (msg_id TEXT PRIMARY KEY, project_uuid TEXT NOT NULL, from_principal TEXT "
             "NOT NULL, to_principal TEXT NOT NULL, kind TEXT NOT NULL, chain_id TEXT NOT NULL, hop INTEGER NOT NULL, "
@@ -176,7 +177,7 @@ def test_relay_schema_migration_is_idempotent_and_reserves_pointer_columns(tmp_p
     for _ in range(2):
         db = DatabaseManager(db_path=str(path))
         db.close()
-    with _sqlite3.connect(str(path)) as conn:
+    with contextlib.closing(_sqlite3.connect(str(path))) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(relay_messages)")}
         assert {"pointer_state", "pointer_pty_incarnation", "state_reason", "card_id", "purged_at_ms"} <= cols
         assert conn.execute("SELECT content FROM relay_messages WHERE msg_id='m1'").fetchone()[0] == "hola"
@@ -296,8 +297,15 @@ def test_inbox_survives_a_hub_restart(tmp_path: Path, _no_system_pty_writes) -> 
         second.close()
 
 
-def _db(hub: Hub) -> sqlite3.Connection:
-    return sqlite3.connect(str(hub.kernel.db.db_path))
+@contextlib.contextmanager
+def _db(hub: Hub):
+    """Conexion directa a la BD (simula a alguien que edita el archivo); se confirma y se CIERRA (Windows)."""
+    conn = sqlite3.connect(str(hub.kernel.db.db_path))
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def test_tampered_stored_message_is_delivered_as_unverified(hub: Hub) -> None:

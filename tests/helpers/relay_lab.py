@@ -103,7 +103,7 @@ def call_from_foreign_process(url: str, token: str, tool: str, args: Optional[Di
     lines = (proc.stdout or "").strip().splitlines()
     assert lines, proc.stderr[-2000:]
     payload = json.loads(lines[-1])
-    assert payload.get("ok"), payload
+    assert payload.get("ok"), (payload, proc.stderr[-2000:])
     return payload["result"]
 
 
