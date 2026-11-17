@@ -1,6 +1,6 @@
 """EGM-72: el relevo queda seguro (sin activarse). El Loop Breaker cuenta CAMBIOS DE SENTIDO entre dos nodos
 -no cada evento-, no depende de un `assignment_key` rotable, se reinicia desde la UI con dialogo nativo y las
-colas tienen tope. `dispatch_to_pane` / `flush_deferred_dispatches` siguen SIN llamador de produccion."""
+colas tienen tope. `dispatch_to_pane` / `flush_*` ya no existen (F0 del dossier 37)."""
 
 from __future__ import annotations
 
@@ -106,16 +106,14 @@ def test_number_of_distinct_target_queues_is_bounded() -> None:
         orch.close()
 
 
-def test_dispatch_and_flush_still_have_no_production_caller() -> None:
-    """EGM-72 (d): NO se conecta la inyeccion automatica en stdin; si alguien la cablea, este test obliga a revisarlo."""
+def test_dispatch_and_flush_no_longer_exist_anywhere() -> None:
+    """EGM-72 (d) / F0: la inyeccion automatica en stdin se retiro; si alguien la reintroduce, este test obliga a revisarlo."""
     callers = []
     for path in (ROOT / "src").rglob("*.py"):
-        if path.name == "swarm_relay_service.py":
-            continue
         text = path.read_text(encoding="utf-8")
-        if re.search(r"\b(dispatch_to_pane|flush_deferred_dispatches)\s*\(", text):
+        if re.search(r"\b(dispatch_to_pane|flush_deferred_dispatches|flush_idle_dispatches)\b", text):
             callers.append(str(path.relative_to(ROOT)))
-    assert callers == [], f"nuevo llamador de la inyeccion automatica en stdin: {callers}"
+    assert callers == [], f"reaparece la inyeccion automatica en stdin: {callers}"
 
 
 @pytest.fixture

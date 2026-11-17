@@ -20,7 +20,6 @@ from src.core.services import SwarmRelayOrchestrator
 from src.core.services.kanban_swarm_adapter import KanbanSwarmAdapter
 from src.mcp.pane_registry import PaneRegistry
 from src.mcp.tools import MCPToolsHandler
-from src.p2p.crypto import NodeCryptoManager
 from src.storage.db import DatabaseManager
 
 
@@ -179,16 +178,12 @@ def test_mcp_tools_list_swarm_panes_and_send_pane_message_egm22(tmp_path: Path) 
     term.set_idle("pane_1", True)
     term.set_idle("pane_2", True)
 
-    crypto = NodeCryptoManager(key_path=tmp_path / "node_identity.key")
-    crypto.set_passphrase("clave-segura-mcp")
-
     kernel = ApplicationFactory.create_mcp_kernel(
         db_manager=db,
         bus=bus,
         event_bus=event_bus,
     )
     kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, term)
-    kernel.register_connector(CoreKernel.PORT_CRYPTO, crypto)
 
     registry = PaneRegistry()
     registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-pane-1")
@@ -246,24 +241,26 @@ def test_mcp_tools_list_swarm_panes_and_send_pane_message_egm22(tmp_path: Path) 
             )
         )
         assert pull_out["success"] is True
-        assert pull_out["has_assignment"] is True
-        assert pull_out["assignment"]["sender_node_uuid"] == "node-pane-1"
-        msg_body = (
-            pull_out["assignment"].get("message")
-            or pull_out["assignment"].get("payload", {}).get("message")
-        )
-        assert msg_body == "Revisa CARD-99 por favor"
+        # F0: el mensaje directo llega por la bandeja, con la procedencia aparte del texto.
+        assert pull_out["has_messages"] is True
+        (msg,) = pull_out["messages"]
+        assert msg["text"] == "Revisa CARD-99 por favor"
+        assert msg["from"]["node_uuid"] == "node-pane-1"
+        assert msg["from"]["pane_id"] == "pane_1"
+        assert msg["to"]["node_uuid"] == "node-pane-2"
+        assert msg["id"] == ok_out["message_uuid"]
+        assert term.calls == []  # F0: nada se escribe en ningun PTY
     finally:
         handler.close()
         kernel.close()
 
 
 # ----------------------------------------------------------------------
-# 4. Flujo completo Auto-Relay estilo Orca/Hermes (idle vs working -> flush)
+# 4. Auto-Relay (F0): deja avisos en la bandeja del destino y NUNCA escribe en su PTY
 # ----------------------------------------------------------------------
 
 
-def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> None:
+def test_auto_relay_leaves_notices_in_the_inbox_and_never_writes_to_the_pty(tmp_path: Path) -> None:
     db = DatabaseManager(db_path=str(tmp_path / "auto_relay.db"))
     proj_uuid = db.create_project("Proyecto AutoRelay", str(tmp_path / "repo"))["project_uuid"]
     event_bus = DomainEventBus()
@@ -273,9 +270,6 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
     term.set_idle("pane_1", True)
     term.set_idle("pane_2", True)
 
-    crypto = NodeCryptoManager(key_path=tmp_path / "node_identity.key")
-    crypto.set_passphrase("clave-segura-orca")
-
     registry = PaneRegistry()
     registry.register_pane("pane_1", node_uuid="node-pane-1", session_token="tok-1")
     registry.register_pane("pane_2", node_uuid="node-pane-2", session_token="tok-2")
@@ -284,8 +278,6 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
         event_bus=event_bus,
         bus=bus,
         pane_registry=registry,
-        terminal_connector=term,
-        crypto=crypto,
         auto_relay_enabled=True,
     )
     kernel = ApplicationFactory.create_mcp_kernel(
@@ -294,7 +286,6 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
         event_bus=event_bus,
     )
     kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, term)
-    kernel.register_connector(CoreKernel.PORT_CRYPTO, crypto)
 
     handler = MCPToolsHandler(
         kernel=kernel,
@@ -303,10 +294,9 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
         relay_orchestrator=orch,
     )
     try:
-        assert orch.get_auto_relay_status()["key_encrypted"] is True
         assert orch.get_auto_relay_status()["auto_relay_enabled"] is True
 
-        # Caso A: Pane 2 en idle -> asignar tarjeta Kanban despacha aviso inmediato al PTY
+        # Caso A: asignar una tarjeta a pane_2 deja un AVISO en su bandeja (con la asignacion en la cola pull).
         event_bus.publish(
             DomainEvent(
                 event_type="kanban.card_assigned",
@@ -318,12 +308,11 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
                 },
             )
         )
-        assert len(term.calls) == 1
-        assert term.calls[0][0] == "pane_2"
-        assert "CARD-ORCA-1" in term.calls[0][1]
+        assert term.calls == []
 
-        # Caso B: Pane 2 en working -> send_pane_message se retiene en _pending_idle_dispatches
+        # Caso B: pane_2 esta "working" y el humano teclea: da igual, no hay escritura que diferir.
         term.set_idle("pane_2", False)
+        registry.record_human_keystroke("pane_2")
         res_msg = json.loads(
             handler.send_pane_message(
                 project_uuid=proj_uuid,
@@ -335,18 +324,19 @@ def test_auto_relay_orca_hermes_flow_idle_and_working_flush(tmp_path: Path) -> N
             )
         )
         assert res_msg["success"] is True
-        assert len(term.calls) == 1  # No despachado aún porque está working
-        assert orch.get_auto_relay_status()["pending_idle_count"] == 1
+        assert term.calls == []
 
-        # Cuando Pane 2 pasa a idle y se llama flush_idle_dispatches(), se entrega
-        term.set_idle("pane_2", True)
-        flushed = orch.flush_idle_dispatches()
-        assert len(flushed) == 1
-        assert flushed[0]["success"] is True
-        assert orch.get_auto_relay_status()["pending_idle_count"] == 0
-        assert len(term.calls) == 2
-        assert term.calls[1][0] == "pane_2"
-        assert "Segundo aviso mientras trabajas" in term.calls[1][1]
+        pull = json.loads(
+            handler.await_next_assignment(project_uuid=proj_uuid, node_uuid="node-pane-2", session_token="tok-2")
+        )
+        by_kind = {m["kind"]: m for m in pull["messages"]}
+        assert set(by_kind) == {"relay_notice", "direct_message"}
+        assert "CARD-ORCA-1" in by_kind["relay_notice"]["text"]
+        assert by_kind["direct_message"]["text"] == "Segundo aviso mientras trabajas"
+        assert by_kind["direct_message"]["from"]["node_uuid"] == "node-pane-1"
+        assert pull["has_assignment"] is True
+        assert pull["assignment"]["card_id"] == "CARD-ORCA-1"
+        assert term.calls == []
     finally:
         handler.close()
         orch.close()

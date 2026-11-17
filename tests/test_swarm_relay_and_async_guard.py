@@ -18,7 +18,6 @@ from src.core.services import SwarmRelayOrchestrator
 from src.mcp.pane_registry import PaneRegistry
 from src.mcp.server import create_mcp_server
 from src.mcp.tools import MCPToolsHandler
-from src.p2p.crypto import NodeCryptoManager
 from src.storage.db import DatabaseManager
 
 
@@ -177,140 +176,64 @@ def test_relay_close_unsubscribes_and_wakes_blocked_waiters(tmp_path: Path) -> N
 
 
 # ----------------------------------------------------------------------
-# 2. Guarda Gate 0c (clave en texto plano / crypto=None bloqueada)
+# 2. F0: el relevo no tiene API de escritura en PTY (sustituye a Gate 0c y al cooldown humano)
 # ----------------------------------------------------------------------
 
 
-def test_guard_gate_0c_blocks_plaintext_and_missing_crypto_allows_encrypted(tmp_path: Path) -> None:
-    connector = _FakeTerminalConnector()
-
-    # Caso 1: crypto=None fail-closed
-    orch_no_crypto = SwarmRelayOrchestrator(terminal_connector=connector, crypto=None)
-    res_none = orch_no_crypto.dispatch_to_pane("pane_1", "run checks")
-    assert res_none["success"] is False
-    assert res_none["blocked"] is True
-    assert res_none["code"] == "GATE_0C_PLAIN_KEY_RELAY_BLOCKED"
-    assert connector.calls == []
-    orch_no_crypto.close()
-
-    # Caso 2: NodeCryptoManager en texto plano (is_encrypted == False)
-    crypto = NodeCryptoManager(key_path=tmp_path / "node_identity.key")
-    assert crypto.is_encrypted is False
-    orch = SwarmRelayOrchestrator(terminal_connector=connector, crypto=crypto)
+def test_orchestrator_has_no_pty_dispatch_api_and_takes_no_terminal_connector() -> None:
+    orch = SwarmRelayOrchestrator()
     try:
-        res_plain = orch.dispatch_to_pane("pane_1", "run checks")
-        assert res_plain["success"] is False
-        assert res_plain["blocked"] is True
-        assert res_plain["code"] == "GATE_0C_PLAIN_KEY_RELAY_BLOCKED"
-        assert connector.calls == []
-
-        # Caso 3: tras cifrar la identidad con passphrase (is_encrypted == True), permite despacho
-        crypto.set_passphrase("clave-segura-gate-0c")
-        assert crypto.is_encrypted is True
-
-        res_ok = orch.dispatch_to_pane("pane_1", "run checks", project_uuid="p1", card_id="c1")
-        assert res_ok["success"] is True
-        assert res_ok["dispatched"] is True
-        assert connector.calls == [("pane_1", "run checks")]
+        for removed in (
+            "dispatch_to_pane",
+            "flush_deferred_dispatches",
+            "flush_idle_dispatches",
+            "get_deferred_dispatches",
+            "_maybe_auto_dispatch",
+        ):
+            assert not hasattr(orch, removed), removed
+        with pytest.raises(TypeError):
+            SwarmRelayOrchestrator(terminal_connector=_FakeTerminalConnector())  # type: ignore[call-arg]
     finally:
         orch.close()
 
 
 # ----------------------------------------------------------------------
-# 3. Guarda Anti-colisión humana (cooldown 5s)
+# 3. F0: la actividad humana ya no regula nada (no hay escritura que proteger); el mensaje va a la bandeja
 # ----------------------------------------------------------------------
 
 
-def test_guard_human_typing_cooldown_defers_for_5s_then_dispatches(tmp_path: Path) -> None:
+def test_human_typing_does_not_defer_or_block_inbox_delivery() -> None:
     now = [1000.0]
     registry = PaneRegistry(clock=lambda: now[0])
     registry.register_pane("pane_1", node_uuid="agent-a", session_token="tok-a")
-    crypto = NodeCryptoManager(key_path=tmp_path / "node_identity.key")
-    crypto.set_passphrase("clave-segura-cooldown")
-    connector = _FakeTerminalConnector()
-
-    orch = SwarmRelayOrchestrator(
-        pane_registry=registry,
-        terminal_connector=connector,
-        crypto=crypto,
-        human_cooldown_seconds=5.0,
-        clock=lambda: now[0],
-    )
+    registry.register_pane("pane_2", node_uuid="agent-b", session_token="tok-b")
+    orch = SwarmRelayOrchestrator(pane_registry=registry, clock=lambda: now[0], auto_relay_enabled=True)
     try:
-        registry.record_human_keystroke("pane_1")
-        res_0 = orch.dispatch_to_pane("pane_1", "auto prompt", project_uuid="p1", card_id="c1")
-        assert res_0["success"] is False
-        assert res_0["deferred"] is True
-        assert res_0["code"] == "HUMAN_TYPING_COOLDOWN_ACTIVE"
-        assert connector.calls == []
-
-        now[0] = 1004.9
-        res_49 = orch.dispatch_to_pane("pane_1", "auto prompt", project_uuid="p1", card_id="c1")
-        assert res_49["deferred"] is True
-        assert res_49["code"] == "HUMAN_TYPING_COOLDOWN_ACTIVE"
-        assert connector.calls == []
-        assert len(orch.get_deferred_dispatches("pane_1")) == 2
-
-        now[0] = 1005.1
-        res_after = orch.dispatch_to_pane("pane_1", "direct prompt", project_uuid="p1", card_id="c1")
-        assert res_after["success"] is True
-        assert res_after["dispatched"] is True
-        assert connector.calls == [("pane_1", "direct prompt")]
-
-        flushed = orch.flush_deferred_dispatches("pane_1")
-        assert flushed["dispatched"] == 2
-        assert len(connector.calls) == 3
+        registry.record_human_keystroke("pane_2")  # el humano esta tecleando justo en el destino
+        res = orch.send_direct_message(
+            project_uuid="p1", sender_node_uuid="agent-a", target_node_uuid="agent-b", message="hola"
+        )
+        assert res["success"] is True and res["queued"] is True
+        assert "deferred" not in res
+        got = orch.await_next_assignment("agent-b")
+        assert got["has_messages"] is True
+        assert got["messages"][0]["text"] == "hola"
+        assert got["messages"][0]["from"]["node_uuid"] == "agent-a"
+        assert got["messages"][0]["from"]["pane_id"] == "pane_1"
     finally:
         orch.close()
 
 
 # ----------------------------------------------------------------------
-# 4. Guarda Loop Breaker DoD (max_relay_rounds=6 y HITL)
+# 4. Guarda Loop Breaker DoD (max_relay_rounds=6 y HITL) sobre la cola de relevo y la bandeja
 # ----------------------------------------------------------------------
 
 
-def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds(tmp_path: Path) -> None:
-    crypto = NodeCryptoManager(key_path=tmp_path / "node_identity.key")
-    crypto.set_passphrase("clave-segura-loop")
-    connector = _FakeTerminalConnector()
-
-    orch = SwarmRelayOrchestrator(
-        terminal_connector=connector,
-        crypto=crypto,
-        max_relay_rounds=6,
-    )
+def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds() -> None:
+    orch = SwarmRelayOrchestrator(max_relay_rounds=6)
     try:
-        for round_idx in range(1, 7):
-            res = orch.dispatch_to_pane(
-                "pane_1",
-                f"turn-{round_idx}",
-                project_uuid="proj-lb",
-                card_id="CARD-LB",
-            )
-            assert res["success"] is True
-            assert res["rounds"] == round_idx
-
-        assert len(connector.calls) == 6
-
-        tripped = orch.dispatch_to_pane(
-            "pane_1",
-            "turn-7",
-            project_uuid="proj-lb",
-            card_id="CARD-LB",
-        )
-        assert tripped["success"] is False
-        assert tripped["blocked"] is True
-        assert tripped["status"] == "LOOP_BREAKER_TRIPPED"
-        assert tripped["code"] == "RELAY_MAX_ROUNDS_EXCEEDED"
-        assert tripped["requires_hitl"] is True
-        assert len(connector.calls) == 6  # El 7mo no toca el PTY
-
-        state = orch.get_loop_breaker_state(project_uuid="proj-lb", card_id="CARD-LB")
-        assert state["status"] == "LOOP_BREAKER_TRIPPED"
-        assert state["requires_hitl"] is True
-
-        # Relevo en cola también aplica Loop Breaker DoD: una ronda es un CAMBIO DE SENTIDO entre dos nodos
-        # (EGM-72), no cada evento; aquí agent-x y agent-y se devuelven la sesión sin converger.
+        # Relevo en cola: una ronda es un CAMBIO DE SENTIDO entre dos nodos (EGM-72), no cada evento;
+        # aqui agent-x y agent-y se devuelven la sesion sin converger.
         for idx in range(6):
             sender, target = ("agent-y", "agent-x") if idx % 2 == 0 else ("agent-x", "agent-y")
             enq = orch.enqueue_assignment(
@@ -328,16 +251,37 @@ def test_guard_loop_breaker_dod_blocks_after_max_relay_rounds(tmp_path: Path) ->
         assert enq_blocked["code"] == "RELAY_MAX_ROUNDS_EXCEEDED"
         assert enq_blocked["requires_hitl"] is True
 
-        # Intervención humana explícita restablece el circuito
-        assert orch.reset_loop_breaker(project_uuid="proj-lb", card_id="CARD-LB") is True
-        resumed = orch.dispatch_to_pane(
-            "pane_1",
-            "turn-after-hitl",
-            project_uuid="proj-lb",
-            card_id="CARD-LB",
+        state = orch.get_loop_breaker_state(project_uuid="proj-lb", session_id="RFC-LB")
+        assert state["status"] == "LOOP_BREAKER_TRIPPED"
+        assert state["requires_hitl"] is True
+
+        # Intervencion humana explicita restablece el circuito
+        assert orch.reset_loop_breaker(project_uuid="proj-lb", session_id="RFC-LB") is True
+        resumed = orch.enqueue_assignment(
+            "agent-x",
+            {"project_uuid": "proj-lb", "session_id": "RFC-LB", "sender_node_uuid": "agent-y"},
         )
         assert resumed["success"] is True
-        assert len(connector.calls) == 7
+    finally:
+        orch.close()
+
+
+def test_loop_breaker_also_stops_direct_message_ping_pong_through_the_inbox() -> None:
+    orch = SwarmRelayOrchestrator(max_relay_rounds=3)
+    try:
+        results = []
+        for idx in range(8):
+            sender, target = ("agent-a", "agent-b") if idx % 2 == 0 else ("agent-b", "agent-a")
+            results.append(
+                orch.send_direct_message(
+                    project_uuid="p1", sender_node_uuid=sender, target_node_uuid=target,
+                    message=f"turno {idx}", card_id="CARD-PP",
+                )
+            )
+        assert results[0]["success"] is True
+        tripped = [r for r in results if r.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED"]
+        assert tripped and tripped[0]["requires_hitl"] is True
+        assert orch.list_tripped_loop_breakers()
     finally:
         orch.close()
 

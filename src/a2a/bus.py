@@ -28,6 +28,10 @@ from src.storage.db import DatabaseManager
 
 logger = logging.getLogger("mcp2p.a2a.bus")
 
+# Señales informativas que NUNCA salen a pares P2P (no entran en `outbox_events`): hoy, el mensaje directo
+# entre paneles de esta maquina (F0.3 del dossier 37). La ruta remota la disenara una fase posterior.
+LOCAL_ONLY_SIGNALS = frozenset({"DIRECT_MESSAGE"})
+
 
 class A2AIntent(str, Enum):
     INFORMATIVE = "INFORMATIVE"
@@ -120,13 +124,15 @@ class A2ABus:
         sender_node_uuid: str,
         signal_type: str,
         data: Dict[str, Any],
-        card_id: Optional[str] = None
+        card_id: Optional[str] = None,
+        message_uuid: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Envía una señal operativa (heartbeat, lease, cambio de estado) a 0 tokens.
-        Registra el mensaje en SQLite y lo encola en outbox_events.
+        Registra el mensaje en SQLite y lo encola en outbox_events, salvo las señales de `LOCAL_ONLY_SIGNALS`
+        (mensajes directos entre paneles locales, F0.3): esas quedan solo en la auditoria local.
         """
-        message_uuid = str(uuid.uuid4())
+        message_uuid = (message_uuid or "").strip() or str(uuid.uuid4())
         now_str = datetime.now(timezone.utc).isoformat()
 
         packet = {
@@ -160,14 +166,15 @@ class A2ABus:
             card_id=card_id
         )
 
-        # Encolado en outbox para sincronización P2P
-        self.db.enqueue_outbox_event(
-            project_uuid=project_uuid,
-            node_uuid=sender_node_uuid,
-            event_type=f"A2A_INFORMATIVE_{signal_type.upper()}",
-            payload_raw=payload_str,
-            event_uuid=message_uuid
-        )
+        # Encolado en outbox para sincronización P2P (nunca para los mensajes locales entre paneles).
+        if str(signal_type or "").upper() not in LOCAL_ONLY_SIGNALS:
+            self.db.enqueue_outbox_event(
+                project_uuid=project_uuid,
+                node_uuid=sender_node_uuid,
+                event_type=f"A2A_INFORMATIVE_{signal_type.upper()}",
+                payload_raw=payload_str,
+                event_uuid=message_uuid
+            )
 
         self._dispatch_local(packet)
         return packet

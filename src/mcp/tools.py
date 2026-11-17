@@ -181,14 +181,6 @@ class MCPToolsHandler:
                 event_bus=ev_bus,
                 bus=a2a_bus,
                 pane_registry=self.pane_registry,
-                terminal_connector=self._resolve_kernel_connector(
-                    "terminal_connector",
-                    CoreKernel.PORT_AGENT_TERMINAL,
-                ),
-                crypto=self._resolve_kernel_connector(
-                    "crypto",
-                    CoreKernel.PORT_CRYPTO,
-                ),
             )
         elif (
             self.pane_registry is not None
@@ -1678,7 +1670,10 @@ class MCPToolsHandler:
         node_uuid: Optional[str] = None,
         session_token: Optional[str] = None,
     ) -> str:
-        """Envía un mensaje directo a otro panel o nodo del enjambre validando identidad (EGM-22)."""
+        """Deja un mensaje directo en la bandeja de otro panel (sin escribir en su terminal), validando identidad.
+
+        El destino lo recoge con `await_next_assignment`; el texto va limitado a 8 KiB y no sale a pares P2P.
+        """
         resolved_node, err_code = self._resolve_authenticated_node_uuid(
             node_uuid,
             session_token=session_token,

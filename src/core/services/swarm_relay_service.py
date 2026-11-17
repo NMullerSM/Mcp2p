@@ -1,8 +1,11 @@
-"""Servicio de aplicación para relevo push->pull del enjambre y guardas PTY."""
+"""Servicio de aplicación para el relevo push->pull del enjambre.
+
+F0 del dossier 37: el relevo NUNCA escribe en el `stdin` de un PTY. Los mensajes directos entre paneles y los
+avisos del Auto-Relay quedan en una bandeja por nodo destino que el agente recoge con `await_next_assignment`,
+con la procedencia como campo estructurado aparte del texto."""
 
 from __future__ import annotations
 
-import inspect
 import logging
 import threading
 import time
@@ -23,6 +26,18 @@ MAX_QUEUE_DEPTH = 1024
 MAX_TARGET_QUEUES = 256
 # Una espera ocupa un hilo del threadpool del Hub: se acota (EGM-76). El agente vuelve a llamar al vencer.
 MAX_AWAIT_TIMEOUT_MS = 300_000
+# Tope del texto de un mensaje directo entre paneles, en bytes UTF-8 (EGM-96).
+MAX_DIRECT_MESSAGE_BYTES = 8 * 1024
+# Tope de la bandeja de cada nodo destino: al llenarse se RECHAZA el mensaje nuevo (el remitente lo sabe).
+MAX_INBOX_DEPTH = 256
+# La procedencia la fija el servidor a partir de la sesion de panel autenticada por el Hub; nunca el remitente.
+PROVENANCE_VERIFIED_BY = "hub_pane_session"
+
+
+def direct_message_too_large(message: Any) -> bool:
+    """True si `message` supera `MAX_DIRECT_MESSAGE_BYTES` en UTF-8."""
+    return isinstance(message, str) and len(message.encode("utf-8", errors="replace")) > MAX_DIRECT_MESSAGE_BYTES
+
 
 
 def clamp_await_timeout_ms(value: Any) -> int:
@@ -47,7 +62,7 @@ _EXPLICIT_TARGET_KEYS = (
 
 
 class SwarmRelayOrchestrator:
-    """Orquestador thread-safe de colas pull y despacho seguro hacia terminales PTY."""
+    """Orquestador thread-safe de colas pull y de la bandeja de mensajes por nodo (sin escribir en ningun PTY)."""
 
     def __init__(
         self,
@@ -55,14 +70,9 @@ class SwarmRelayOrchestrator:
         event_bus: Optional[DomainEventBus] = None,
         bus: Optional[A2ABus] = None,
         pane_registry: Optional[Any] = None,
-        terminal_connector: Optional[Any] = None,
-        crypto: Optional[Any] = None,
-        require_encrypted_key: bool = True,
-        human_cooldown_seconds: float = 5.0,
         max_relay_rounds: int = 6,
         clock: Optional[Callable[[], float]] = None,
         auto_relay_enabled: bool = False,
-        idle_wait_timeout_s: float = 0.0,
     ) -> None:
         self._lock = threading.RLock()
         self._conditions: Dict[str, threading.Condition] = {}
@@ -70,16 +80,13 @@ class SwarmRelayOrchestrator:
         self._event_bus = event_bus
         self._bus = bus
         self.pane_registry = pane_registry
-        self.terminal_connector = terminal_connector
-        self.crypto = crypto
-        self.require_encrypted_key = bool(require_encrypted_key)
-        self.human_cooldown_seconds = float(human_cooldown_seconds)
         self.max_relay_rounds = max(1, int(max_relay_rounds))
-        self._clock_explicit = clock is not None
         self._clock: Callable[[], float] = clock or time.time
+        # Con F0 significa solo «dejar avisos en la bandeja del agente destino»; no escribe en ninguna terminal.
         self._auto_relay_enabled = bool(auto_relay_enabled)
-        self._idle_wait_timeout_s = max(0.0, float(idle_wait_timeout_s))
         self._closed = False
+        # Bandeja por nodo destino: mensajes directos y avisos con procedencia estructurada (en memoria).
+        self._inbox: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
 
         self._dedup_order: Dict[str, Deque[str]] = {}
         self._dedup_seen: Dict[str, Set[str]] = {}
@@ -88,9 +95,7 @@ class SwarmRelayOrchestrator:
         # Turnos del relevo en cola por (proyecto:tarjeta|sesion, par de nodos): {key: ultimo remitente}.
         self._relay_last_sender: Dict[str, str] = {}
         self._dropped_oldest_total = 0
-        self._deferred_dispatches: Deque[Dict[str, Any]] = deque(maxlen=512)
         self._active_waiters: Dict[str, int] = defaultdict(int)
-        self._pending_idle_dispatches: Deque[Dict[str, Any]] = deque(maxlen=512)
 
         if self._event_bus is not None:
             self._event_bus.subscribe("*", self._on_domain_event)
@@ -244,36 +249,6 @@ class SwarmRelayOrchestrator:
                 kept.append(item)
         self._queues["*"] = kept
 
-    def _is_key_encrypted(self) -> bool:
-        if self.crypto is None:
-            return False
-        attr = getattr(self.crypto, "is_encrypted", False)
-        return bool(attr() if callable(attr) else attr)
-
-    def _check_human_typing_active(self, pane_id: int | str) -> bool:
-        if self.pane_registry is None:
-            return False
-        fn = getattr(self.pane_registry, "is_human_typing_active", None)
-        if not callable(fn):
-            return False
-        if self._clock_explicit:
-            try:
-                sig = inspect.signature(fn)
-                if "now" in sig.parameters or any(
-                    param.kind == inspect.Parameter.VAR_KEYWORD
-                    for param in sig.parameters.values()
-                ):
-                    return bool(
-                        fn(
-                            pane_id,
-                            cooldown_seconds=self.human_cooldown_seconds,
-                            now=self._clock(),
-                        )
-                    )
-            except (TypeError, ValueError):
-                pass
-        return bool(fn(pane_id, cooldown_seconds=self.human_cooldown_seconds))
-
     # ------------------------------------------------------------------
     # API pública de colas pull, relevo y Loop Breaker
     # ------------------------------------------------------------------
@@ -284,6 +259,16 @@ class SwarmRelayOrchestrator:
         assignment: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Encola una asignación para ``target_node_uuid`` aplicando dedup y Loop Breaker DoD."""
+        return self._enqueue(target_node_uuid, assignment, inbox=False)
+
+    def _enqueue(
+        self,
+        target_node_uuid: str,
+        assignment: Dict[str, Any],
+        *,
+        inbox: bool,
+    ) -> Dict[str, Any]:
+        """Dedup + Loop Breaker comunes; `inbox=True` deja el item en la bandeja del nodo (mensaje directo)."""
         target = (target_node_uuid or "").strip() or "*"
         if not isinstance(assignment, dict):
             return {
@@ -367,6 +352,30 @@ class SwarmRelayOrchestrator:
                 item["relay_round"] = rounds
                 item["assignment_key"] = loop_key
 
+            if inbox:
+                msg = self._build_inbox_message(
+                    item, target, kind="direct_message", text=str(item.get("message") or "")
+                )
+                err = self._push_inbox_locked(target, msg)
+                if err:
+                    return {
+                        "success": False,
+                        "blocked": True,
+                        "code": err,
+                        "reason": f"Bandeja del destino llena o demasiados destinos (maximo {MAX_INBOX_DEPTH}).",
+                    }
+                return {
+                    "success": True,
+                    "queued": True,
+                    "inbox": True,
+                    "target_node_uuid": target,
+                    "assignment_uuid": item["assignment_uuid"],
+                    "queue_depth": len(self._inbox[target]),
+                    "rounds": rounds,
+                    "assignment_key": loop_key,
+                    "dropped_oldest": False,
+                }
+
             queue = self._queue_for_locked(target)
             if queue is None:
                 return {
@@ -400,6 +409,41 @@ class SwarmRelayOrchestrator:
             "dropped_oldest": dropped,
         }
 
+    def _pop_inbox_locked(self, node_uuid: str, project_uuid: Optional[str]) -> List[Dict[str, Any]]:
+        """Vacia la bandeja de `node_uuid` (solo los mensajes del proyecto filtrado, si se pidio)."""
+        proj_filter = project_uuid.strip() if isinstance(project_uuid, str) and project_uuid.strip() else None
+        inbox = self._inbox.get(node_uuid)
+        if not inbox:
+            return []
+        taken: List[Dict[str, Any]] = []
+        kept: Deque[Dict[str, Any]] = deque()
+        for msg in inbox:
+            if proj_filter is not None and msg.get("project_uuid") != proj_filter:
+                kept.append(msg)
+            else:
+                taken.append(dict(msg))
+        self._inbox[node_uuid] = kept
+        return taken
+
+    def _ready_locked(
+        self,
+        node_uuid: str,
+        project_uuid: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Resultado de espera si hay una asignacion o mensajes de bandeja listos; None si no hay nada."""
+        item = self._pop_matching_locked(node_uuid, project_uuid)
+        messages = self._pop_inbox_locked(node_uuid, project_uuid) if node_uuid != "*" else []
+        if item is None and not messages:
+            return None
+        return {
+            "success": True,
+            "has_assignment": item is not None,
+            "assignment": item,
+            "has_messages": bool(messages),
+            "messages": messages,
+            "timed_out": False,
+        }
+
     def await_next_assignment(
         self,
         node_uuid: str,
@@ -407,42 +451,34 @@ class SwarmRelayOrchestrator:
         project_uuid: Optional[str] = None,
         timeout_ms: int = 0,
     ) -> Dict[str, Any]:
-        """Desencola la siguiente asignación o espera con ``Condition.wait`` sin busy-wait."""
+        """Entrega la siguiente asignación y los mensajes de bandeja del nodo; espera con ``Condition.wait``.
+
+        `messages` lleva cada mensaje con su procedencia (`from`) como campo estructurado aparte del `text`.
+        """
         timeout_ms = clamp_await_timeout_ms(timeout_ms)
         target = (node_uuid or "").strip()
+        empty: Dict[str, Any] = {
+            "has_assignment": False,
+            "assignment": None,
+            "has_messages": False,
+            "messages": [],
+        }
         if not target:
             return {
                 "success": False,
-                "has_assignment": False,
-                "assignment": None,
+                **empty,
                 "code": "INVALID_NODE_UUID",
                 "error": "node_uuid requerido para esperar asignaciones.",
             }
 
         with self._lock:
             if self._closed:
-                return {
-                    "success": False,
-                    "has_assignment": False,
-                    "assignment": None,
-                    "timed_out": False,
-                    "closed": True,
-                }
-            item = self._pop_matching_locked(target, project_uuid)
-            if item is not None:
-                return {
-                    "success": True,
-                    "has_assignment": True,
-                    "assignment": item,
-                    "timed_out": False,
-                }
+                return {"success": False, **empty, "timed_out": False, "closed": True}
+            ready = self._ready_locked(target, project_uuid)
+            if ready is not None:
+                return ready
             if timeout_ms <= 0:
-                return {
-                    "success": True,
-                    "has_assignment": False,
-                    "assignment": None,
-                    "timed_out": False,
-                }
+                return {"success": True, **empty, "timed_out": False}
 
             deadline = time.monotonic() + (timeout_ms / 1000.0)
             cond = self._get_condition_locked(target)
@@ -451,29 +487,13 @@ class SwarmRelayOrchestrator:
                 while not self._closed:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        return {
-                            "success": True,
-                            "has_assignment": False,
-                            "assignment": None,
-                            "timed_out": True,
-                        }
+                        return {"success": True, **empty, "timed_out": True}
                     cond.wait(timeout=remaining)
                     if self._closed:
-                        return {
-                            "success": True,
-                            "has_assignment": False,
-                            "assignment": None,
-                            "timed_out": False,
-                            "closed": True,
-                        }
-                    item = self._pop_matching_locked(target, project_uuid)
-                    if item is not None:
-                        return {
-                            "success": True,
-                            "has_assignment": True,
-                            "assignment": item,
-                            "timed_out": False,
-                        }
+                        return {"success": True, **empty, "timed_out": False, "closed": True}
+                    ready = self._ready_locked(target, project_uuid)
+                    if ready is not None:
+                        return ready
             finally:
                 remaining_waiters = self._active_waiters.get(target, 1) - 1
                 if remaining_waiters <= 0:
@@ -481,152 +501,7 @@ class SwarmRelayOrchestrator:
                 else:
                     self._active_waiters[target] = remaining_waiters
 
-            return {
-                "success": True,
-                "has_assignment": False,
-                "assignment": None,
-                "timed_out": False,
-                "closed": True,
-            }
-
-    def dispatch_to_pane(
-        self,
-        pane_id: int | str,
-        prompt_text: str,
-        *,
-        project_uuid: str = "",
-        card_id: str = "",
-        session_id: str = "",
-    ) -> Dict[str, Any]:
-        """Despacha texto a un PTY solo tras superar Gate 0c, cooldown humano y Loop Breaker."""
-        with self._lock:
-            if self._closed:
-                return {
-                    "success": False,
-                    "blocked": True,
-                    "code": "ORCHESTRATOR_CLOSED",
-                    "reason": "SwarmRelayOrchestrator cerrado.",
-                }
-
-            # Guarda 1: Gate 0c (fail-closed si la clave está en texto plano o falta crypto).
-            if self.require_encrypted_key and not self._is_key_encrypted():
-                return {
-                    "success": False,
-                    "blocked": True,
-                    "code": "GATE_0C_PLAIN_KEY_RELAY_BLOCKED",
-                    "reason": (
-                        "Gate 0c: clave privada en texto plano o ausente; "
-                        "el despacho automático hacia PTY exige clave cifrada."
-                    ),
-                }
-
-            # Guarda 2: Anti-colisión humana (ventana de cooldown tras teclado humano).
-            if self._check_human_typing_active(pane_id):
-                self._deferred_dispatches.append(
-                    {
-                        "pane_id": pane_id,
-                        "prompt_text": prompt_text,
-                        "project_uuid": project_uuid,
-                        "card_id": card_id,
-                        "session_id": session_id,
-                        "queued_at": self._clock(),
-                    }
-                )
-                return {
-                    "success": False,
-                    "deferred": True,
-                    "code": "HUMAN_TYPING_COOLDOWN_ACTIVE",
-                    "cooldown_seconds": self.human_cooldown_seconds,
-                    "deferred_count": len(self._deferred_dispatches),
-                    "reason": "Actividad humana reciente en el panel; inyección PTY diferida.",
-                }
-
-            # Guarda 3: Loop Breaker DoD.
-            loop_key = self._make_loop_key(
-                project_uuid=project_uuid,
-                card_id=card_id,
-                session_id=session_id,
-                fallback=str(pane_id),
-            )
-            assert loop_key is not None
-            if (
-                loop_key in self._loop_breaker_states
-                or self._relay_rounds[("dispatch", loop_key)] >= self.max_relay_rounds
-            ):
-                self._loop_breaker_states[loop_key] = "LOOP_BREAKER_TRIPPED"
-                rounds = self._relay_rounds[("dispatch", loop_key)]
-                return {
-                    "success": False,
-                    "blocked": True,
-                    "status": "LOOP_BREAKER_TRIPPED",
-                    "code": "RELAY_MAX_ROUNDS_EXCEEDED",
-                    "requires_hitl": True,
-                    "assignment_key": loop_key,
-                    "rounds": rounds,
-                    "max_relay_rounds": self.max_relay_rounds,
-                    "reason": (
-                        f"Loop Breaker activado tras {rounds} rondas "
-                        f"(máximo {self.max_relay_rounds}); requiere intervención humana (HITL)."
-                    ),
-                }
-
-            if self.terminal_connector is None:
-                return {
-                    "success": False,
-                    "blocked": True,
-                    "code": "TERMINAL_CONNECTOR_UNAVAILABLE",
-                    "reason": "No hay terminal_connector configurado para despacho PTY.",
-                }
-
-            self._relay_rounds[("dispatch", loop_key)] += 1
-            current_round = self._relay_rounds[("dispatch", loop_key)]
-            connector = self.terminal_connector
-
-        try:
-            send_res = connector.send_input(pane_id, prompt_text)
-        except Exception as exc:
-            return {
-                "success": False,
-                "code": "TERMINAL_SEND_FAILED",
-                "error": str(exc),
-                "pane_id": pane_id,
-                "rounds": current_round,
-                "assignment_key": loop_key,
-            }
-
-        if isinstance(send_res, dict):
-            if send_res.get("success") is False:
-                return {
-                    **send_res,
-                    "pane_id": pane_id,
-                    "rounds": current_round,
-                    "assignment_key": loop_key,
-                }
-            return {
-                **send_res,
-                "success": True,
-                "dispatched": True,
-                "pane_id": pane_id,
-                "rounds": current_round,
-                "assignment_key": loop_key,
-            }
-
-        if send_res is False:
-            return {
-                "success": False,
-                "dispatched": False,
-                "pane_id": pane_id,
-                "rounds": current_round,
-                "assignment_key": loop_key,
-            }
-        return {
-            "success": True,
-            "dispatched": True,
-            "pane_id": pane_id,
-            "rounds": current_round,
-            "assignment_key": loop_key,
-            "result": send_res,
-        }
+            return {"success": True, **empty, "timed_out": False, "closed": True}
 
     def get_loop_breaker_state(
         self,
@@ -698,53 +573,6 @@ class SwarmRelayOrchestrator:
                 self._relay_last_sender.pop(k, None)
         return True
 
-    def get_deferred_dispatches(self, pane_id: Optional[int | str] = None) -> List[Dict[str, Any]]:
-        """Lista una instantánea de los despachos diferidos por escritura humana."""
-        with self._lock:
-            items = list(self._deferred_dispatches)
-        if pane_id is None:
-            return [dict(item) for item in items]
-        return [dict(item) for item in items if str(item.get("pane_id")) == str(pane_id)]
-
-    def flush_deferred_dispatches(self, pane_id: Optional[int | str] = None) -> Dict[str, Any]:
-        """Reintenta despachar los mensajes diferidos una vez vencido el cooldown."""
-        with self._lock:
-            pending = list(self._deferred_dispatches)
-            self._deferred_dispatches.clear()
-
-        dispatched = 0
-        still_deferred = 0
-        blocked = 0
-        requeue: List[Dict[str, Any]] = []
-        for entry in pending:
-            if pane_id is not None and str(entry.get("pane_id")) != str(pane_id):
-                requeue.append(entry)
-                continue
-            res = self.dispatch_to_pane(
-                entry["pane_id"],
-                entry["prompt_text"],
-                project_uuid=entry.get("project_uuid", ""),
-                card_id=entry.get("card_id", ""),
-                session_id=entry.get("session_id", ""),
-            )
-            if res.get("dispatched"):
-                dispatched += 1
-            elif res.get("deferred"):
-                still_deferred += 1
-            else:
-                blocked += 1
-
-        if requeue:
-            with self._lock:
-                for item in reversed(requeue):
-                    self._deferred_dispatches.appendleft(item)
-
-        return {
-            "dispatched": dispatched,
-            "still_deferred": still_deferred,
-            "blocked": blocked,
-        }
-
     # ------------------------------------------------------------------
     # Auto-Relay controlado y mensajería directa entre nodos/paneles
     # ------------------------------------------------------------------
@@ -756,14 +584,12 @@ class SwarmRelayOrchestrator:
         return self.get_auto_relay_status()
 
     def get_auto_relay_status(self) -> Dict[str, Any]:
-        """Devuelve el estado actual de Auto-Relay, Gate 0c y Loop Breakers disparados."""
+        """Estado del Auto-Relay (avisos en bandeja) y de los Loop Breakers disparados."""
         with self._lock:
             return {
                 "success": True,
                 "auto_relay_enabled": self._auto_relay_enabled,
-                "key_encrypted": self._is_key_encrypted(),
-                "deferred_count": len(self._deferred_dispatches),
-                "pending_idle_count": len(self._pending_idle_dispatches),
+                "inbox_pending": sum(len(q) for q in self._inbox.values()),
                 "tripped_cases": sorted(
                     k for k, v in self._loop_breaker_states.items() if v == "LOOP_BREAKER_TRIPPED"
                 ),
@@ -806,116 +632,103 @@ class SwarmRelayOrchestrator:
 
     @staticmethod
     def _sanitize_single_line(text: str, *, max_len: int = 240) -> str:
-        cleaned = " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split())
+        """Una linea imprimible: sin saltos ni caracteres de control (los avisos solo son datos, pero se limpian)."""
+        printable = "".join(ch if ch.isprintable() else " " for ch in str(text or ""))
+        cleaned = " ".join(printable.split())
         if len(cleaned) > max_len:
             return cleaned[: max_len - 3] + "..."
         return cleaned
 
-    def _build_auto_dispatch_prompt(self, assignment: Dict[str, Any]) -> str:
-        sender = self._extract_sender_node(assignment) or "swarm"
-        direct_msg = assignment.get("message")
-        if direct_msg is None and isinstance(assignment.get("payload"), dict):
-            direct_msg = assignment["payload"].get("message")
-        if direct_msg:
-            body = self._sanitize_single_line(str(direct_msg), max_len=200)
-            return f"[MCP2P Direct from {sender}] {body}"
-        kind = self._sanitize_single_line(
-            str(assignment.get("event_type") or assignment.get("kind") or "ASSIGNMENT"),
-            max_len=64,
-        )
-        card_id = self._sanitize_single_line(str(assignment.get("card_id") or "-"), max_len=64)
-        return f"[MCP2P Relay: {kind}] card={card_id} -> ejecuta await_next_assignment()"
+    def _pane_provenance(self, node_uuid: str) -> Dict[str, Any]:
+        """Datos publicos del panel de `node_uuid` (sin pid, token ni telemetria de tecleo)."""
+        pane = self._find_active_pane_for_node(node_uuid) if node_uuid else None
+        return {
+            "node_uuid": node_uuid,
+            "pane_id": (pane or {}).get("pane_id"),
+            "agent_name": (pane or {}).get("agent_name"),
+        }
 
-    def _maybe_auto_dispatch(self, target_node_uuid: str, assignment: Dict[str, Any]) -> None:
+    def _build_inbox_message(
+        self,
+        item: Dict[str, Any],
+        target: str,
+        *,
+        kind: str,
+        text: str,
+    ) -> Dict[str, Any]:
+        """Mensaje de bandeja: el texto va aparte de la procedencia, que la fija el servidor."""
+        sender = self._extract_sender_node(item)
+        provenance = self._pane_provenance(sender)
+        provenance["verified_by"] = PROVENANCE_VERIFIED_BY if sender else "hub_internal"
+        msg: Dict[str, Any] = {
+            "id": str(item.get("message_uuid") or item.get("assignment_uuid") or uuid.uuid4()),
+            "kind": kind,
+            "from": provenance,
+            "to": self._pane_provenance(target),
+            "text": text,
+            "project_uuid": str(item.get("project_uuid") or ""),
+            "timestamp": float(item.get("enqueued_at") or self._clock()),
+        }
+        for key in ("card_id", "session_id", "assignment_uuid"):
+            if item.get(key):
+                msg[key] = str(item[key])
+        return msg
+
+    def _push_inbox_locked(self, target: str, msg: Dict[str, Any]) -> Optional[str]:
+        """Apila `msg` en la bandeja de `target`; devuelve un codigo de error o None si cupo."""
+        inbox = self._inbox.get(target)
+        if inbox is None:
+            if len(self._inbox) >= MAX_TARGET_QUEUES:
+                for key in [k for k, q in self._inbox.items() if not q]:
+                    del self._inbox[key]
+                if len(self._inbox) >= MAX_TARGET_QUEUES:
+                    return "QUEUE_TARGET_LIMIT"
+            inbox = self._inbox[target]
+        if len(inbox) >= MAX_INBOX_DEPTH:
+            return "INBOX_FULL"
+        inbox.append(msg)
+        self._notify_waiters_locked(target)
+        return None
+
+    def _maybe_leave_inbox_notice(
+        self,
+        target_node_uuid: str,
+        assignment: Dict[str, Any],
+        *,
+        assignment_uuid: str = "",
+    ) -> None:
+        """Con Auto-Relay activo deja un AVISO en la bandeja del destino; jamas escribe en su terminal."""
         target = (target_node_uuid or "").strip()
         if not target or target == "*":
             return
-
+        if str(assignment.get("source") or "") == "direct_message":
+            return  # el mensaje directo ya es, el mismo, el contenido de la bandeja
         with self._lock:
             if self._closed or not self._auto_relay_enabled:
                 return
             if self._active_waiters.get(target, 0) > 0:
-                return
-
+                return  # ya esta esperando: recibira la asignacion directamente
         sender = self._extract_sender_node(assignment)
         if sender and sender == target:
             return
-
-        pane = self._find_active_pane_for_node(target)
-        if pane is None:
-            return
-        pane_id = pane.get("pane_id")
-        if pane_id is None:
+        if self._find_active_pane_for_node(target) is None:
             return
 
-        prompt_line = self._build_auto_dispatch_prompt(assignment)
-        prompt_text = f"{prompt_line}\r"
-        project_uuid = self._extract_nested_str(assignment, "project_uuid")
-        card_id = self._extract_nested_str(assignment, "card_id")
-        session_id = self._extract_nested_str(assignment, "session_id", "dispute_id")
-
-        is_idle_fn = (
-            getattr(self.terminal_connector, "is_pane_idle", None)
-            if self.terminal_connector is not None
-            else None
+        kind = self._sanitize_single_line(
+            str(assignment.get("event_type") or assignment.get("kind") or "ASSIGNMENT"), max_len=64
         )
-        if callable(is_idle_fn) and not is_idle_fn(pane_id):
-            with self._lock:
-                self._pending_idle_dispatches.append(
-                    {
-                        "pane_id": pane_id,
-                        "target_node_uuid": target,
-                        "prompt_text": prompt_text,
-                        "project_uuid": project_uuid,
-                        "card_id": card_id,
-                        "session_id": session_id,
-                        "queued_at": self._clock(),
-                    }
-                )
-            return
-
-        self.dispatch_to_pane(
-            pane_id,
-            prompt_text,
-            project_uuid=project_uuid,
-            card_id=card_id,
-            session_id=session_id,
-        )
-
-    def flush_idle_dispatches(self) -> List[Dict[str, Any]]:
-        """Drena avisos pendientes en `_pending_idle_dispatches` cuando los paneles están idle."""
+        card_id = self._sanitize_single_line(str(assignment.get("card_id") or "-"), max_len=64)
+        notice_src = dict(assignment)
+        notice_src["assignment_uuid"] = assignment_uuid or str(uuid.uuid4())
+        notice_src.pop("message_uuid", None)
+        text = f"Asignacion pendiente ({kind}, tarjeta {card_id}): recogela con await_next_assignment."
+        msg = self._build_inbox_message(notice_src, target, kind="relay_notice", text=text)
         with self._lock:
-            pending = list(self._pending_idle_dispatches)
-            self._pending_idle_dispatches.clear()
-
-        is_idle_fn = (
-            getattr(self.terminal_connector, "is_pane_idle", None)
-            if self.terminal_connector is not None
-            else None
-        )
-        results: List[Dict[str, Any]] = []
-        still_busy: List[Dict[str, Any]] = []
-
-        for entry in pending:
-            pane_id = entry["pane_id"]
-            if callable(is_idle_fn) and not is_idle_fn(pane_id):
-                still_busy.append(entry)
-                continue
-            res = self.dispatch_to_pane(
-                pane_id,
-                entry["prompt_text"],
-                project_uuid=entry.get("project_uuid", ""),
-                card_id=entry.get("card_id", ""),
-                session_id=entry.get("session_id", ""),
-            )
-            results.append(res)
-
-        if still_busy:
-            with self._lock:
-                for item in reversed(still_busy):
-                    self._pending_idle_dispatches.appendleft(item)
-
-        return results
+            if self._closed:
+                return
+            err = self._push_inbox_locked(target, msg)
+        if err:
+            logger.debug("Aviso de Auto-Relay descartado para %s: %s", target, err)
 
     def send_direct_message(
         self,
@@ -928,7 +741,21 @@ class SwarmRelayOrchestrator:
         card_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Envía un mensaje directo a otro nodo/panel, registrándolo en A2ABus y encolándolo."""
+        """Deja un mensaje directo en la bandeja del nodo/panel destino y lo audita en el A2ABus (solo local).
+
+        `sender_node_uuid` DEBE venir de la sesion de panel autenticada por el Hub. El texto nunca se escribe
+        en un PTY ni sale a pares P2P: el destino lo recoge con `await_next_assignment`.
+        """
+        if not isinstance(message, str) or not message.strip():
+            return {"success": False, "code": "EMPTY_MESSAGE", "error": "El mensaje directo no puede estar vacío."}
+        if direct_message_too_large(message):
+            return {
+                "success": False,
+                "code": "MESSAGE_TOO_LARGE",
+                "max_bytes": MAX_DIRECT_MESSAGE_BYTES,
+                "error": f"El mensaje supera el maximo de {MAX_DIRECT_MESSAGE_BYTES} bytes.",
+            }
+
         resolved_target = (target_node_uuid or "").strip()
         if not resolved_target and target_pane_id is not None:
             resolved_target = self._resolve_target_node_from_pane(target_pane_id)
@@ -951,66 +778,57 @@ class SwarmRelayOrchestrator:
             "target_node_uuid": resolved_target,
             "message": message,
             "message_uuid": message_uuid,
-            "payload": {
-                "message": message,
-                "target_node_uuid": resolved_target,
-                "sender_node_uuid": sender_node_uuid,
-            },
         }
         if card_id:
             assignment["card_id"] = card_id
         if session_id:
             assignment["session_id"] = session_id
 
-        if self._bus is not None:
-            pub_fn = getattr(self._bus, "publish_informative", None)
-            send_fn = getattr(self._bus, "send_informative", None)
-            log_fn = getattr(self._bus, "log_a2a_message", None)
-            if callable(pub_fn):
-                pub_fn(
-                    project_uuid=project_uuid,
-                    sender_node_uuid=sender_node_uuid,
-                    signal_type="DIRECT_MESSAGE",
-                    data={
-                        "target_node_uuid": resolved_target,
-                        "message": message,
-                        "session_id": session_id,
-                    },
-                    card_id=card_id,
-                )
-            elif callable(send_fn):
-                packet = send_fn(
-                    project_uuid=project_uuid,
-                    sender_node_uuid=sender_node_uuid,
-                    signal_type="DIRECT_MESSAGE",
-                    data={
-                        "target_node_uuid": resolved_target,
-                        "message": message,
-                        "session_id": session_id,
-                    },
-                    card_id=card_id,
-                )
-                if isinstance(packet, dict) and packet.get("message_uuid"):
-                    assignment["message_uuid"] = str(packet["message_uuid"])
-            elif callable(log_fn):
-                log_fn(
-                    project_uuid=project_uuid,
-                    message_uuid=message_uuid,
-                    sender_node_uuid=sender_node_uuid,
-                    intent="DIRECT_MESSAGE",
-                    payload_rfc_yaml=message,
-                    card_id=card_id,
-                )
-
-        res = self.enqueue_assignment(resolved_target, assignment)
+        res = self._enqueue(resolved_target, assignment, inbox=True)
         if res.get("queued") and not res.get("deduplicated"):
-            self._maybe_auto_dispatch(resolved_target, assignment)
+            self._audit_direct_message(
+                project_uuid=project_uuid,
+                message_uuid=message_uuid,
+                sender_node_uuid=sender_node_uuid,
+                target_node_uuid=resolved_target,
+                message=message,
+                card_id=card_id,
+                session_id=session_id,
+            )
 
         return {
             **res,
             "target_node_uuid": resolved_target,
-            "message_uuid": assignment["message_uuid"],
+            "message_uuid": message_uuid,
         }
+
+    def _audit_direct_message(
+        self,
+        *,
+        project_uuid: str,
+        message_uuid: str,
+        sender_node_uuid: str,
+        target_node_uuid: str,
+        message: str,
+        card_id: Optional[str],
+        session_id: Optional[str],
+    ) -> None:
+        """Registra el mensaje en `a2a_messages` (auditoria local); el bus lo excluye de `outbox_events`."""
+        if self._bus is None:
+            return
+        send_fn = getattr(self._bus, "send_informative", None)
+        try:
+            if callable(send_fn):
+                send_fn(
+                    project_uuid=project_uuid,
+                    sender_node_uuid=sender_node_uuid,
+                    signal_type="DIRECT_MESSAGE",
+                    data={"target_node_uuid": target_node_uuid, "message": message, "session_id": session_id},
+                    card_id=card_id,
+                    message_uuid=message_uuid,
+                )
+        except Exception:
+            logger.warning("No se pudo auditar el mensaje directo %s", message_uuid, exc_info=True)
 
     # ------------------------------------------------------------------
     # Suscriptores de DomainEventBus y A2ABus
@@ -1078,7 +896,7 @@ class SwarmRelayOrchestrator:
 
         res = self.enqueue_assignment(target, assignment)
         if res.get("queued") and not res.get("deduplicated") and target != "*":
-            self._maybe_auto_dispatch(target, assignment)
+            self._maybe_leave_inbox_notice(target, assignment, assignment_uuid=str(res.get("assignment_uuid") or ""))
         if not res.get("success") and res.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED":
             logger.warning(
                 "Loop Breaker activado en DomainEvent %s para %s: %s",
@@ -1098,6 +916,10 @@ class SwarmRelayOrchestrator:
         explicit_target = self._extract_target_node(event, allow_explicit_node_uuid=False)
 
         if signal_type in _IGNORED_INFORMATIVE_SIGNALS and not explicit_target:
+            return
+        if signal_type == "DIRECT_MESSAGE":
+            # El mensaje directo llega a la bandeja por `send_direct_message`, con remitente autenticado por el
+            # Hub; un evento A2A con esta señal (p. ej. de un par remoto) no puede entrar por aqui (F0).
             return
 
         msg_kind = str(
@@ -1142,7 +964,7 @@ class SwarmRelayOrchestrator:
 
         res = self.enqueue_assignment(target, assignment)
         if res.get("queued") and not res.get("deduplicated") and target != "*":
-            self._maybe_auto_dispatch(target, assignment)
+            self._maybe_leave_inbox_notice(target, assignment, assignment_uuid=str(res.get("assignment_uuid") or ""))
         if not res.get("success") and res.get("code") == "RELAY_MAX_ROUNDS_EXCEEDED":
             logger.warning(
                 "Loop Breaker activado en mensaje A2A %s para %s: %s",

@@ -164,9 +164,12 @@ def test_stdio_subprocess_proxies_to_live_embedded_hub_and_delivers_pane_message
                         )
                         next_data = _j(next_res.content[0].text)
                         assert next_data["success"] is True
-                        assert next_data["has_assignment"] is True
-                        assignment = next_data["assignment"]
-                        assert "Hola OpenCode desde agy via stdio proxy" in json.dumps(assignment)
+                        # F0: el mensaje directo llega por la bandeja, con la procedencia aparte del texto.
+                        assert next_data["has_messages"] is True
+                        (msg,) = next_data["messages"]
+                        assert msg["text"] == "Hola OpenCode desde agy via stdio proxy"
+                        assert msg["from"]["node_uuid"] == "node_agy"
+                        assert msg["from"]["pane_id"] == "pane_1"
 
         asyncio.run(asyncio.wait_for(_run_e2e(), timeout=25.0))
     finally:

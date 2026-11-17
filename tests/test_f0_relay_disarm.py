@@ -1,0 +1,296 @@
+"""F0 «desarmar» del relevo (dossier 37 §8): el relevo no escribe en ningun PTY y el mensaje es un dato.
+
+Pruebas adversarias con paneles `/bin/sh` reales: un mensaje hostil (control, ESC, Ctrl-U, CR, OSC) enviado
+entre paneles con Auto-Relay ACTIVADO no debe escribir un solo byte en el PTY destino.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, List
+
+import pytest
+
+from src.a2a.bus import A2ABus
+from src.adapters.terminal.pty_host import PosixPtyHostConnector
+from src.core.events import DomainEventBus
+from src.core.factory import ApplicationFactory
+from src.core.kernel import CoreKernel
+from src.core.services import SwarmRelayOrchestrator
+from src.core.services.swarm_relay_service import MAX_DIRECT_MESSAGE_BYTES
+from src.mcp.pane_registry import PaneRegistry
+from src.mcp.tools import MCPToolsHandler
+from src.storage.db import DatabaseManager
+
+ROOT = Path(__file__).resolve().parents[1]
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32" or not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible"
+)
+
+SENTINEL = "SENTINEL_PWN_F0"
+
+
+def _hostile(marker: Path) -> str:
+    """Control C/D, ESC, Ctrl-U, CR y secuencias OSC (titulo, estado 7501, portapapeles) + un comando."""
+    return (
+        "\x03\x04\x1b[2K\x1b\x15\r"
+        f"touch {marker}\r"
+        f"echo {SENTINEL}\r\n"
+        "\x1b]0;pwn\x07\x1b]7501;idle\x07\x1b]52;c;aGk=\x07\x1b]7501;working\x1b\\"
+    )
+
+
+class _SpyConnector:
+    """Envuelve un conector real y anota toda escritura en cualquier PTY."""
+
+    def __init__(self, inner: PosixPtyHostConnector) -> None:
+        self._inner = inner
+        self.writes: List[Any] = []
+
+    def send_input(self, pane_id: Any, data: Any) -> Dict[str, Any]:
+        self.writes.append((str(pane_id), data))
+        return self._inner.send_input(pane_id, data)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+class Swarm:
+    def __init__(self, tmp_path: Path, *, with_ptys: bool) -> None:
+        self.tmp_path = tmp_path
+        self.db = DatabaseManager(db_path=str(tmp_path / "f0.db"))
+        self.proj = self.db.create_project("Proyecto F0", str(tmp_path / "repo"))["project_uuid"]
+        self.event_bus = DomainEventBus()
+        self.bus = A2ABus(self.db)
+        self.registry = PaneRegistry()
+        self.tok1 = self.registry.register_pane("pane_1", node_uuid="node-1", session_token="tok-1")["session_token"]
+        self.tok2 = self.registry.register_pane(
+            "pane_2", node_uuid="node-2", session_token="tok-2", pid=4242
+        )["session_token"]
+        self.pty = PosixPtyHostConnector(max_panes=2) if with_ptys else None
+        self.spy = _SpyConnector(self.pty) if self.pty is not None else None
+        if self.pty is not None:
+            for pane in ("pane_1", "pane_2"):
+                res = self.pty.spawn_session(pane, command=["/bin/sh"], cwd=tmp_path, use_trampoline=False)
+                assert res["success"] is True
+        self.orch = SwarmRelayOrchestrator(
+            event_bus=self.event_bus, bus=self.bus, pane_registry=self.registry, auto_relay_enabled=True
+        )
+        self.kernel = ApplicationFactory.create_mcp_kernel(
+            db_manager=self.db, bus=self.bus, event_bus=self.event_bus
+        )
+        if self.spy is not None:
+            self.kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, self.spy)
+        self.handler = MCPToolsHandler(
+            kernel=self.kernel, owns_kernel=False, pane_registry=self.registry, relay_orchestrator=self.orch
+        )
+
+    def send(self, message: str, *, token: str = "tok-1", target: str = "node-2", **extra: Any) -> Dict[str, Any]:
+        return json.loads(
+            self.handler.send_pane_message(
+                project_uuid=self.proj, target_node_uuid=target, message=message, session_token=token, **extra
+            )
+        )
+
+    def pull(self, *, token: str = "tok-2", timeout_ms: int = 0) -> Dict[str, Any]:
+        return json.loads(
+            self.handler.await_next_assignment(project_uuid=self.proj, session_token=token, timeout_ms=timeout_ms)
+        )
+
+    def outbox_count(self) -> int:
+        with self.db.get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM outbox_events").fetchone()[0])
+
+    def poll_all(self, pane: str) -> str:
+        assert self.pty is not None
+        res = self.pty.poll_output(pane, 0)
+        return str(res.get("text") or "")
+
+    def close(self) -> None:
+        self.handler.close()
+        self.orch.close()
+        self.kernel.close()
+        if self.pty is not None:
+            shutdown = getattr(self.pty, "shutdown_all", None) or getattr(self.pty, "close_all", None)
+            if callable(shutdown):
+                shutdown()
+            else:
+                for s in list(getattr(self.pty, "_sessions", {}).values()):
+                    self.pty._shutdown_session(s)
+
+
+@pytest.fixture
+def swarm(tmp_path: Path):
+    s = Swarm(tmp_path, with_ptys=True)
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+@pytest.fixture
+def swarm_no_pty(tmp_path: Path):
+    s = Swarm(tmp_path, with_ptys=False)
+    try:
+        yield s
+    finally:
+        s.close()
+
+
+# ----------------------------------------------------------------------------------------------------------
+# F0.1 Nunca escribir en el PTY desde el relevo
+# ----------------------------------------------------------------------------------------------------------
+
+
+@posix_only
+def test_hostile_message_between_real_shell_panes_writes_nothing_to_the_target_pty(swarm: Swarm, tmp_path: Path) -> None:
+    marker = tmp_path / "pwned"
+    time.sleep(0.4)  # deja que /bin/sh imprima su prompt inicial
+    baseline = swarm.poll_all("pane_2")
+
+    out = swarm.send(_hostile(marker), card_id="CARD-F0")
+    assert out["success"] is True, out
+    # y un aviso del Auto-Relay (evento de dominio dirigido a pane_2) tampoco debe tocar la terminal
+    from src.core.domain.context import DomainEvent
+
+    swarm.event_bus.publish(
+        DomainEvent(
+            event_type="kanban.card_assigned",
+            project_uuid=swarm.proj,
+            payload={"card_id": "CARD-F0", "target_node_uuid": "node-2", "sender_node_uuid": "node-1"},
+        )
+    )
+
+    time.sleep(0.8)
+    after = swarm.poll_all("pane_2")
+    assert swarm.spy.writes == [], "el relevo escribio en un PTY"
+    assert SENTINEL not in after and "pwned" not in after and "7501" not in after
+    assert not marker.exists(), "el mensaje hostil se ejecuto en la shell destino"
+    assert after.startswith(baseline[:20])  # no se reescribio la pantalla
+
+    # control: el PTY destino sigue vivo y un humano SI puede escribir (la prueba no esta ciega)
+    assert swarm.pty.send_input("pane_2", "echo CONTROL_OK_F0\n")["success"] is True
+    deadline, seen = time.monotonic() + 5, ""
+    while "CONTROL_OK_F0" not in seen and time.monotonic() < deadline:
+        seen = swarm.poll_all("pane_2")
+        time.sleep(0.05)
+    assert "CONTROL_OK_F0" in seen
+
+
+@posix_only
+def test_hostile_message_arrives_whole_as_data_with_separate_provenance(swarm_no_pty: Swarm, tmp_path: Path) -> None:
+    swarm = swarm_no_pty
+    hostile = _hostile(tmp_path / "pwned")
+    sent = swarm.send(hostile, card_id="CARD-F0")
+    assert sent["success"] is True and sent["message_uuid"]
+
+    got = swarm.pull()
+    assert got["success"] is True and got["has_messages"] is True
+    (msg,) = got["messages"]
+    assert msg["text"] == hostile  # integro: ni filtrado ni prefijado
+    assert msg["id"] == sent["message_uuid"]
+    assert msg["kind"] == "direct_message"
+    assert msg["from"]["node_uuid"] == "node-1" and msg["from"]["pane_id"] == "pane_1"
+    assert msg["from"]["verified_by"] == "hub_pane_session"
+    assert msg["to"]["node_uuid"] == "node-2"
+    assert "MCP2P" not in msg["text"] and isinstance(msg["timestamp"], float)
+    # se entrega una sola vez
+    assert swarm.pull()["messages"] == []
+    # y el remitente no puede dictar su procedencia: el node_uuid declarado distinto se rechaza
+    spoof = json.loads(
+        swarm.handler.send_pane_message(
+            project_uuid=swarm.proj, target_node_uuid="node-2", message="x", node_uuid="node-2", session_token="tok-1"
+        )
+    )
+    assert spoof["code"] == "NODE_UUID_SPOOFING_FORBIDDEN"
+
+
+# ----------------------------------------------------------------------------------------------------------
+# F0.3 Limites: 8 KiB y sin cola P2P
+# ----------------------------------------------------------------------------------------------------------
+
+
+def test_message_size_limit_is_8_kib_in_bytes(swarm_no_pty: Swarm) -> None:
+    swarm = swarm_no_pty
+    assert MAX_DIRECT_MESSAGE_BYTES == 8192
+    assert swarm.send("a" * 8192)["success"] is True
+    too_big = swarm.send("a" * 8193)
+    assert too_big["success"] is False and too_big["code"] == "MESSAGE_TOO_LARGE"
+    multibyte = swarm.send("é" * 4097)  # 8194 bytes en UTF-8 aunque solo 4097 caracteres
+    assert multibyte["code"] == "MESSAGE_TOO_LARGE"
+    msgs = swarm.pull()["messages"]
+    assert [len(m["text"]) for m in msgs] == [8192]  # lo rechazado no queda en la bandeja
+
+
+def test_local_direct_messages_never_enter_the_p2p_outbox(swarm_no_pty: Swarm) -> None:
+    swarm = swarm_no_pty
+    before = swarm.outbox_count()
+    for i in range(3):
+        assert swarm.send(f"mensaje local {i}")["success"] is True
+    assert swarm.outbox_count() == before
+    # la auditoria local SI conserva la fila (solo el outbox queda excluido)
+    rows = swarm.db.get_recent_a2a_messages(swarm.proj, limit=10)
+    assert sum(1 for r in rows if r.get("sender_node_uuid") == "node-1") == 3
+    # y el bus rechaza meter esta clase de señal en el outbox aunque se llame directamente
+    swarm.bus.send_informative(swarm.proj, "node-1", "DIRECT_MESSAGE", {"message": "x"})
+    assert swarm.outbox_count() == before
+    swarm.bus.send_informative(swarm.proj, "node-1", "LEASE_RENEWED", {"k": 1})
+    assert swarm.outbox_count() == before + 1  # el resto de señales informativas sigue sincronizandose
+
+
+def test_inbox_is_bounded_and_rejects_instead_of_dropping(swarm_no_pty: Swarm) -> None:
+    swarm = swarm_no_pty
+    from src.core.services.swarm_relay_service import MAX_INBOX_DEPTH
+
+    codes = {swarm.send(f"m{i}")["success"] for i in range(MAX_INBOX_DEPTH)}
+    assert codes == {True}
+    full = swarm.send("uno mas")
+    assert full["success"] is False and full["code"] == "INBOX_FULL"
+
+
+# ----------------------------------------------------------------------------------------------------------
+# Invariante estructural: swarm_relay_service.py nunca vuelve a escribir en un PTY
+# ----------------------------------------------------------------------------------------------------------
+
+_FORBIDDEN_CALLS = {"send_input", "write", "os.write", "writelines", "send_keys", "pty_write_input"}
+
+
+def _call_name(node: ast.Call) -> str:
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        base = func.value
+        if isinstance(base, ast.Name):
+            return f"{base.id}.{func.attr}"
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
+
+
+def test_ast_swarm_relay_service_never_writes_to_a_pty() -> None:
+    path = ROOT / "src" / "core" / "services" / "swarm_relay_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _FORBIDDEN_CALLS or name.split(".")[-1] in {"send_input", "write", "writelines"}:
+                offenders.append((node.lineno, name))
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            mods = [a.name for a in node.names] + [getattr(node, "module", "") or ""]
+            if any(m.startswith(("pty", "termios", "fcntl")) for m in mods):
+                offenders.append((node.lineno, "import " + ",".join(mods)))
+        if isinstance(node, ast.Attribute) and node.attr in {"terminal_connector", "send_input"}:
+            offenders.append((node.lineno, node.attr))
+    assert offenders == [], f"swarm_relay_service.py vuelve a tocar un PTY: {offenders}"
+
+
+def test_ast_check_actually_detects_a_pty_write() -> None:
+    """El detector no esta ciego: sobre un modulo con `connector.send_input(...)` si falla."""
+    tree = ast.parse("def f(connector):\n    connector.send_input(1, 'x')\n    os.write(3, b'x')\n")
+    names = [_call_name(n) for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    assert "connector.send_input" in names and "os.write" in names
