@@ -29,6 +29,10 @@ hiddenimports = [
     'src.adapters.identity', 'src.adapters.identity.peer_process', 'src.adapters.identity.envelope_crypto',
     'src.adapters.identity.ed25519_identity', 'src.mcp.peer_binding', 'src.adapters.persistence.relay_sqlite',
     'src.storage.relay_schema', 'src.core.services.message_relay_service', 'src.app.ui_adapters.relay_ui',
+    # Ola 4: canal del operador (`mcp2p --operator-proxy`, socket local del Hub, emparejamiento por proceso).
+    'src.mcp.operator_proxy', 'src.mcp.operator_endpoint', 'src.mcp.operator_channel', 'src.mcp.operator_tools',
+    'src.core.services.operator_service', 'src.core.domain.privilege', 'src.adapters.persistence.operator_sqlite',
+    'src.storage.operator_schema', 'src.app.ui_adapters.operator_ui',
     # `keyring` se importa de forma perezosa: se declara para que el hook de PyInstaller copie sus metadatos (los
     # backends se descubren por entry points) y se anaden los backends que trae keyring 25 (keyring/backends/).
     'keyring', 'keyring.backends', 'keyring.backends.chainer', 'keyring.backends.fail', 'keyring.backends.null',

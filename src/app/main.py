@@ -338,6 +338,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if hasattr(api, "set_window"):
         api.set_window(window)
     api._updater.set_window(window)
+    operator_ui = getattr(api, "operator_ui", None)
+    if operator_ui is not None:  # Ola 4: canal local del operador (se aprueba con dialogo nativo; tolerante a fallos)
+        operator_ui.start_channel()
 
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
@@ -351,6 +354,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_kwargs["icon"] = str(icon_cand)
         webview.start(**start_kwargs)
     finally:
+        if operator_ui is not None:
+            operator_ui.stop_channel()
         if hasattr(api, "_close_terminal_matrix"):
             try:
                 api._close_terminal_matrix()

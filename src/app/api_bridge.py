@@ -130,6 +130,9 @@ class ApiBridge:
         self.collab_ui = CollabMeshUIAdapter(self)
         self.extensions_ui = ExtensionsLabUIAdapter(self)
         self.relay_ui = RelayUIAdapter(self)  # Ola 3: bandeja del humano, auditoria y parada del relevo
+        from src.app.ui_adapters.operator_ui import OperatorUIAdapter
+
+        self.operator_ui = OperatorUIAdapter(self)  # Ola 4: sesiones del operador (el canal lo abre main.py)
 
         self.transport.on_message(self._handle_transport_message)
         self._ensure_local_node()
@@ -774,6 +777,15 @@ class ApiBridge:
 
     def relay_resume_pane(self, node_uuid: Any) -> Dict[str, Any]:
         return self.relay_ui.relay_resume_pane(node_uuid=node_uuid)
+
+    def operator_list_sessions(self, include_ended: Any = False) -> Dict[str, Any]:
+        return self.operator_ui.operator_list_sessions(include_ended=include_ended)
+
+    def operator_revoke_session(self, session_id: Any) -> Dict[str, Any]:
+        return self.operator_ui.operator_revoke_session(session_id=session_id)
+
+    def operator_pairing_status(self) -> Dict[str, Any]:
+        return self.operator_ui.operator_pairing_status()
 
     def pty_register_agy_mcp(self) -> Dict[str, Any]:
         return self.extensions_ui.pty_register_agy_mcp()
