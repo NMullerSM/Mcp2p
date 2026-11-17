@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
 from PyInstaller.utils.hooks import collect_all
 
 ROOT_DIR = os.path.dirname(os.path.abspath(SPEC)) if 'SPEC' in locals() else os.path.abspath('.')
@@ -21,6 +22,8 @@ hiddenimports = [
     'src.p2p.crypto', 'src.a2a', 'src.a2a.bus', 'src.a2a.jury_engine',
     'src.mcp', 'src.mcp.server', 'src.mcp.tools',
     'src.adapters.terminal', 'src.adapters.terminal.cli_catalog', 'src.adapters.terminal.cli_install', 'src.adapters.terminal.pty_host',
+    'src.adapters.terminal.pty_common', 'src.adapters.terminal.winpty_host', 'src.adapters.terminal.win_job',
+    'src.adapters.terminal.win_launch',
     'src.runtime.terminal_platform', 'src.core.services.project_portability_service'
 ]
 # 'av' is collected explicitly even though nothing in this project imports it
@@ -33,6 +36,25 @@ hiddenimports = [
 for pkg in ('pywebview', 'webview', 'cryptography', 'mcp', 'yaml', 'certifi', 'aiortc', 'websockets', 'av'):
     tmp_ret = collect_all(pkg)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# Windows: terminales integradas por ConPTY (pywinpty). `winpty` se importa de forma perezosa (importlib), asi que
+# PyInstaller no lo detecta solo: se recoge entero. La wheel trae `conpty.dll` + `OpenConsole.exe` que deben quedar
+# JUNTOS y junto a `_winpty*.pyd` (si falta uno, ConPTY cae en silencio al conhost del sistema), ademas de
+# `winpty.dll`/`winpty-agent.exe` (respaldo winpty). Se anaden explicitamente por si `collect_all` omite los .exe.
+if sys.platform == 'win32':
+    tmp_ret = collect_all('winpty')
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+    hiddenimports += ['winpty', 'winpty.ptyprocess', 'winpty.enums']
+    try:
+        import importlib.util
+        _winpty_dir = list(importlib.util.find_spec('winpty').submodule_search_locations)[0]
+        _already = {os.path.basename(src).lower() for src, _dst in (*datas, *binaries)}
+        for _name in ('conpty.dll', 'OpenConsole.exe', 'winpty.dll', 'winpty-agent.exe'):
+            _path = os.path.join(_winpty_dir, _name)
+            if os.path.exists(_path) and _name.lower() not in _already:
+                binaries.append((_path, 'winpty'))
+    except Exception as exc:  # el build debe fallar visiblemente si pywinpty no esta instalado
+        raise SystemExit('No se pudo localizar pywinpty para empaquetar ConPTY: %s' % exc)
 
 a = Analysis(
     [os.path.join(ROOT_DIR, 'src', 'app', 'main.py')],

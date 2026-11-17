@@ -30,7 +30,10 @@ dependencies = [
     # Métricas y ciclo de vida de procesos PTY (Swarm Terminal Matrix V2 / EGM-63).
     "psutil>=5.9.0",
     # Espacio de nombres .NET `System` (system_projects_ui.py, barra de título en Windows); pywebview ya lo arrastra en win32.
-    "pythonnet>=3.0; sys_platform == 'win32'"
+    "pythonnet>=3.0; sys_platform == 'win32'",
+    # Terminales integradas en Windows: ConPTY a traves de pywinpty (src/adapters/terminal/winpty_host.py).
+    # >=3.1.2 fija winpty-rs 1.0.8 (entrecomilla argv[0] con espacios) y descarta las wheels rotas de 3.0.4.
+    "pywinpty>=3.1.2; sys_platform == 'win32'"
 ]
 
 [project.optional-dependencies]
@@ -61,3 +64,7 @@ include = ["src*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
+markers = [
+    "connector_available: la plataforma Windows simulada SI tiene conector ConPTY (doble de pywinpty)",
+    "conpty: pruebas reales de ConPTY/pywinpty (solo Windows; `pytest -m conpty -v -rA`)",
+]

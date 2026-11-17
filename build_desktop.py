@@ -32,6 +32,26 @@ def ensure_frontend_built(base_dir):
     subprocess.check_call([npm_cmd, "run", "build"], cwd=frontend_dir)
 
 
+def winpty_pyinstaller_args():
+    """
+    Argumentos de PyInstaller para empaquetar ConPTY (pywinpty) en Windows. `winpty` se importa de forma perezosa,
+    asi que se recoge entero; `conpty.dll` + `OpenConsole.exe` deben quedar juntos y junto a `_winpty*.pyd` (si no,
+    ConPTY cae en silencio al conhost del sistema). Falla visiblemente si pywinpty no esta instalado.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("winpty")
+    if spec is None or not spec.submodule_search_locations:
+        raise SystemExit("pywinpty no esta instalado: no se puede empaquetar ConPTY (pip install 'pywinpty>=3.1.2').")
+    package_dir = list(spec.submodule_search_locations)[0]
+    args = ["--collect-all=winpty", "--hidden-import=winpty", "--hidden-import=winpty.ptyprocess"]
+    for name in ("conpty.dll", "OpenConsole.exe", "winpty.dll", "winpty-agent.exe"):
+        path = os.path.join(package_dir, name)
+        if os.path.exists(path):
+            args.append(f"--add-binary={path}{os.pathsep}winpty")
+    return args
+
+
 def build():
     parser = argparse.ArgumentParser(description="Compilador MCP2P Desktop — PyWebView + React 18")
     parser.add_argument("--onefile", action="store_true", help="Genera un único archivo ejecutable autocontenido")
@@ -123,10 +143,17 @@ def build():
         "--hidden-import=src.adapters.terminal.cli_catalog",
         "--hidden-import=src.adapters.terminal.cli_install",
         "--hidden-import=src.adapters.terminal.pty_host",
+        "--hidden-import=src.adapters.terminal.pty_common",
+        "--hidden-import=src.adapters.terminal.winpty_host",
+        "--hidden-import=src.adapters.terminal.win_job",
+        "--hidden-import=src.adapters.terminal.win_launch",
         "--hidden-import=src.runtime.terminal_platform",
         "--hidden-import=src.core.services.project_portability_service",
         entry_point,
     ]
+
+    if is_windows:
+        cmd[cmd.index(entry_point):cmd.index(entry_point)] = winpty_pyinstaller_args()
 
     print("\nEjecutando PyInstaller:\n" + " ".join(cmd))
 
