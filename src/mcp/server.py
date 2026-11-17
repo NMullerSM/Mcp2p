@@ -1022,6 +1022,15 @@ def main() -> None:
     add_transport_arguments(parser)
     args = parser.parse_args()
 
+    if args.hub_proxy_only:
+        # Solo proxy al Hub: nunca abre la BD ni crea las 30 herramientas (EGM-98). Solo tiene sentido por stdio.
+        if args.transport != "stdio":
+            print("MCP2P: --hub-proxy-only solo admite el transporte stdio.", file=sys.stderr, flush=True)
+            raise SystemExit(2)
+        from src.mcp.stdio_proxy import run_hub_proxy_only
+
+        raise SystemExit(run_hub_proxy_only())
+
     if args.transport == "stdio":
         proxy_cfg = should_use_hub_proxy()
         if proxy_cfg is not None:

@@ -171,11 +171,25 @@ def _run_as_mcp_server(args: argparse.Namespace) -> int:
     El transporte stdio reserva stdout exclusivamente para los mensajes JSON-RPC,
     así que nada en esta ruta debe hacer print() ni tocar PyWebView/P2P.
     """
+    if getattr(args, "hub_proxy_only", False):
+        # Solo proxy al Hub: nunca abre la BD (EGM-98). Es lo que registra Antigravity con el binario empaquetado.
+        if args.transport != "stdio":
+            print("MCP2P: --hub-proxy-only solo admite el transporte stdio.", file=sys.stderr, flush=True)
+            return 2
+        from src.mcp.stdio_proxy import run_hub_proxy_only
+
+        return run_hub_proxy_only()
+
     from src.mcp.server import create_mcp_server, run_mcp_server
 
     if args.transport == "stdio":
-        from src.mcp.stdio_proxy import hub_proxy_misconfiguration
+        from src.mcp.stdio_proxy import hub_proxy_misconfiguration, run_stdio_hub_proxy, should_use_hub_proxy
 
+        proxy_cfg = should_use_hub_proxy()
+        if proxy_cfg is not None:
+            # El binario empaquetado tambien hace proxy real al Hub vivo cuando el panel le pasa su entorno.
+            run_stdio_hub_proxy(proxy_cfg[0], proxy_cfg[1])
+            return 0
         problem = hub_proxy_misconfiguration()
         if problem is not None:
             # Fallo cerrado (EGM-98): la intencion era el proxy al Hub; no se degrada a un servidor independiente.

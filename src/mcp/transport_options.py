@@ -69,3 +69,8 @@ def add_transport_arguments(parser: argparse.ArgumentParser) -> None:
         "--port", type=int, default=None,
         help=f"Puerto para sse/streamable-http (defecto {DEFAULT_HTTP_PORT}; 0 = efímero)",
     )
+    parser.add_argument(
+        "--hub-proxy-only", action="store_true",
+        help="Solo proxy al Hub de MCP2P (MCP2P_HUB_URL/MCP2P_SESSION_TOKEN) por stdio; nunca abre la base de datos. "
+        "Sin Hub responde HUB_REQUIRED",
+    )
