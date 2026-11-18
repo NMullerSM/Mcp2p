@@ -646,6 +646,51 @@ def test_osc_7501_is_not_interpreted_on_windows(tmp_path: Path) -> None:
         host.close()
 
 
+def test_osc_7501_probe_burst_writes_nothing_via_send_input_or_pty_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    host = _host(tmp_path)
+    send_input_calls: List[tuple] = []
+    pty_write_calls: List[str] = []
+
+    orig_send_input = host.send_input
+    orig_pty_write = FakePTY.write
+
+    def _spy_send_input(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        send_input_calls.append((args, kwargs))
+        return orig_send_input(*args, **kwargs)
+
+    def _spy_pty_write(self: FakePTY, text: str) -> int:
+        pty_write_calls.append(text)
+        return orig_pty_write(self, text)
+
+    monkeypatch.setattr(host, "send_input", _spy_send_input)
+    monkeypatch.setattr(FakePTY, "write", _spy_pty_write)
+
+    try:
+        assert host.spawn_session(1, command=["cmd"])["success"]
+        pty = FakePTY.created[-1]
+        pty.feed("INICIO\r\n")
+        for _ in range(12):
+            pty.feed("\x1b]7501;?\x07")
+        pty.feed("\x1b]7501;state=working\x07")
+        pty.feed("\x1b]7501;idle\x07")
+        pty.feed("FIN_RAFAGA\r\n")
+
+        _poll_text(host, 1, "FIN_RAFAGA")
+        _wait(lambda: pty.out.empty())
+
+        busy = host.get_pane_activity(1, min_silence_s=60.0)
+        quiet = host.get_pane_activity(1, min_silence_s=0.0)
+        assert busy["osc_status"] is None and busy["source"] == "silence_heuristic"
+        assert quiet["osc_status"] is None and quiet["source"] == "silence_heuristic"
+        assert send_input_calls == []
+        assert pty_write_calls == []
+        assert pty.writes == []
+    finally:
+        host.close()
+
+
 # -- fabrica ------------------------------------------------------------------------------------------------------
 
 
