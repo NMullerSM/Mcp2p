@@ -63,6 +63,8 @@ Mcp2p/
 
 ## 🚀 Inicio Rápido
 
+Tras clonar, activa la guardia de compilación de commits con: `git config core.hooksPath .githooks`.
+
 ### Linux / macOS
 ```bash
 chmod +x run.sh

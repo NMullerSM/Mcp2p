@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import shutil
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_commit_compiles.py"
+VERSIONED_HOOK_PATH = REPO_ROOT / ".githooks" / "pre-commit"
 
 
 def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -154,3 +158,83 @@ def test_install_hook_creates_executable_hook_and_blocks_bad_commit(tmp_path: Pa
     valid_commit = _run_git(repo, "commit", "-m", "commit valido")
     assert valid_commit.returncode == 0, f"stdout={valid_commit.stdout}\nstderr={valid_commit.stderr}"
     assert _run_git(repo, "rev-parse", "--verify", "HEAD").returncode == 0
+
+
+def test_real_versioned_pre_commit_hook_format_and_permissions() -> None:
+    """`.githooks/pre-commit` debe existir en el repo real, usar LF puro y ser ejecutable en POSIX."""
+    assert VERSIONED_HOOK_PATH.is_file()
+    raw = VERSIONED_HOOK_PATH.read_bytes()
+    assert b"\r\n" not in raw
+    assert raw.startswith(b"#!/bin/sh\n")
+    if os.name == "posix":
+        mode = VERSIONED_HOOK_PATH.stat().st_mode
+        assert mode & stat.S_IXUSR
+        assert os.access(VERSIONED_HOOK_PATH, os.X_OK)
+
+
+def test_versioned_githooks_blocks_bad_commit_and_allows_valid_commit_fast(tmp_path: Path) -> None:
+    """Con `core.hooksPath=.githooks`, `git commit` rechaza IndentationError y acepta índice válido en <10s."""
+    repo = _init_temp_git_repo(tmp_path / "repo_versioned_hook")
+
+    dst_script = repo / "scripts" / "check_commit_compiles.py"
+    dst_script.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SCRIPT_PATH, dst_script)
+
+    dst_hook = repo / ".githooks" / "pre-commit"
+    dst_hook.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(VERSIONED_HOOK_PATH, dst_hook)
+    if os.name == "posix":
+        os.chmod(dst_hook, 0o755)
+
+    cfg = _run_git(repo, "config", "core.hooksPath", ".githooks")
+    assert cfg.returncode == 0, cfg.stderr
+
+    bad_file = repo / "src" / "bad.py"
+    bad_file.parent.mkdir(parents=True, exist_ok=True)
+    bad_file.write_text("def fallo_versioned_hook():\nreturn 123\n", encoding="utf-8")
+    assert _run_git(repo, "add", "src/bad.py").returncode == 0
+
+    blocked_commit = _run_git(repo, "commit", "-m", "commit roto con githooks")
+    combined = f"{blocked_commit.stdout}\n{blocked_commit.stderr}"
+    assert blocked_commit.returncode != 0
+    assert "bad.py" in combined
+    assert "IndentationError" in combined
+    assert _run_git(repo, "rev-parse", "--verify", "HEAD").returncode != 0
+
+    bad_file.write_text("def corregido() -> int:\n    return 123\n", encoding="utf-8")
+    assert _run_git(repo, "add", "src/bad.py").returncode == 0
+
+    t0 = time.monotonic()
+    valid_commit = _run_git(repo, "commit", "-m", "commit valido con githooks")
+    elapsed = time.monotonic() - t0
+    assert valid_commit.returncode == 0, f"stdout={valid_commit.stdout}\nstderr={valid_commit.stderr}"
+    assert elapsed < 10.0, f"git commit tardó demasiado: {elapsed:.2f}s"
+    assert _run_git(repo, "rev-parse", "--verify", "HEAD").returncode == 0
+
+
+def test_install_hook_activates_versioned_githooks_when_present(tmp_path: Path) -> None:
+    """`--install-hook` activa `core.hooksPath=.githooks`, fija 0o755 y conserva respaldo en `.git/hooks`."""
+    repo = _init_temp_git_repo(tmp_path / "repo_install_versioned")
+
+    dst_script = repo / "scripts" / "check_commit_compiles.py"
+    dst_script.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SCRIPT_PATH, dst_script)
+
+    dst_hook = repo / ".githooks" / "pre-commit"
+    dst_hook.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(VERSIONED_HOOK_PATH, dst_hook)
+    if os.name == "posix":
+        os.chmod(dst_hook, 0o644)
+
+    install_proc = _run_guard(repo, "--install-hook")
+    assert install_proc.returncode == 0, f"stdout={install_proc.stdout}\nstderr={install_proc.stderr}"
+
+    hooks_path_cfg = _run_git(repo, "config", "--get", "core.hooksPath")
+    assert hooks_path_cfg.returncode == 0
+    assert hooks_path_cfg.stdout.strip() == ".githooks"
+
+    if os.name == "posix":
+        assert (dst_hook.stat().st_mode & 0o777) == 0o755
+        assert os.access(dst_hook, os.X_OK)
+
+    assert (repo / ".git" / "hooks" / "pre-commit").is_file()

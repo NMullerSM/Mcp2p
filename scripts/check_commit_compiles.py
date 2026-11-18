@@ -168,7 +168,7 @@ def check_staged_index(repo_root: Path) -> int:
 
 
 def install_pre_commit_hook(repo_root: Path) -> int:
-    """Instala `.git/hooks/pre-commit` en `repo_root` ejecutando este script."""
+    """Instala `.git/hooks/pre-commit` y activa `.githooks/` si existe en `repo_root`."""
     resolved_root = Path(repo_root).resolve()
     git_dir = _resolve_git_dir(resolved_root)
     if git_dir is None:
@@ -193,6 +193,26 @@ def install_pre_commit_hook(repo_root: Path) -> int:
     hook_path.write_text(hook_content, encoding="utf-8", newline="\n")
     if os.name == "posix":
         os.chmod(hook_path, 0o755)
+
+    versioned_hook = resolved_root / ".githooks" / "pre-commit"
+    if versioned_hook.is_file():
+        if os.name == "posix":
+            os.chmod(versioned_hook, 0o755)
+        proc = subprocess.run(
+            ["git", "config", "core.hooksPath", ".githooks"],
+            cwd=str(resolved_root),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            msg = f"ERROR: No se pudo configurar 'core.hooksPath=.githooks' en '{resolved_root}'."
+            if detail:
+                msg = f"{msg} Detalle: {detail}"
+            print(msg, file=sys.stderr)
+            return 1
+        print(f"OK: hook pre-commit activado vía core.hooksPath=.githooks (respaldo en '{hook_path}').")
+        return 0
 
     print(f"OK: hook pre-commit instalado en '{hook_path}'.")
     return 0
