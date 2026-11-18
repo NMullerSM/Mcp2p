@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Scripts de shell y hooks: siempre LF (con CRLF, sh en Git Bash/Windows falla con "set: invalid option")
+.githooks/* text eol=lf
+*.sh text eol=lf
