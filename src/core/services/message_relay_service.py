@@ -232,18 +232,9 @@ class MessageRelayService:
         self._maintenance(now)
         from_p = sender_principal if sender_principal is not None else self.principal_of(sender)
         project = from_p.project_uuid
-        if not isinstance(text, str) or not text.strip():
-            return _err("EMPTY_MESSAGE", "El mensaje no puede estar vacío.")
-        try:
-            size = len(text.encode("utf-8"))
-        except UnicodeEncodeError:
-            return _err("INVALID_MESSAGE", "El mensaje no es texto UTF-8 valido.")
-        if size > MAX_MESSAGE_BYTES:
-            return _err(
-                "MESSAGE_TOO_LARGE", f"El mensaje supera el maximo de {MAX_MESSAGE_BYTES} bytes.", max_bytes=MAX_MESSAGE_BYTES
-            )
-        if kind not in AGENT_KINDS:
-            return _err("INVALID_KIND", f"kind debe ser uno de {sorted(AGENT_KINDS)}.")
+        bad = self._check_text(text, kind, AGENT_KINDS)
+        if bad is not None:
+            return bad
         if self._paused(f"pane:{from_p.id}"):
             return _err("RELAY_PAUSED", "El relevo de este panel esta en pausa; solo el humano puede reanudarlo.")
 
@@ -265,79 +256,43 @@ class MessageRelayService:
             parent_hop=(parent or {}).get("hop"),
         )
         trust = trust_override or cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
-        msg_id = str(uuid.uuid4())
-        identity = self.identity
-        try:
-            header = build_header(
-                msg_id=msg_id,
-                kind=kind,
-                from_uri=from_p.uri,
-                from_device=identity.device_uri(),
-                to_uri=to_p.uri,
-                project_uuid=project,
-                chain_id=link.chain_id,
-                hop=link.hop,
-                parent_msg_id=(parent or {}).get("msg_id"),
-                content=text,
-                created_at=now,
-                expires_at=now + self.message_ttl_ms,
-                trust=trust.value,
-                device_cert=identity.device_certificate(),
-            )
-        except EnvelopeError as exc:
-            return _err("INVALID_ENVELOPE", f"No se pudo sellar el sobre ({exc.code}).")
-        envelope = identity.sign_header(header)
-
-        state, reason = "queued", None
         if link.exceeded:
-            state, reason = "parked", CHAIN_DEPTH_EXCEEDED
+            park_reason: Optional[str] = CHAIN_DEPTH_EXCEEDED
         elif confirm_with_human:
-            state, reason = "parked", "HUMAN_CONFIRMATION_REQUESTED"
-        row = {
-            "msg_id": msg_id,
-            "project_uuid": project,
-            "from_principal": from_p.uri,
-            "to_principal": to_p.uri,
-            "kind": kind,
-            "chain_id": link.chain_id,
-            "hop": link.hop,
-            "parent_msg_id": header["parent_msg_id"],
-            "trust": trust.value,
-            "content_hash": header["content_hash"],
-            "content": text,
-            "envelope_json": json.dumps(envelope, sort_keys=True, ensure_ascii=False),
-            "state": state,
-            "state_reason": reason,
-            "card_id": str(card_id) if card_id else None,
-            "created_at_ms": now,
-            "expires_at_ms": header["expires_at"],
-            "updated_at_ms": now,
-        }
-        base_audit = {
-            "msg_id": msg_id, "chain_id": link.chain_id, "hop": link.hop, "project_uuid": project,
-            "from_principal": from_p.uri, "to_principal": to_p.uri, "trust": trust.value,
-            "content_hash": header["content_hash"], "actor": from_p.uri,
-        }
-        audit = [{**base_audit, "event": "submitted", "decision": state}]
-        if state == "parked":
-            audit.append({**base_audit, "event": "parked", "reason_code": reason})
-        if not self.store.insert_message(row, audit):
-            self.store.append_audit({**base_audit, "event": "rejected", "reason_code": "REPLAY_DETECTED", "ts_ms": now})
-            return _err("REPLAY_DETECTED", "Ese sobre ya existe.")
+            park_reason = "HUMAN_CONFIRMATION_REQUESTED"
+        else:
+            park_reason = None
+
+        sealed = self._seal_and_store(
+            from_uri=from_p.uri,
+            to_uri=to_p.uri,
+            project=project,
+            text=text,
+            kind=kind,
+            card_id=card_id,
+            link=link,
+            trust=trust,
+            park_reason=park_reason,
+            submit_event="submitted",
+            now=now,
+            parent_msg_id=(parent or {}).get("msg_id"),
+        )
+        if not sealed.get("success"):
+            return sealed
 
         common = {
-            "msg_id": msg_id,
-            "message_uuid": msg_id,
+            "msg_id": sealed["msg_id"],
+            "message_uuid": sealed["msg_id"],
             "target_node_uuid": to_p.id,
-            "chain": {"chain_id": link.chain_id, "hop": link.hop, "max_depth": link.max_depth},
-            "trust": trust.value,
+            "chain": sealed["chain"],
+            "trust": sealed["trust"],
         }
-        if state == "parked":
-            if reason == CHAIN_DEPTH_EXCEEDED:
-                return {
-                    "success": False, "code": CHAIN_DEPTH_EXCEEDED, "delivered": False, "parked": True, **common,
-                    "error": "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano.",
-                }
+        if park_reason == CHAIN_DEPTH_EXCEEDED:
+            return {
+                "success": False, "code": CHAIN_DEPTH_EXCEEDED, "delivered": False, "parked": True, **common,
+                "error": "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano.",
+            }
+        if park_reason == "HUMAN_CONFIRMATION_REQUESTED":
             return {"success": True, "code": "PARKED_FOR_HUMAN", "delivered": False, "parked": True, **common}
 
         held = self._paused(GLOBAL_PAUSE_SCOPE) or self._paused(f"pane:{to_p.id}")
