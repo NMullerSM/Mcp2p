@@ -52,8 +52,9 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 ### Mejorado
 - Mientras MCP2P espera que respondas a un diálogo de confirmación del sistema, la vista de Terminales muestra un aviso
   claro para que sepas dónde confirmar.
-- Las terminales integradas reconocen el formato completo de avisos de estado de Claude Code y Codex (incluido cuando
-  esperan permiso) y responden a su sonda de compatibilidad sin escribir órdenes en la terminal.
+- En Linux y macOS, las terminales integradas reconocen los avisos de estado completos de los CLI compatibles (incluido
+  cuando esperan permiso o limpian el estado) y responden a la sonda de compatibilidad únicamente en los CLI
+  verificados (Claude Code), con límite de frecuencia y sin enviar nada a shells ni programas sin verificar.
 - Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que la
   espera larga del modo trabajador no se corte.
 - Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar

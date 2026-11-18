@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 
@@ -28,7 +30,8 @@ from src.storage.db import DatabaseManager
 
 ROOT = Path(__file__).resolve().parents[1]
 posix_only = pytest.mark.skipif(
-    sys.platform == "win32" or not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible"
+    sys.platform == "win32" or not PosixPtyHostConnector.is_available(),
+    reason="Requiere PTY POSIX con /bin/sh para probar secuencias de control en shell real",
 )
 
 SENTINEL = "SENTINEL_PWN_F0"
@@ -77,19 +80,48 @@ class Swarm:
         )["session_token"]
         self.pty = PosixPtyHostConnector(max_panes=2) if with_ptys else None
         self.spy = _SpyConnector(self.pty) if self.pty is not None else None
+        self.os_writes: List[Any] = []
+        self._os_writes_lock = threading.Lock()
+        self._real_os_write: Optional[Callable[[int, Any], int]] = None
+        self.master_fds: set[int] = set()
         if self.pty is not None:
             for pane in ("pane_1", "pane_2"):
                 res = self.pty.spawn_session(pane, command=["/bin/sh"], cwd=tmp_path, use_trampoline=False)
                 assert res["success"] is True
-        self.orch = SwarmRelayOrchestrator(event_bus=self.event_bus, bus=self.bus, pane_registry=self.registry)
-        self.kernel = ApplicationFactory.create_mcp_kernel(
-            db_manager=self.db, bus=self.bus, event_bus=self.event_bus
-        )
-        if self.spy is not None:
-            self.kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, self.spy)
-        self.handler = MCPToolsHandler(
-            kernel=self.kernel, owns_kernel=False, pane_registry=self.registry, relay_orchestrator=self.orch
-        )
+            self.master_fds = {
+                s.master_fd
+                for s in self.pty._sessions.values()
+                if getattr(s, "master_fd", None) is not None
+            }
+            assert len(self.master_fds) == 2
+            real_os_write = os.write
+            master_fds = self.master_fds
+            os_writes = self.os_writes
+            lock = self._os_writes_lock
+
+            def _spy_os_write(fd: int, data: Any) -> int:
+                if fd in master_fds:
+                    with lock:
+                        os_writes.append((fd, bytes(data)))
+                return real_os_write(fd, data)
+
+            self._real_os_write = real_os_write
+            os.write = _spy_os_write  # type: ignore[assignment]
+        try:
+            self.orch = SwarmRelayOrchestrator(event_bus=self.event_bus, bus=self.bus, pane_registry=self.registry)
+            self.kernel = ApplicationFactory.create_mcp_kernel(
+                db_manager=self.db, bus=self.bus, event_bus=self.event_bus
+            )
+            if self.spy is not None:
+                self.kernel.register_connector(CoreKernel.PORT_AGENT_TERMINAL, self.spy)
+            self.handler = MCPToolsHandler(
+                kernel=self.kernel, owns_kernel=False, pane_registry=self.registry, relay_orchestrator=self.orch
+            )
+        except Exception:
+            if self._real_os_write is not None:
+                os.write = self._real_os_write  # type: ignore[assignment]
+                self._real_os_write = None
+            raise
 
     def send(self, message: str, *, token: str = "tok-1", target: str = "node-2", **extra: Any) -> Dict[str, Any]:
         return json.loads(
@@ -113,16 +145,21 @@ class Swarm:
         return str(res.get("text") or "")
 
     def close(self) -> None:
-        self.handler.close()
-        self.orch.close()
-        self.kernel.close()
-        if self.pty is not None:
-            shutdown = getattr(self.pty, "shutdown_all", None) or getattr(self.pty, "close_all", None)
-            if callable(shutdown):
-                shutdown()
-            else:
-                for s in list(getattr(self.pty, "_sessions", {}).values()):
-                    self.pty._shutdown_session(s)
+        try:
+            self.handler.close()
+            self.orch.close()
+            self.kernel.close()
+            if self.pty is not None:
+                shutdown = getattr(self.pty, "shutdown_all", None) or getattr(self.pty, "close_all", None)
+                if callable(shutdown):
+                    shutdown()
+                else:
+                    for s in list(getattr(self.pty, "_sessions", {}).values()):
+                        self.pty._shutdown_session(s)
+        finally:
+            if self._real_os_write is not None:
+                os.write = self._real_os_write  # type: ignore[assignment]
+                self._real_os_write = None
 
 
 @pytest.fixture
@@ -170,6 +207,7 @@ def test_hostile_message_between_real_shell_panes_writes_nothing_to_the_target_p
     time.sleep(0.8)
     after = swarm.poll_all("pane_2")
     assert swarm.spy.writes == [], "el relevo escribio en un PTY"
+    assert swarm.os_writes == [], "el relevo escribio directo por os.write en master_fd"
     assert SENTINEL not in after and "pwned" not in after and "7501" not in after
     assert not marker.exists(), "el mensaje hostil se ejecuto en la shell destino"
     assert after.startswith(baseline[:20])  # no se reescribio la pantalla
@@ -181,6 +219,7 @@ def test_hostile_message_between_real_shell_panes_writes_nothing_to_the_target_p
         seen = swarm.poll_all("pane_2")
         time.sleep(0.05)
     assert "CONTROL_OK_F0" in seen
+    assert any(b"CONTROL_OK_F0" in payload for _, payload in swarm.os_writes)
 
 
 @posix_only

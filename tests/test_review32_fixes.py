@@ -8,10 +8,18 @@ from pathlib import Path
 import pytest
 
 from src.adapters.terminal.pty_host import PosixPtyHostConnector
+from src.adapters.terminal.winpty_host import WinPtyHostConnector
 from src.core.factory import ApplicationFactory
 from src.mcp.server import create_mcp_server
 
-posix_only = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+pty_required = pytest.mark.skipif(
+    not (PosixPtyHostConnector.is_available() or WinPtyHostConnector.is_available()),
+    reason="Requiere backend PTY POSIX o ConPTY",
+)
+posix_only = pytest.mark.skipif(
+    not PosixPtyHostConnector.is_available(),
+    reason="Parchea pty_host.subprocess.Popen y usa /bin/sleep del host POSIX",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -19,12 +27,17 @@ posix_only = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason
 # ---------------------------------------------------------------------------
 
 
-@posix_only
+@pty_required
 def test_egm65_shared_kernel_survives_embedded_handler_close(tmp_path: Path) -> None:
     kernel = ApplicationFactory.create_desktop_kernel(db_path=str(tmp_path / "gui.db"))
     terminal = kernel.terminal_connector
     try:
-        spawn = terminal.spawn_session(1, cli_profile="custom_shell", command=["sleep", "30"], use_trampoline=False)
+        spawn = terminal.spawn_session(
+            1,
+            cli_profile="custom_shell",
+            command=[sys.executable, "-c", "import time; time.sleep(30)"],
+            use_trampoline=False,
+        )
         assert spawn["success"] is True
         server = create_mcp_server(kernel=kernel, transport="streamable-http", pane_registry=None)
         # Lo que hacen EmbeddedMcpHub.stop() y EmbeddedMcpHub._cleanup_failed_start()

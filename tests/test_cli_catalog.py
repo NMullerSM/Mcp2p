@@ -20,6 +20,7 @@ from src.adapters.terminal import (
     CliCatalogService,
     HARD_MAX_PANES,
     PosixPtyHostConnector,
+    WinPtyHostConnector,
     clamp_max_panes,
     load_configured_max_panes,
     load_repo_catalog,
@@ -372,11 +373,22 @@ def test_max_panes_is_configurable_up_to_six_and_defaults_to_four() -> None:
         host.set_max_panes(7)
 
 
-@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+pty_required = pytest.mark.skipif(
+    not (PosixPtyHostConnector.is_available() or WinPtyHostConnector.is_available()),
+    reason="Requiere backend PTY POSIX o ConPTY",
+)
+
+
+def _pty_connector(**kwargs: Any) -> Any:
+    cls = PosixPtyHostConnector if PosixPtyHostConnector.is_available() else WinPtyHostConnector
+    return cls(**kwargs)
+
+
+@pty_required
 def test_spawn_uses_catalog_resolution_and_reports_precise_codes(tmp_path: Path) -> None:
     settings = _MemorySettings()
     svc = _service(tmp_path, settings=settings, which=lambda n: "/usr/bin/npm" if n in {"npm", "node"} else None)
-    host = PosixPtyHostConnector(max_panes=2, catalog_service=svc, min_available_mb=0)
+    host = _pty_connector(max_panes=2, catalog_service=svc, min_available_mb=0)
     try:
         # Binario ausente: codigo preciso + propuesta de instalacion verificada (npm presente)
         miss = host.spawn_session(pane_id=1, cli_profile="claude")
@@ -390,7 +402,17 @@ def test_spawn_uses_catalog_resolution_and_reports_precise_codes(tmp_path: Path)
         assert host.spawn_session(pane_id=1, cli_profile=["claude"])["code"] == "CLI_PROFILE_UNKNOWN"  # type: ignore[arg-type]
 
         # Ruta configurada: lanza de verdad el script como "claude"
-        script = _make_exec(tmp_path / "fake-claude", "#!/bin/sh\necho LISTO_CATALOGO\nsleep 5\n")
+        if sys.platform == "win32":
+            script = tmp_path / "fake-claude.cmd"
+            script.write_text(
+                f'@echo off\r\necho LISTO_CATALOGO\r\n"{sys.executable}" -c "import time; time.sleep(5)"\r\n',
+                encoding="utf-8",
+            )
+        else:
+            script = _make_exec(
+                tmp_path / "fake-claude",
+                f"#!{sys.executable}\nimport time\nprint('LISTO_CATALOGO', flush=True)\ntime.sleep(5)\n",
+            )
         assert svc.set_binary_path("claude", str(script))["success"] is True
         ok = host.spawn_session(pane_id=1, cli_profile="claude", use_trampoline=False)
         assert ok["success"] is True
@@ -414,16 +436,17 @@ def test_spawn_uses_catalog_resolution_and_reports_precise_codes(tmp_path: Path)
         host.close()
 
 
-@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+@pty_required
 def test_memory_admission_blocks_second_pane_but_not_the_first(tmp_path: Path) -> None:
-    host = PosixPtyHostConnector(
+    host = _pty_connector(
         max_panes=4, min_available_mb=1024, memory_probe=lambda: 100.0,
         catalog_service=_service(tmp_path),
     )
     try:
-        first = host.spawn_session(pane_id=1, command=["/bin/sh", "-c", "sleep 5"], use_trampoline=False)
+        sleep_cmd = [sys.executable, "-c", "import time; time.sleep(5)"]
+        first = host.spawn_session(pane_id=1, command=sleep_cmd, use_trampoline=False)
         assert first["success"] is True  # el primer panel siempre abre
-        second = host.spawn_session(pane_id=2, command=["/bin/sh", "-c", "sleep 5"], use_trampoline=False)
+        second = host.spawn_session(pane_id=2, command=sleep_cmd, use_trampoline=False)
         assert second["code"] == "PANE_LIMIT_REACHED" and second["reason"] == "low_memory"
     finally:
         host.close()

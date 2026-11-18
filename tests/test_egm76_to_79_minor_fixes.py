@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import signal
+import sys
 import time
 from pathlib import Path
 from typing import List
@@ -10,12 +12,19 @@ import psutil
 import pytest
 
 from conftest import make_test_db
-from src.adapters.terminal import PosixPtyHostConnector
+from src.adapters.terminal import PosixPtyHostConnector, WinPtyHostConnector
 from src.adapters.terminal.mcp_injection import PaneMcpConfigStore
 from src.app.api_bridge import ApiBridge
 from src.core.services import swarm_relay_service as relay_mod
 
-posix_only = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+posix_only = pytest.mark.skipif(
+    not PosixPtyHostConnector.is_available(),
+    reason="Requiere señales POSIX SIGHUP/SIGTERM/SIGKILL y setsid",
+)
+pty_required = pytest.mark.skipif(
+    not (PosixPtyHostConnector.is_available() or WinPtyHostConnector.is_available()),
+    reason="Requiere backend PTY POSIX o ConPTY",
+)
 
 
 def _host(tmp_path: Path) -> PosixPtyHostConnector:
@@ -67,19 +76,48 @@ def test_egm76_mcp_tool_reports_the_applied_timeout(tmp_path: Path) -> None:
 # -- EGM-77 ---------------------------------------------------------------------------------------------
 
 
+def _spawn_sighup_ready_child(host: PosixPtyHostConnector) -> None:
+    """Lanza un hijo Python que atrapa SIGHUP y avisa por stdout cuando el handler esta instalado."""
+    script = (
+        "import signal, sys, time; "
+        "signal.signal(signal.SIGHUP, lambda *_: sys.exit(0)); "
+        "print('READY', flush=True); "
+        "time.sleep(100)"
+    )
+    res = host.spawn_session(1, cli_profile="custom_shell", command=[sys.executable, "-c", script], use_trampoline=False)
+    assert res["success"] is True
+    text, cursor, deadline = "", 0, time.monotonic() + 5
+    while "READY" not in text and time.monotonic() < deadline:
+        out = host.poll_output(1, cursor)
+        cursor = out["next_seq"]
+        text += out["text"]
+        time.sleep(0.02)
+    assert "READY" in text
+
+
 @posix_only
 def test_egm77_close_sends_sighup_first_so_clis_can_exit_cleanly(tmp_path: Path) -> None:
     host = _host(tmp_path)
     try:
-        script = "trap 'exit 0' HUP; sleep 100 & wait"
-        res = host.spawn_session(1, cli_profile="custom_shell", command=["sh", "-c", script], use_trampoline=False)
-        assert res["success"] is True
-        time.sleep(0.4)
+        _spawn_sighup_ready_child(host)
         closed = host.close_session(1)
-        # SIGHUP primero: el `trap` sale con 0; con SIGTERM/SIGKILL directos serian -15 / -9
+        # SIGHUP primero: el handler sale con 0; con SIGTERM/SIGKILL directos serian -15 / -9
         assert closed["exit_code"] == 0
     finally:
         host.close()
+
+
+@posix_only
+def test_egm77_close_sighup_is_hermetic_when_parent_ignores_sighup(tmp_path: Path) -> None:
+    prev_hup = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    host = _host(tmp_path)
+    try:
+        _spawn_sighup_ready_child(host)
+        closed = host.close_session(1)
+        assert closed["exit_code"] == 0
+    finally:
+        host.close()
+        signal.signal(signal.SIGHUP, prev_hup)
 
 
 @posix_only
@@ -107,23 +145,36 @@ def test_egm77_close_escalates_and_leaves_no_orphans_even_if_hup_and_term_are_ig
 # -- EGM-78 ---------------------------------------------------------------------------------------------
 
 
-@posix_only
-def test_egm78_poll_output_no_longer_duplicates_text_in_chunks(tmp_path: Path) -> None:
+def _prepare_bridge(tmp_path: Path) -> ApiBridge:
     b = ApiBridge(db_manager=make_test_db())
-    try:
-        primary = b.core_kernel.terminal_connector.primary
+    primary = b.core_kernel.terminal_connector.primary
+    if hasattr(primary, "min_available_mb"):
         primary.min_available_mb = 0
+    if hasattr(primary, "_mcp_store"):
         primary._mcp_store = PaneMcpConfigStore(tmp_path / "mcp")
-        assert b.pty_spawn_pane(1, "custom_shell", "implementer", None, 100, 28, False, str(tmp_path))["success"]
-        b.pty_write_input(1, "echo hola-mundo\n")
-        text, cursor, deadline = "", 0, time.monotonic() + 5
-        while "hola-mundo" not in text and time.monotonic() < deadline:
+    return b
+
+
+@pty_required
+def test_egm78_poll_output_no_longer_duplicates_text_in_chunks(tmp_path: Path) -> None:
+    b = _prepare_bridge(tmp_path)
+    try:
+        cmd = [
+            sys.executable,
+            "-u",
+            "-c",
+            "import sys, time; print('INPUT:' + sys.stdin.readline().strip(), flush=True); time.sleep(5)",
+        ]
+        assert b.pty_spawn_pane(1, "custom_shell", "implementer", cmd, 100, 28, False, str(tmp_path))["success"]
+        b.pty_write_input(1, "hola-mundo\r")
+        text, cursor, deadline = "", 0, time.monotonic() + 10
+        while "INPUT:hola-mundo" not in text and time.monotonic() < deadline:
             res = b.pty_poll_output(1, cursor)
             assert "chunks" not in res
             cursor = res["next_seq"]
             text += res["text"]
             time.sleep(0.05)
-        assert "hola-mundo" in text
+        assert "INPUT:hola-mundo" in text
         assert set(res) >= {"success", "text", "next_seq", "since_seq", "truncated", "alive", "exit_code"}
         # contrato final tambien para una sesion inexistente
         missing = b.pty_poll_output(3, 0)
@@ -140,13 +191,10 @@ def test_egm78_poll_output_no_longer_duplicates_text_in_chunks(tmp_path: Path) -
 # -- cwd en las sesiones serializadas --------------------------------------------------------------------
 
 
-@posix_only
+@pty_required
 def test_matrix_status_sessions_include_cwd(tmp_path: Path) -> None:
-    b = ApiBridge(db_manager=make_test_db())
+    b = _prepare_bridge(tmp_path)
     try:
-        primary = b.core_kernel.terminal_connector.primary
-        primary.min_available_mb = 0
-        primary._mcp_store = PaneMcpConfigStore(tmp_path / "mcp")
         work = tmp_path / "trabajo"
         work.mkdir()
         res = b.pty_spawn_pane(1, "custom_shell", "implementer", None, 100, 28, False, str(work))

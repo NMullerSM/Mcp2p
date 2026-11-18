@@ -20,35 +20,43 @@ import psutil
 import pytest
 
 from conftest import make_test_db
-from src.adapters.terminal import CliCatalogService, PosixPtyHostConnector
-from src.adapters.terminal.cli_catalog import CatalogValidationError, load_repo_catalog
+from src.adapters.terminal import CliCatalogService, PosixPtyHostConnector, WinPtyHostConnector
+from src.adapters.terminal.cli_catalog import CatalogValidationError, current_platform, load_repo_catalog
 from src.adapters.terminal.mcp_injection import McpInjectionError, PaneMcpConfigStore
 from src.app.api_bridge import ApiBridge
 
-posix_only = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+pty_required = pytest.mark.skipif(
+    not (PosixPtyHostConnector.is_available() or WinPtyHostConnector.is_available()),
+    reason="Requiere backend PTY POSIX o ConPTY",
+)
+posix_only = pytest.mark.skipif(
+    not PosixPtyHostConnector.is_available(),
+    reason="Parchea pty_host.subprocess.Popen para simular carrera de spawn en PosixPtyHostConnector",
+)
 
 FAKE_CLI = '''#!{python}
 import asyncio, json, os, sys
 from pathlib import Path
+import psutil
 
 HERE = Path(__file__).resolve().parent
-NAME = Path(__file__).name
-expect = json.loads((HERE / "expect.json").read_text())
-out = {{"cli": NAME, "argv": sys.argv[1:], "cmdline": open("/proc/self/cmdline").read().replace("\\0", " ")}}
+NAME = {name}
+expect = json.loads((HERE / "expect.json").read_text(encoding="utf-8"))
+out = {{"cli": NAME, "argv": sys.argv[1:], "cmdline": " ".join(psutil.Process().cmdline())}}
 
 url = token = None
 cfg_path = None
 if "--mcp-config" in sys.argv:
     cfg_path = sys.argv[sys.argv.index("--mcp-config") + 1]
-    srv = json.load(open(cfg_path))["mcpServers"]["mcp2p"]
+    srv = json.loads(Path(cfg_path).read_text(encoding="utf-8"))["mcpServers"]["mcp2p"]
     url, token, out["mode"] = srv["url"], srv["headers"]["Authorization"].split(" ", 1)[1], "claude_flag"
 elif os.environ.get("OPENCODE_CONFIG"):
     cfg_path = os.environ["OPENCODE_CONFIG"]
-    srv = json.load(open(cfg_path))["mcp"]["mcp2p"]
+    srv = json.loads(Path(cfg_path).read_text(encoding="utf-8"))["mcp"]["mcp2p"]
     url, token, out["mode"] = srv["url"], srv["headers"]["Authorization"].split(" ", 1)[1], "opencode_env"
 elif os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH"):
     cfg_path = os.environ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]
-    srv = json.load(open(cfg_path))["mcpServers"]["mcp2p"]
+    srv = json.loads(Path(cfg_path).read_text(encoding="utf-8"))["mcpServers"]["mcp2p"]
     url, token, out["mode"] = srv["httpUrl"], srv["headers"]["Authorization"].split(" ", 1)[1], "gemini_env"
 elif "-c" in sys.argv:
     kv = dict(a.split("=", 1) for a in sys.argv if a.startswith("mcp_servers.mcp2p."))
@@ -89,15 +97,27 @@ if url:
         asyncio.run(main())
     except Exception as exc:  # noqa
         out["error"] = repr(exc)
-(HERE / ("result-" + NAME + ".json")).write_text(json.dumps(out))
+(HERE / ("result-" + NAME + ".json")).write_text(json.dumps(out), encoding="utf-8")
 print("FAKE-CLI-DONE", flush=True)
 '''
 
 
-def _install_fake(home: Path, name: str) -> Path:
-    path = home / ".local" / "bin" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(FAKE_CLI.format(python=sys.executable))
+def _install_fake(home: Path, name: str, *, body: str | None = None) -> Path:
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    script_body = (
+        f"#!{sys.executable}\n{body}"
+        if body is not None
+        else FAKE_CLI.format(python=sys.executable, name=json.dumps(name))
+    )
+    if sys.platform == "win32":
+        script_path = bin_dir / f"{name}.py"
+        script_path.write_text(script_body, encoding="utf-8")
+        cmd_path = bin_dir / f"{name}.cmd"
+        cmd_path.write_text(f'@echo off\r\n"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+        return cmd_path
+    path = bin_dir / name
+    path.write_text(script_body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
 
@@ -107,17 +127,23 @@ def lab(tmp_path: Path):
     home = tmp_path / "home"
     b = ApiBridge(db_manager=make_test_db())
     primary = b.core_kernel.terminal_connector.primary
-    primary.catalog_service = CliCatalogService(
+    plat = current_platform()
+    env = {"COMSPEC": os.environ.get("COMSPEC", "cmd.exe")} if plat == "win32" else {"SHELL": "/bin/sh"}
+    catalog = CliCatalogService(
         b.core_kernel.extension_repo,
         user_catalog_path=tmp_path / "sin_usuario.json",
         which=lambda name: None,
-        platform="linux",
+        platform=plat,
         home=str(home),
-        environ={"SHELL": "/bin/sh"},
+        environ=env,
     )
-    primary.min_available_mb = 0
+    if hasattr(primary, "catalog_service"):
+        primary.catalog_service = catalog
+    if hasattr(primary, "min_available_mb"):
+        primary.min_available_mb = 0
     store = PaneMcpConfigStore(tmp_path / "mcp-store")
-    primary._mcp_store = store
+    if hasattr(primary, "_mcp_store"):
+        primary._mcp_store = store
     registry = b.extensions_ui._get_pane_registry()
     other = registry.register_pane(4)  # panel ajeno: su node_uuid es el que se intenta suplantar
     project_uuid = b.core_kernel.db.list_projects()[0]["project_uuid"]
@@ -150,7 +176,7 @@ def _all_text(bridge: ApiBridge, pane: Any) -> str:
     return json.dumps(bridge.pty_poll_output(pane, 0))
 
 
-@posix_only
+@pty_required
 @pytest.mark.parametrize(
     "cli,mode,pane",
     [("claude", "claude_flag", 1), ("opencode", "opencode_env", 2), ("gemini", "gemini_env", 3)],
@@ -170,9 +196,10 @@ def test_cli_connects_to_embedded_hub_with_its_panel_token(lab, cli: str, mode: 
     assert out["authed_ok"] is True
     assert out["unauth_status"] == 401 and out["badtoken_status"] == 401
     assert out["spoof_code"] == "NODE_UUID_SPOOFING_FORBIDDEN"
-    # permisos: archivo 0600 dentro de un directorio 0700 propio
-    assert out["cfg_mode"] == "0o600" and out["cfg_dir_mode"] == "0o700"
-    assert str(store.base_dir) in out["cfg_path"]
+    # permisos: archivo 0600 dentro de un directorio 0700 propio (Windows no usa modos POSIX)
+    if sys.platform != "win32":
+        assert out["cfg_mode"] == "0o600" and out["cfg_dir_mode"] == "0o700"
+    assert Path(out["cfg_path"]).resolve().is_relative_to(store.base_dir.resolve())
     # el token nunca va en argv ni se filtra al puente
     assert token not in out["cmdline"] and token not in json.dumps(out["argv"])
     blob = json.dumps(res) + _all_text(bridge, pane) + json.dumps(bridge.pty_get_matrix_status())
@@ -186,7 +213,7 @@ def test_cli_connects_to_embedded_hub_with_its_panel_token(lab, cli: str, mode: 
     assert list(store.base_dir.iterdir()) == []
 
 
-@posix_only
+@pty_required
 def test_codex_receives_only_the_env_var_name_in_argv(lab) -> None:
     bridge, home, registry = lab["bridge"], lab["home"], lab["registry"]
     _install_fake(home, "codex")
@@ -201,12 +228,13 @@ def test_codex_receives_only_the_env_var_name_in_argv(lab) -> None:
     assert "MCP2P_SESSION_TOKEN" in out["cmdline"] and "mcp_servers.mcp2p.url" in out["cmdline"]
 
 
-@posix_only
+@pty_required
 def test_agy_uses_stdio_env_proxy_without_writing_session_token_to_disk(
     lab, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bridge, home, store = lab["bridge"], lab["home"], lab["store"]
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     _install_fake(home, "agy")
     res = bridge.pty_spawn_pane(1, "antigravity", "implementer", None, 100, 28, True, str(lab["tmp"]))
     assert res["success"] is True
@@ -224,13 +252,10 @@ def test_agy_uses_stdio_env_proxy_without_writing_session_token_to_disk(
     assert "MCP2P_HUB_URL" not in cfg_text
 
 
-@posix_only
+@pty_required
 def test_config_is_deleted_when_the_panel_is_closed(lab) -> None:
     bridge, home, store = lab["bridge"], lab["home"], lab["store"]
-    path = home / ".local" / "bin" / "claude"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\nsleep 60\n")
-    path.chmod(0o755)
+    _install_fake(home, "claude", body="import time\ntime.sleep(60)\n")
     res = bridge.pty_spawn_pane(1, "claude", "implementer", None, 100, 28, True, str(lab["tmp"]))
     assert res["success"] is True and res["mcp_injection"]["status"] == "injected"
     dirs = list(store.base_dir.iterdir())
@@ -239,7 +264,7 @@ def test_config_is_deleted_when_the_panel_is_closed(lab) -> None:
     assert list(store.base_dir.iterdir()) == []
 
 
-@posix_only
+@pty_required
 def test_resume_uses_only_verified_catalog_argv(lab) -> None:
     bridge, home = lab["bridge"], lab["home"]
     _install_fake(home, "claude")
