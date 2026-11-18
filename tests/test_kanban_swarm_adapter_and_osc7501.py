@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
+import textwrap
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
 from src.a2a.bus import A2ABus
+from src.adapters.terminal.pty_common import (
+    OSC_7501_PROBE_REPLY,
+    Osc7501Parser,
+    compute_session_activity,
+)
 from src.adapters.terminal.pty_host import PosixPtyHostConnector, _Osc7501Parser
 from src.core.domain.context import DomainEvent
 from src.core.events import DomainEventBus
@@ -71,6 +78,93 @@ def test_osc7501_parser_incremental_and_terminators() -> None:
     assert parser.feed(b"\x1b]7501;done;extra\x07") == ["done"]
 
 
+def test_osc7501_parser_kv_formats_kind_and_probe() -> None:
+    parser = Osc7501Parser()
+    assert parser.last_kind is None
+    assert parser.take_probes() == 0
+
+    assert parser.feed(b"\x1b]7501;state=working\x07") == ["working"]
+    assert parser.last_kind is None
+
+    assert parser.feed(b"\x1b]7501;STATE=BLOCKED:KIND=permission\x07") == ["blocked"]
+    assert parser.last_kind == "permission"
+
+    assert parser.feed(b"\x1b]7501;state=blocked;kind=permission\x1b\\") == ["blocked"]
+    assert parser.last_kind == "permission"
+
+    assert parser.feed(b"\x1b]7501;state=idle\x1b\\") == ["idle"]
+    assert parser.last_kind is None
+
+    assert parser.feed(b"\x1b]7501;permission\x07") == ["blocked"]
+    assert parser.last_kind == "permission"
+
+    # Sonda OSC 7501 ("?"): no genera estado, incrementa contador y se resetea con take_probes().
+    assert parser.feed(b"\x1b]7501;?\x07") == []
+    assert parser.take_probes() == 1
+    assert parser.take_probes() == 0
+
+    assert parser.feed(b"\x1b]7501;?\x1b\\\x1b]7501;?\x07") == []
+    assert parser.take_probes() == 2
+    assert parser.take_probes() == 0
+
+
+def test_osc7501_parser_trailing_output_framing() -> None:
+    parser = Osc7501Parser()
+
+    # Sonda, espacios, CRLF o CSI tras idle NO marcan trailing_output.
+    assert parser.feed(b"prev output\x1b]7501;idle\x07") == ["idle"]
+    assert parser.trailing_output is False
+
+    assert parser.feed(b"\x1b]7501;?\x07  \r\n\x1b[0m") == []
+    assert parser.trailing_output is False
+    assert parser.take_probes() == 1
+
+    # Fragmento parcial de prefijo OSC no cuenta como salida visible consumida.
+    assert parser.feed(b"\x1b]75") == []
+    assert parser.trailing_output is False
+    assert parser.feed(b"01;?\x07") == []
+    assert parser.trailing_output is False
+    assert parser.take_probes() == 1
+
+    # Salida visible en el MISMO chunk tras idle SÍ marca trailing_output.
+    assert parser.feed(b"\x1b]7501;idle\x07forged text\n") == ["idle"]
+    assert parser.trailing_output is True
+
+    # Salida visible en un chunk posterior sin nuevo estado también marca trailing_output.
+    assert parser.feed(b"\x1b]7501;idle\x07") == ["idle"]
+    assert parser.trailing_output is False
+    assert parser.feed(b"more visible text\n") == []
+    assert parser.trailing_output is True
+
+
+def test_compute_session_activity_expires_osc_idle_even_after_input() -> None:
+    now = time.monotonic()
+    session = SimpleNamespace(
+        pane_id="pane_1",
+        is_alive=lambda: True,
+        paused=False,
+        last_output_at=now - 0.1,
+        last_input_at=now - 45.0,
+        osc_status="idle",
+        osc_status_at=now - 31.0,
+        osc_kind=None,
+    )
+    activity = compute_session_activity(session, min_silence_s=1.5)
+    assert activity["source"] == "silence_heuristic"
+    assert activity["state"] == "working"
+    assert activity["idle"] is False
+    assert activity["osc_kind"] is None
+
+
+def _close_connector(connector: PosixPtyHostConnector) -> None:
+    shutdown = getattr(connector, "shutdown_all", None) or getattr(connector, "close_all", None)
+    if callable(shutdown):
+        shutdown()
+    else:
+        for s in list(getattr(connector, "_sessions", {}).values()):
+            connector._shutdown_session(s)
+
+
 @pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
 def test_pty_real_osc7501_working_then_idle(tmp_path: Path) -> None:
     connector = PosixPtyHostConnector(max_panes=2)
@@ -104,12 +198,212 @@ def test_pty_real_osc7501_working_then_idle(tmp_path: Path) -> None:
         )
         assert connector.is_pane_idle("pane_1") is True
     finally:
-        shutdown = getattr(connector, "shutdown_all", None) or getattr(connector, "close_all", None)
-        if callable(shutdown):
-            shutdown()
-        else:
-            for s in list(getattr(connector, "_sessions", {}).values()):
-                connector._shutdown_session(s)
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_kv_blocked_kind_permission(tmp_path: Path) -> None:
+    connector = PosixPtyHostConnector(max_panes=2)
+    script = (
+        "import sys, time; "
+        "sys.stdout.write('\\x1b]7501;state=blocked:kind=permission\\x07'); sys.stdout.flush(); "
+        "time.sleep(2.0)"
+    )
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            command=[sys.executable, "-c", script],
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+
+        assert _wait_until(
+            lambda: connector.get_pane_activity("pane_1").get("osc_status") == "blocked"
+        )
+        activity = connector.get_pane_activity("pane_1")
+        assert activity["state"] == "blocked"
+        assert activity["osc_kind"] == "permission"
+        assert activity["idle"] is False
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_probe_replies_without_calling_send_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = PosixPtyHostConnector(max_panes=2)
+    send_input_calls: List[Tuple[Any, Any]] = []
+    orig_send_input = connector.send_input
+
+    def spy_send_input(pane_id: Any, data: Any) -> Dict[str, Any]:
+        send_input_calls.append((pane_id, data))
+        return orig_send_input(pane_id, data)
+
+    monkeypatch.setattr(connector, "send_input", spy_send_input)
+
+    expected_hex = OSC_7501_PROBE_REPLY.hex()
+    script_path = tmp_path / "probe_child.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """\
+            import os, select, sys, termios, time, tty
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                os.write(sys.stdout.fileno(), b"\\x1b]7501;?\\x07")
+                buf = b""
+                deadline = time.monotonic() + 3.0
+                while len(buf) < 9 and time.monotonic() < deadline:
+                    r, _, _ = select.select([fd], [], [], 0.2)
+                    if r:
+                        chunk = os.read(fd, 64)
+                        if not chunk:
+                            break
+                        buf += chunk
+                os.write(sys.stdout.fileno(), b"PROBE_REPLY=" + buf.hex().encode() + b"\\n")
+                time.sleep(0.5)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            """
+        ),
+        encoding="utf-8",
+    )
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            command=[sys.executable, str(script_path)],
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+
+        assert _wait_until(
+            lambda: f"PROBE_REPLY={expected_hex}" in connector.poll_output("pane_1").get("text", "")
+        )
+        assert send_input_calls == []
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_idle_invalidated_by_subsequent_output(tmp_path: Path) -> None:
+    connector = PosixPtyHostConnector(max_panes=2)
+    script_path = tmp_path / "idle_invalidation_child.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """\
+            import sys, time
+            sys.stdout.write("\\x1b]7501;idle\\x07")
+            sys.stdout.flush()
+            sys.stdin.readline()
+            for i in range(6):
+                sys.stdout.write(f"normal output {i}\\n")
+                sys.stdout.flush()
+                time.sleep(0.03)
+            time.sleep(1.0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            command=[sys.executable, str(script_path)],
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+
+        assert _wait_until(
+            lambda: connector.get_pane_activity("pane_1").get("osc_status") == "idle"
+        )
+        assert connector.send_input("pane_1", "\n")["success"] is True
+
+        assert _wait_until(
+            lambda: (
+                "normal output 5" in connector.poll_output("pane_1").get("text", "")
+                and connector.get_pane_activity("pane_1").get("osc_status") is None
+            )
+        )
+        activity = connector.get_pane_activity("pane_1")
+        assert activity["osc_status"] is None
+        assert activity["osc_kind"] is None
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_idle_preserved_on_probe_and_whitespace_but_invalidated_same_chunk(
+    tmp_path: Path,
+) -> None:
+    connector = PosixPtyHostConnector(max_panes=2)
+    script_path = tmp_path / "idle_framing_child.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """\
+            import os, select, sys, termios, time, tty
+            fd_in = sys.stdin.fileno()
+            fd_out = sys.stdout.fileno()
+            old = termios.tcgetattr(fd_in)
+            try:
+                tty.setraw(fd_in)
+                os.write(fd_out, b"\\x1b]7501;idle\\x07")
+                time.sleep(0.15)
+                # Sonda + CRLF + CSI tras idle no debe invalidar idle.
+                os.write(fd_out, b"\\x1b]7501;?\\x07\\r\\n\\x1b[0m")
+                # Consumir la respuesta de sonda del host y esperar señal de fase 2.
+                deadline = time.monotonic() + 3.0
+                buf = b""
+                while time.monotonic() < deadline:
+                    r, _, _ = select.select([fd_in], [], [], 0.1)
+                    if r:
+                        chunk = os.read(fd_in, 64)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        if b"GO" in buf:
+                            break
+                # Mismo write con idle + texto visible posterior debe invalidar idle.
+                os.write(fd_out, b"\\x1b]7501;idle\\x07forged trailing output\\n")
+                time.sleep(1.0)
+            finally:
+                termios.tcsetattr(fd_in, termios.TCSADRAIN, old)
+            """
+        ),
+        encoding="utf-8",
+    )
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            command=[sys.executable, str(script_path)],
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+
+        assert _wait_until(
+            lambda: connector.get_pane_activity("pane_1").get("osc_status") == "idle"
+        )
+        # Dar margen a que la sonda + CRLF + CSI pasen por _reader_loop.
+        time.sleep(0.3)
+        assert connector.get_pane_activity("pane_1").get("osc_status") == "idle"
+
+        assert connector.send_input("pane_1", "GO\n")["success"] is True
+
+        assert _wait_until(
+            lambda: (
+                "forged trailing output" in connector.poll_output("pane_1").get("text", "")
+                and connector.get_pane_activity("pane_1").get("osc_status") is None
+            )
+        )
+        activity = connector.get_pane_activity("pane_1")
+        assert activity["osc_status"] is None
+        assert activity["osc_kind"] is None
+    finally:
+        _close_connector(connector)
 
 
 # ----------------------------------------------------------------------

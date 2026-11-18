@@ -14,6 +14,7 @@ from __future__ import annotations
 import codecs
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -248,7 +249,9 @@ class PtyOutputRingBuffer:
 
 
 OSC_7501_PREFIX = b"\x1b]7501;"
+OSC_7501_PROBE_REPLY = b"\x1b]7501;1\x07"
 OSC_7501_MAX_PENDING = 512
+_ANSI_CSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 OSC_7501_STATUS_MAP: Dict[str, str] = {
     "idle": "idle",
     "working": "working",
@@ -264,8 +267,65 @@ class Osc7501Parser:
 
     def __init__(self) -> None:
         self._buf = bytearray()
+        self.last_kind: Optional[str] = None
+        self.trailing_output: bool = False
+        self._probes: int = 0
+
+    def take_probes(self) -> int:
+        """Devuelve el numero de sondas OSC 7501 pendientes y lo resetea a 0."""
+        count = self._probes
+        self._probes = 0
+        return count
+
+    @staticmethod
+    def _has_visible_output(data: bytes) -> bool:
+        if not data:
+            return False
+        cleaned = _ANSI_CSI_RE.sub(b"", data)
+        return any(byte > 0x20 for byte in cleaned)
+
+    @staticmethod
+    def _parse_payload(raw_payload: bytes) -> Tuple[Optional[str], Optional[str], bool]:
+        """Devuelve (status_mapeado, kind, is_probe) para el payload crudo de una secuencia OSC 7501."""
+        text = raw_payload.decode("utf-8", errors="replace").strip()
+        if text == "?":
+            return None, None, True
+
+        parts = [p.strip() for p in re.split(r"[;:]", text.lower()) if p.strip()]
+        if not parts:
+            return None, None, False
+
+        state_token: Optional[str] = None
+        kind_value: Optional[str] = None
+        has_kv = False
+        for part in parts:
+            if "=" in part:
+                has_kv = True
+                key, val = part.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if key == "state" and val:
+                    state_token = val
+                elif key == "kind" and val:
+                    kind_value = val
+
+        if not has_kv:
+            state_token = parts[0]
+        elif state_token is None and "=" not in parts[0]:
+            state_token = parts[0]
+
+        if state_token is None:
+            return None, None, False
+
+        mapped = OSC_7501_STATUS_MAP.get(state_token)
+        if mapped is None:
+            return None, None, False
+        if kind_value is None and state_token == "permission":
+            kind_value = "permission"
+        return mapped, kind_value, False
 
     def feed(self, chunk: bytes) -> List[str]:
+        self.trailing_output = False
         if not chunk:
             return []
         self._buf.extend(chunk)
@@ -282,12 +342,17 @@ class Osc7501Parser:
                     if OSC_7501_PREFIX.startswith(tail):
                         kept = tail
                         break
+                consumed = bytes(self._buf[: len(self._buf) - len(kept)])
+                if self._has_visible_output(consumed):
+                    self.trailing_output = True
                 self._buf.clear()
                 if kept:
                     self._buf.extend(kept)
                 break
 
             if start > 0:
+                if self._has_visible_output(bytes(self._buf[:start])):
+                    self.trailing_output = True
                 del self._buf[:start]
 
             body_start = len(OSC_7501_PREFIX)
@@ -307,9 +372,12 @@ class Osc7501Parser:
             raw_payload = bytes(self._buf[body_start:term_idx])
             del self._buf[: term_idx + term_len]
 
-            token = raw_payload.decode("utf-8", errors="replace").split(";", 1)[0].strip().lower()
-            mapped = OSC_7501_STATUS_MAP.get(token)
-            if mapped is not None:
+            mapped, kind_value, is_probe = self._parse_payload(raw_payload)
+            if is_probe:
+                self._probes += 1
+            elif mapped is not None:
+                self.last_kind = kind_value
+                self.trailing_output = False
                 statuses.append(mapped)
 
         return statuses
@@ -332,6 +400,7 @@ def compute_session_activity(
     min_silence_s: float = 1.5,
 ) -> Dict[str, Any]:
     norm_pane = session.pane_id if session is not None else pane_id
+    osc_kind = getattr(session, "osc_kind", None) if session is not None else None
     if session is None or not session.is_alive():
         return {
             "pane_id": norm_pane,
@@ -339,6 +408,7 @@ def compute_session_activity(
             "source": "process_state",
             "idle": False,
             "osc_status": session.osc_status if session is not None else None,
+            "osc_kind": osc_kind,
             "silence_s": 0.0,
             "min_silence_s": float(min_silence_s),
         }
@@ -350,6 +420,7 @@ def compute_session_activity(
             "source": "process_state",
             "idle": False,
             "osc_status": session.osc_status,
+            "osc_kind": osc_kind,
             "silence_s": round(max(0.0, time.monotonic() - session.last_output_at), 3),
             "min_silence_s": float(min_silence_s),
         }
@@ -360,13 +431,14 @@ def compute_session_activity(
     osc_age = now - session.osc_status_at if osc_status is not None else float("inf")
     after_last_input = session.osc_status_at >= session.last_input_at
 
-    if osc_status in ("idle", "done") and after_last_input and (osc_age <= 30.0 or session.last_input_at > 0.0):
+    if osc_status in ("idle", "done") and after_last_input and osc_age <= 30.0:
         return {
             "pane_id": norm_pane,
             "state": osc_status,
             "source": "osc7501",
             "idle": True,
             "osc_status": osc_status,
+            "osc_kind": osc_kind,
             "silence_s": round(silence_s, 3),
             "min_silence_s": float(min_silence_s),
         }
@@ -378,6 +450,7 @@ def compute_session_activity(
             "source": "osc7501",
             "idle": False,
             "osc_status": osc_status,
+            "osc_kind": osc_kind,
             "silence_s": round(silence_s, 3),
             "min_silence_s": float(min_silence_s),
         }
@@ -389,6 +462,7 @@ def compute_session_activity(
             "source": "osc7501",
             "idle": False,
             "osc_status": osc_status,
+            "osc_kind": osc_kind,
             "silence_s": round(silence_s, 3),
             "min_silence_s": float(min_silence_s),
         }
@@ -400,6 +474,7 @@ def compute_session_activity(
             "source": "silence_heuristic",
             "idle": True,
             "osc_status": osc_status,
+            "osc_kind": osc_kind,
             "silence_s": round(silence_s, 3),
             "min_silence_s": float(min_silence_s),
         }
@@ -410,6 +485,7 @@ def compute_session_activity(
         "source": "silence_heuristic",
         "idle": False,
         "osc_status": osc_status,
+        "osc_kind": osc_kind,
         "silence_s": round(silence_s, 3),
         "min_silence_s": float(min_silence_s),
     }

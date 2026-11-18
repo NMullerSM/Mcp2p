@@ -38,6 +38,7 @@ from src.adapters.terminal.pty_common import (  # noqa: F401  (re-exportaciones 
     MAX_PANES_SETTING_NAMESPACE,
     OSC_7501_MAX_PENDING as _OSC_7501_MAX_PENDING,
     OSC_7501_PREFIX as _OSC_7501_PREFIX,
+    OSC_7501_PROBE_REPLY,
     OSC_7501_STATUS_MAP as _OSC_7501_STATUS_MAP,
     SHELL_DEFAULT as _SHELL_DEFAULT,
     PaneLimitError,
@@ -104,6 +105,7 @@ class _PtySession:
     last_input_at: float = 0.0
     osc_status: Optional[str] = None
     osc_status_at: float = 0.0
+    osc_kind: Optional[str] = None
     osc_parser: _Osc7501Parser = field(default_factory=_Osc7501Parser, repr=False)
 
     def is_alive(self) -> bool:
@@ -246,9 +248,17 @@ class PosixPtyHostConnector(PtyHostBase):
                         break
                     now = time.monotonic()
                     session.last_output_at = now
-                    for status in session.osc_parser.feed(chunk):
-                        session.osc_status = status
+                    statuses = session.osc_parser.feed(chunk)
+                    if statuses:
+                        session.osc_status = statuses[-1]
                         session.osc_status_at = now
+                        session.osc_kind = session.osc_parser.last_kind
+                    if session.osc_status in ("idle", "done") and session.osc_parser.trailing_output:
+                        session.osc_status = None
+                        session.osc_kind = None
+                    probes = session.osc_parser.take_probes()
+                    if probes > 0:
+                        self._write_osc_probe_reply(session, OSC_7501_PROBE_REPLY * probes)
                     session.buffer.append(chunk)
 
                 if eof:
@@ -263,6 +273,31 @@ class PosixPtyHostConnector(PtyHostBase):
                 pass
             if not session.is_alive():
                 self._mcp_store.cleanup(session.session_id)
+
+    @staticmethod
+    def _write_osc_probe_reply(session: _PtySession, reply: bytes) -> None:
+        """Responde tecnicamente a sondas OSC 7501 directamente en master_fd sin pasar por send_input."""
+        with session.fd_lock:
+            fd = session.master_fd
+            if fd is None:
+                return
+            view = memoryview(reply)
+            written = 0
+            while written < len(view):
+                try:
+                    n = os.write(fd, view[written:])
+                    if n <= 0:
+                        break
+                    written += n
+                except BlockingIOError:
+                    try:
+                        _, wlist, _ = select.select([], [fd], [], 0.1)
+                    except (OSError, ValueError):
+                        break
+                    if not wlist:
+                        break
+                except OSError:
+                    break
 
     @staticmethod
     def _signal_group(session: _PtySession, sig: int) -> bool:
