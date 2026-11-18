@@ -271,6 +271,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   const [installPlan, setInstallPlan] = useState(null);
   const [installBusyCliId, setInstallBusyCliId] = useState(null);
   const [pathEditRequest, setPathEditRequest] = useState({ cliId: null, nonce: 0 });
+  const [pendingNativeConfirmations, setPendingNativeConfirmations] = useState(0);
 
   const mountedRef = useRef(true);
   const panesRef = useRef(panes);
@@ -311,6 +312,17 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
 
   const showNotice = useCallback((res, context = {}) => {
     setNotice(describeTerminalError(res, { maxPanes: catalogRef.current.maxPanes, ...context }));
+  }, []);
+
+  const runWithNativeDialogNotice = useCallback(async (fn) => {
+    setPendingNativeConfirmations((prev) => prev + 1);
+    try {
+      return await fn();
+    } finally {
+      if (mountedRef.current) {
+        setPendingNativeConfirmations((prev) => Math.max(0, prev - 1));
+      }
+    }
   }, []);
 
   const handleCopy = useCallback(async (key, text) => {
@@ -665,7 +677,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     rememberPaneSession(paneId, { sessionId: patch.sessionId, cwd: patch.cwd ?? null, kind: patch.kind || 'cli' });
   }, []);
 
-  const handleLaunchCli = useCallback(async (cliId) => {
+  const handleLaunchCli = useCallback(async (cliId, customCommand = null) => {
     if (!api?.pty_spawn_pane || launchingRef.current) return;
     const cli = catalogRef.current.clis.find((c) => c.id === cliId);
     const context = { cliId, cliName: cli?.display_name };
@@ -680,18 +692,21 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     setLaunchingCliId(cliId);
     try {
       const cwd = cwdInput.trim() || null;
-      const res = await api.pty_spawn_pane(
-        paneId,
-        cliId,
-        roleInput,
-        null,
-        DEFAULT_PTY_SIZE.cols,
-        DEFAULT_PTY_SIZE.rows,
-        true,
-        cwd,
-        false,
-        project?.project_uuid || null
-      );
+      const command = typeof customCommand === 'string' && customCommand.trim() ? customCommand : null;
+      const invoke = () =>
+        api.pty_spawn_pane(
+          paneId,
+          cliId,
+          roleInput,
+          command,
+          DEFAULT_PTY_SIZE.cols,
+          DEFAULT_PTY_SIZE.rows,
+          true,
+          cwd,
+          false,
+          project?.project_uuid || null
+        );
+      const res = await (command ? runWithNativeDialogNotice(invoke) : invoke());
       if (!mountedRef.current) return;
 
       if (res?.hub_url) {
@@ -737,7 +752,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       launchingRef.current = false;
       if (mountedRef.current) setLaunchingCliId(null);
     }
-  }, [api, cwdInput, roleInput, showNotice, markPaneOpened, requestTerminalFocus, closeSlider, project?.project_uuid]);
+  }, [api, cwdInput, roleInput, runWithNativeDialogNotice, showNotice, markPaneOpened, requestTerminalFocus, closeSlider, project?.project_uuid]);
 
   const handlePausePane = useCallback(async (paneId) => {
     if (!api?.pty_pause_pane) return;
@@ -894,7 +909,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     installingRef.current = true;
     setInstallBusyCliId(plan.cliId);
     try {
-      const res = await api.pty_install_cli(plan.cliId, token);
+      const res = await runWithNativeDialogNotice(() => api.pty_install_cli(plan.cliId, token));
       if (!mountedRef.current) return;
       if (!res?.success || !res.pane_id) {
         showNotice(res || { code: 'INTERNAL_ERROR', message: 'No se pudo iniciar la instalación.' }, context);
@@ -918,7 +933,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       installingRef.current = false;
       if (mountedRef.current) setInstallBusyCliId(null);
     }
-  }, [api, installPlan, discardInstallPlan, showNotice, markPaneOpened, requestTerminalFocus, closeSlider, refreshMatrixStatus]);
+  }, [api, installPlan, discardInstallPlan, runWithNativeDialogNotice, showNotice, markPaneOpened, requestTerminalFocus, closeSlider, refreshMatrixStatus]);
 
   // La confirmacion vence (el backend la invalida a los 120 s); se retira tambien de la pantalla.
   useEffect(() => {
@@ -936,7 +951,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   const handleSetCliPath = useCallback(async (cliId, path) => {
     if (!api?.pty_set_cli_path) return;
     try {
-      const res = await api.pty_set_cli_path(cliId, path);
+      const res = await runWithNativeDialogNotice(() => api.pty_set_cli_path(cliId, path));
       if (!mountedRef.current) return;
       if (res?.success) {
         setNotice(null);
@@ -947,7 +962,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     } catch (err) {
       if (mountedRef.current) showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) }, { cliId });
     }
-  }, [api, refreshCatalog, showNotice]);
+  }, [api, refreshCatalog, runWithNativeDialogNotice, showNotice]);
 
   const handleNoticeAction = useCallback((action) => {
     if (action.kind === 'install') {
@@ -968,7 +983,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     const nextEnabled = !pane.autoRelayEnabled;
     patchPane(paneId, { autoRelayBusy: true });
     try {
-      const res = await api.pty_set_auto_relay(paneId, nextEnabled);
+      const invoke = () => api.pty_set_auto_relay(paneId, nextEnabled);
+      const res = await (nextEnabled ? runWithNativeDialogNotice(invoke) : invoke());
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -983,7 +999,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
       }
     }
-  }, [api, patchPane, showNotice]);
+  }, [api, patchPane, runWithNativeDialogNotice, showNotice]);
 
   // F2.4: modo trabajador POR PANEL. Activarlo abre el dialogo nativo en el puente; el estado se persiste alli.
   const handleTogglePaneWorkerMode = useCallback(async (paneId) => {
@@ -992,7 +1008,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     const nextEnabled = !pane.workerMode;
     patchPane(paneId, { workerModeBusy: true });
     try {
-      const res = await api.pty_set_worker_mode(paneId, nextEnabled);
+      const invoke = () => api.pty_set_worker_mode(paneId, nextEnabled);
+      const res = await (nextEnabled ? runWithNativeDialogNotice(invoke) : invoke());
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -1007,12 +1024,12 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
       }
     }
-  }, [api, patchPane, showNotice]);
+  }, [api, patchPane, runWithNativeDialogNotice, showNotice]);
 
   const handleRegisterAgyMcp = useCallback(async () => {
     if (!api?.pty_register_agy_mcp) return;
     try {
-      const res = await api.pty_register_agy_mcp();
+      const res = await runWithNativeDialogNotice(() => api.pty_register_agy_mcp());
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -1026,7 +1043,35 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     } catch (err) {
       if (mountedRef.current) showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
     }
-  }, [api, showNotice]);
+  }, [api, runWithNativeDialogNotice, showNotice]);
+
+  const [unregisterAgyBusy, setUnregisterAgyBusy] = useState(false);
+
+  const handleUnregisterAgyMcp = useCallback(async () => {
+    if (!api?.pty_unregister_agy_mcp || unregisterAgyBusy) return;
+    setUnregisterAgyBusy(true);
+    try {
+      const res = await api.pty_unregister_agy_mcp();
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        showNotice(res);
+        return;
+      }
+      setNotice({
+        ...describeTerminalError({
+          code: 'AGY_MCP_UNREGISTERED',
+          message: res?.message || 'Se quitó el registro de MCP2P en Antigravity.'
+        }),
+        tone: 'info',
+        title: 'Antigravity'
+      });
+      await refreshMatrixStatus();
+    } catch (err) {
+      if (mountedRef.current) showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
+    } finally {
+      if (mountedRef.current) setUnregisterAgyBusy(false);
+    }
+  }, [api, unregisterAgyBusy, showNotice, refreshMatrixStatus]);
 
   const trippedCases = useMemo(() => {
     const raw = matrixStatus.relayStatus?.tripped_cases;
@@ -1041,7 +1086,9 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     setResettingBreaker(true);
     try {
       const first = trippedCases[0];
-      const res = await api.reset_loop_breaker(first.projectUuid, first.cardId, first.sessionId);
+      const res = await runWithNativeDialogNotice(() =>
+        api.reset_loop_breaker(first.projectUuid, first.cardId, first.sessionId)
+      );
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -1055,7 +1102,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     } finally {
       if (mountedRef.current) setResettingBreaker(false);
     }
-  }, [api, resettingBreaker, trippedCases, showNotice, refreshMatrixStatus]);
+  }, [api, resettingBreaker, trippedCases, runWithNativeDialogNotice, showNotice, refreshMatrixStatus]);
 
 
   // ---- Derivados para pintar ----------------------------------------------------------
@@ -1175,6 +1222,28 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       </ViewSliderContent>
       )}
 
+      {pendingNativeConfirmations > 0 && (
+        <div
+          role="status"
+          data-testid="native-dialog-pending-banner"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginBottom: '8px',
+            padding: '7px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(59, 130, 246, 0.45)',
+            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+            color: 'var(--text-primary)',
+            fontSize: '11.5px',
+            flexShrink: 0
+          }}
+        >
+          <span>Confirme la acción en el diálogo del sistema…</span>
+        </div>
+      )}
+
       {/* El Auto-Relay vive ahora en el slider lateral (seccion 'Auto-Relay'); aqui solo queda
           el aviso de Loop Breaker cuando se dispara (EGM-87). */}
       {trippedCases.length > 0 && (
@@ -1266,6 +1335,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
             onResize={handleResizePane}
             onRequestOpenUrl={setPendingExternalUrl}
             onRegisterAgyMcp={api?.pty_register_agy_mcp ? () => void handleRegisterAgyMcp() : undefined}
+            onUnregisterAgyMcp={api?.pty_unregister_agy_mcp ? () => void handleUnregisterAgyMcp() : undefined}
+            unregisterAgyBusy={unregisterAgyBusy}
             registerTerminalRef={registerTerminalRef}
             relayPaused={relay.pausedPanes.includes(panes[paneId].nodeUuid)}
             globalPaused={relay.globalPaused}

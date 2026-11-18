@@ -24,6 +24,7 @@ const PARKED = {
 function makeApi(over = {}) {
   let parked = [PARKED];
   let paused = false;
+  let pausedPanes = [];
   return {
     relay_list_human_inbox: vi.fn(async () => ({ success: true, items: parked })),
     relay_audit_status: vi.fn(async () => ({
@@ -31,7 +32,7 @@ function makeApi(over = {}) {
       chain: { ok: true, rows: 4 },
       messages: { parked: parked.length },
       global_paused: paused,
-      paused_panes: []
+      paused_panes: pausedPanes
     })),
     relay_resolve_parked: vi.fn(async (_id, decision) => {
       parked = [];
@@ -39,7 +40,11 @@ function makeApi(over = {}) {
     }),
     relay_global_pause: vi.fn(async (enabled) => {
       paused = enabled;
-      return { success: true, global_paused: enabled, paused_panes: [] };
+      return { success: true, global_paused: enabled, paused_panes: pausedPanes };
+    }),
+    relay_resume_pane: vi.fn(async (nodeUuid) => {
+      pausedPanes = pausedPanes.filter((id) => id !== nodeUuid);
+      return { success: true, node_uuid: nodeUuid, paused_panes: pausedPanes };
     }),
     relay_send_as_human: vi.fn(async () => ({ success: true, state: 'queued', delivered: true })),
     ...over
@@ -172,5 +177,73 @@ describe('RelayPanel', () => {
     const first = api.relay_audit_status.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     expect(api.relay_audit_status.mock.calls.length).toBeGreaterThanOrEqual(first + 2);
+  });
+
+  it('Reanudar panel llama a relay_resume_pane, confirma y recarga relay_audit_status', async () => {
+    let pausedPanes = ['pane-1234567890ab'];
+    const api = makeApi({
+      relay_audit_status: vi.fn(async () => ({
+        success: true,
+        chain: { ok: true, rows: 4 },
+        messages: { parked: 1 },
+        global_paused: false,
+        paused_panes: pausedPanes
+      })),
+      relay_resume_pane: vi.fn(async (nodeUuid) => {
+        pausedPanes = pausedPanes.filter((id) => id !== nodeUuid);
+        return { success: true, node_uuid: nodeUuid, paused_panes: pausedPanes };
+      })
+    });
+    render(<Harness api={api} />);
+    const btn = await screen.findByTestId('relay-resume-pane-pane-1234567890ab');
+    const callsBefore = api.relay_audit_status.mock.calls.length;
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.relay_resume_pane).toHaveBeenCalledWith('pane-1234567890ab'));
+    await waitFor(() => expect(screen.getByTestId('relay-status-feedback').textContent).toContain('Relevo del panel reanudado.'));
+    await waitFor(() => expect(api.relay_audit_status.mock.calls.length).toBeGreaterThan(callsBefore));
+    await waitFor(() => expect(screen.queryByTestId('relay-paused-panes')).toBeNull());
+  });
+
+  it('si relay_resume_pane devuelve CONFIRMATION_DECLINED muestra el mensaje amigable sin romper', async () => {
+    const api = makeApi({
+      relay_audit_status: vi.fn(async () => ({
+        success: true,
+        chain: { ok: true, rows: 4 },
+        messages: { parked: 1 },
+        global_paused: false,
+        paused_panes: ['pane-1234567890ab']
+      })),
+      relay_resume_pane: vi.fn(async () => ({ success: false, code: 'CONFIRMATION_DECLINED' }))
+    });
+    render(<Harness api={api} />);
+    const btn = await screen.findByTestId('relay-resume-pane-pane-1234567890ab');
+    fireEvent.click(btn);
+    await waitFor(() => expect(api.relay_resume_pane).toHaveBeenCalledWith('pane-1234567890ab'));
+    await waitFor(() => expect(screen.getByTestId('relay-status-feedback').textContent).toContain('Rechazó el diálogo'));
+    expect(screen.getByTestId('relay-resume-pane-pane-1234567890ab').disabled).toBe(false);
+    expect(screen.getByTestId('relay-resume-pane-pane-1234567890ab').textContent).toBe('Reanudar');
+    expect(screen.getByTestId('relay-global-pause-switch').disabled).toBe(false);
+  });
+
+  it('si relay_resume_pane lanza una excepcion muestra el error y limpia el estado bloqueado', async () => {
+    const api = makeApi({
+      relay_audit_status: vi.fn(async () => ({
+        success: true,
+        chain: { ok: true, rows: 4 },
+        messages: { parked: 1 },
+        global_paused: false,
+        paused_panes: ['pane-1234567890ab']
+      })),
+      relay_resume_pane: vi.fn(async () => {
+        throw new Error('puente caido');
+      })
+    });
+    render(<Harness api={api} />);
+    const btn = await screen.findByTestId('relay-resume-pane-pane-1234567890ab');
+    fireEvent.click(btn);
+    await waitFor(() => expect(screen.getByTestId('relay-status-feedback').textContent).toContain('No se pudo reanudar el relevo del panel'));
+    expect(screen.getByTestId('relay-status-feedback').textContent).toContain('puente caido');
+    expect(screen.getByTestId('relay-resume-pane-pane-1234567890ab').disabled).toBe(false);
+    expect(screen.getByTestId('relay-global-pause-switch').disabled).toBe(false);
   });
 });

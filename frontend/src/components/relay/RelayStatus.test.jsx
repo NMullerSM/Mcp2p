@@ -80,4 +80,54 @@ describe('RelayStatus', () => {
     render(<RelayStatus audit={AUDIT_OK} globalPaused feedback={{ tone: 'warning', text: 'Relevo detenido: nadie recibe ni envía mensajes.' }} />);
     expect(screen.getByTestId('relay-status-feedback').textContent).toContain('Relevo detenido');
   });
+
+  it('con pausedPanes vacio no pinta relay-paused-panes', () => {
+    const { rerender } = render(<RelayStatus audit={AUDIT_OK} globalPaused={false} pausedPanes={[]} />);
+    expect(screen.queryByTestId('relay-paused-panes')).toBeNull();
+    rerender(<RelayStatus audit={AUDIT_OK} globalPaused={false} />);
+    expect(screen.queryByTestId('relay-paused-panes')).toBeNull();
+  });
+
+  it('lista paneles en pausa y muestra el boton Reanudar cuando hay accion', () => {
+    const onResume = vi.fn();
+    render(
+      <RelayStatus
+        audit={AUDIT_OK}
+        globalPaused={false}
+        pausedPanes={['pane-1234567890ab']}
+        onResumePane={onResume}
+      />
+    );
+    const section = screen.getByTestId('relay-paused-panes');
+    expect(section.textContent).toContain('Paneles con relevo en pausa');
+    const idChip = screen.getByTitle('pane-1234567890ab');
+    expect(idChip.textContent).toBe('pane-1234567');
+    const btn = screen.getByTestId('relay-resume-pane-pane-1234567890ab');
+    expect(btn.textContent).toBe('Reanudar');
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(onResume).toHaveBeenCalledWith('pane-1234567890ab');
+  });
+
+  it('deshabilita el boton al reanudar u omite el boton si no hay onResumePane', () => {
+    const { rerender } = render(
+      <RelayStatus
+        audit={AUDIT_OK}
+        globalPaused={false}
+        pausedPanes={['pane-1234567890ab', 'pane-abcdef123456']}
+        resumingNode="pane-1234567890ab"
+        onSetGlobalPause={vi.fn()}
+        onResumePane={vi.fn()}
+      />
+    );
+    const activeBtn = screen.getByTestId('relay-resume-pane-pane-1234567890ab');
+    const otherBtn = screen.getByTestId('relay-resume-pane-pane-abcdef123456');
+    expect(activeBtn.textContent).toBe('Reanudando…');
+    expect(activeBtn.disabled).toBe(true);
+    expect(otherBtn.disabled).toBe(true);
+    expect(screen.getByTestId('relay-global-pause-switch').disabled).toBe(true);
+
+    rerender(<RelayStatus audit={AUDIT_OK} globalPaused={false} pausedPanes={['pane-1234567890ab']} />);
+    expect(screen.queryByTestId('relay-resume-pane-pane-1234567890ab')).toBeNull();
+  });
 });

@@ -199,6 +199,19 @@ export function EmptyTerminalSlot({ index, showHint = false, onAdd }) {
  * cuelga en su contenedor, conecta teclado/redimensionado/enlaces mientras esta montado y la
  * suelta al desmontarse SIN destruirla. La salida la escribe el bucle de sondeo del padre.
  */
+const MCP_ACTION_BTN_STYLE = {
+  fontSize: '9.5px',
+  fontWeight: 700,
+  lineHeight: 1.2,
+  padding: '1px 6px',
+  borderRadius: '4px',
+  color: 'var(--text-primary)',
+  backgroundColor: 'var(--bg-subtle)',
+  border: '1px solid var(--border-subtle)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap'
+};
+
 export function TerminalPane({
   pane,
   label,
@@ -210,6 +223,8 @@ export function TerminalPane({
   onResize,
   onRequestOpenUrl,
   onRegisterAgyMcp,
+  onUnregisterAgyMcp,
+  unregisterAgyBusy = false,
   registerTerminalRef,
   hidden = false,
   relayPaused = false,
@@ -414,20 +429,28 @@ export function TerminalPane({
                   event.stopPropagation();
                   onRegisterAgyMcp(paneId);
                 }}
-                style={{
-                  fontSize: '9.5px',
-                  fontWeight: 700,
-                  lineHeight: 1.2,
-                  padding: '1px 6px',
-                  borderRadius: '4px',
-                  color: 'var(--text-primary)',
-                  backgroundColor: 'var(--bg-subtle)',
-                  border: '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap'
-                }}
+                style={MCP_ACTION_BTN_STYLE}
               >
                 Registrar MCP2P en Antigravity
+              </button>
+            )}
+            {pane.cliProfile === 'antigravity' && mcpBadge?.status === 'injected' && onUnregisterAgyMcp && (
+              <button
+                type="button"
+                data-testid={`pane-mcp-unregister-${paneId}`}
+                disabled={unregisterAgyBusy}
+                title="Quita la entrada gestionada de MCP2P en la configuración global de Antigravity"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnregisterAgyMcp(paneId);
+                }}
+                style={{
+                  ...MCP_ACTION_BTN_STYLE,
+                  opacity: unregisterAgyBusy ? 0.55 : 1,
+                  cursor: unregisterAgyBusy ? 'wait' : 'pointer'
+                }}
+              >
+                Quitar MCP2P de Antigravity
               </button>
             )}
             {activityBadge && (

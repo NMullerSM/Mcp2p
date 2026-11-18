@@ -1124,4 +1124,168 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
     expect(badge.textContent).not.toMatch(/MCP Hub/);
     expect(badge.getAttribute('title')).toContain('verified=false');
   });
+
+  it('panel antigravity con status injected muestra «Quitar MCP2P de Antigravity», lo deshabilita mientras corre e invoca pty_unregister_agy_mcp; panel claude NO lo muestra', async () => {
+    let resolveUnregister;
+    const pty_unregister_agy_mcp = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveUnregister = resolve;
+        })
+    );
+    const pty_get_matrix_status = vi.fn(async () => ({
+      success: true,
+      degraded: false,
+      hub_url: 'http://127.0.0.1:8765/mcp',
+      hub_running: true,
+      auto_relay_enabled: false,
+      relay_status: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 },
+      panes: [
+        { pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'antigravity', role: 'implementer', pid: 101 },
+        { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'claude', role: 'implementer', pid: 102 }
+      ],
+      sessions: [
+        {
+          pane_id: 'pane_1',
+          session_id: 's1',
+          alive: true,
+          paused: false,
+          cli_profile: 'antigravity',
+          role: 'implementer',
+          cwd: '/tmp/p1',
+          mcp_injection: { status: 'injected', method: 'stdio_hub_proxy', verified: true }
+        },
+        {
+          pane_id: 'pane_2',
+          session_id: 's2',
+          alive: true,
+          paused: false,
+          cli_profile: 'claude',
+          role: 'implementer',
+          cwd: '/tmp/p2',
+          mcp_injection: { status: 'injected', method: 'stdio_hub_proxy', verified: true }
+        }
+      ]
+    }));
+
+    const api = makeMatrixApi({ pty_unregister_agy_mcp, pty_get_matrix_status });
+    renderMatrix(api);
+
+    const unregisterBtn = await screen.findByTestId('pane-mcp-unregister-pane_1');
+    expect(unregisterBtn.textContent).toBe('Quitar MCP2P de Antigravity');
+    expect(unregisterBtn.disabled).toBe(false);
+    expect(screen.queryByTestId('pane-mcp-unregister-pane_2')).toBeNull();
+
+    fireEvent.click(unregisterBtn);
+    await waitFor(() => expect(unregisterBtn.disabled).toBe(true));
+    fireEvent.click(unregisterBtn);
+    expect(pty_unregister_agy_mcp).toHaveBeenCalledTimes(1);
+
+    resolveUnregister({
+      success: true,
+      code: 'OK',
+      message: 'Se quitó el registro de MCP2P en Antigravity.'
+    });
+    await waitFor(() => expect(unregisterBtn.disabled).toBe(false));
+    await waitFor(() => expect(pty_get_matrix_status).toHaveBeenCalledTimes(2));
+  });
+
+  it('EGM-85: muestra native-dialog-pending-banner mientras hay una confirmacion nativa en curso y desaparece al resolverse', async () => {
+    let resolveRegister;
+    const pty_register_agy_mcp = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveRegister = resolve;
+        })
+    );
+    let resolveAutoRelay;
+    const pty_set_auto_relay = vi.fn((_paneId, enabled) => {
+      if (enabled) {
+        return new Promise((resolve) => {
+          resolveAutoRelay = resolve;
+        });
+      }
+      return Promise.resolve({ success: true, auto_relay_enabled: false });
+    });
+    let resolveSetPath;
+    const pty_set_cli_path = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSetPath = resolve;
+        })
+    );
+    let resolveInstallCli;
+    const pty_prepare_install = vi.fn(async (cliId) => ({
+      success: true,
+      requires_confirmation: true,
+      confirmation_token: 'tok_123',
+      display_name: cliId,
+      command: 'npm install -g @example/missing_cli',
+      method: 'npm',
+      downloads_script: false
+    }));
+    const pty_install_cli = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveInstallCli = resolve;
+        })
+    );
+
+    const api = makeMatrixApi({
+      pty_register_agy_mcp,
+      pty_set_auto_relay,
+      pty_set_cli_path,
+      pty_prepare_install,
+      pty_install_cli,
+      pty_list_cli_catalog: vi.fn(async () =>
+        makeCatalogResponse([makeCli('claude'), notInstalled('missing_cli')])
+      ),
+      pty_get_matrix_status: vi.fn(async () =>
+        statusWith({ status: 'needs_consent', method: 'stdio_env_proxy', verified: true, reason: 'needs_consent' })
+      )
+    });
+    renderMatrix(api);
+
+    expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
+
+    fireEvent.click(await screen.findByTestId('pane-mcp-register-pane_1'));
+    const banner = await screen.findByTestId('native-dialog-pending-banner');
+    expect(banner.getAttribute('role')).toBe('status');
+    expect(banner.textContent).toContain('Confirme la acción en el diálogo del sistema');
+
+    resolveRegister({ success: true, code: 'OK', message: 'MCP2P registrado en Antigravity.' });
+    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+
+    // Activar Auto-Relay tambien muestra el banner; apagarlo no.
+    const autoRelayToggle = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
+    fireEvent.click(autoRelayToggle);
+    expect((await screen.findByTestId('native-dialog-pending-banner')).textContent).toContain(
+      'Confirme la acción en el diálogo del sistema'
+    );
+    resolveAutoRelay({ success: true, auto_relay_enabled: true });
+    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+
+    fireEvent.click(autoRelayToggle);
+    await waitFor(() => expect(pty_set_auto_relay).toHaveBeenLastCalledWith('pane_1', false));
+    expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
+
+    // handleSetCliPath abre dialogo nativo y muestra el banner.
+    fireEvent.click(await screen.findByTestId('cli-path-toggle-claude'));
+    fireEvent.change(await screen.findByTestId('cli-path-input-claude'), { target: { value: '/usr/local/bin/claude' } });
+    fireEvent.click(screen.getByTestId('cli-path-save-claude'));
+    expect((await screen.findByTestId('native-dialog-pending-banner')).textContent).toContain(
+      'Confirme la acción en el diálogo del sistema'
+    );
+    resolveSetPath({ success: true, code: 'OK', cli_id: 'claude', configured_path: '/usr/local/bin/claude' });
+    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+
+    // handleConfirmInstall abre dialogo nativo y muestra el banner.
+    fireEvent.click(await screen.findByTestId('cli-install-missing_cli'));
+    fireEvent.click(await screen.findByTestId('install-confirm-btn'));
+    expect((await screen.findByTestId('native-dialog-pending-banner')).textContent).toContain(
+      'Confirme la acción en el diálogo del sistema'
+    );
+    resolveInstallCli({ success: true, pane_id: 'pane_3', session_id: 's3', pid: 303 });
+    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+  });
 });

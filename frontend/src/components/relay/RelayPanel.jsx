@@ -16,6 +16,7 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
   const [busyId, setBusyId] = useState(null);
   const [inboxFeedback, setInboxFeedback] = useState(null);
   const [pauseBusy, setPauseBusy] = useState(false);
+  const [resumingNode, setResumingNode] = useState(null);
   const [pauseFeedback, setPauseFeedback] = useState(null);
 
   const resolve = useCallback(
@@ -46,7 +47,7 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
 
   const setGlobalPause = useCallback(
     async (enabled) => {
-      if (!api?.relay_global_pause || pauseBusy) return;
+      if (!api?.relay_global_pause || pauseBusy || resumingNode) return;
       const verb = enabled ? 'activar la parada global' : 'reanudar el relevo';
       setPauseBusy(true);
       setPauseFeedback(null);
@@ -67,7 +68,30 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
         await relay.refresh();
       }
     },
-    [api, pauseBusy, relay]
+    [api, pauseBusy, resumingNode, relay]
+  );
+
+  const resumePane = useCallback(
+    async (nodeUuid) => {
+      if (!api?.relay_resume_pane || pauseBusy || resumingNode) return;
+      const verb = 'reanudar el relevo del panel';
+      setResumingNode(nodeUuid);
+      setPauseFeedback(null);
+      try {
+        const res = await api.relay_resume_pane(nodeUuid);
+        if (res?.success === false) {
+          setPauseFeedback({ tone: res.code === 'CONFIRMATION_DECLINED' ? 'info' : 'error', text: describeRelayError(res, verb) });
+        } else {
+          setPauseFeedback({ tone: 'ok', text: 'Relevo del panel reanudado.' });
+        }
+      } catch (err) {
+        setPauseFeedback({ tone: 'error', text: describeRelayError(err, verb) });
+      } finally {
+        setResumingNode(null);
+        await relay.refresh();
+      }
+    },
+    [api, pauseBusy, resumingNode, relay]
   );
 
   const send = useCallback(
@@ -98,9 +122,12 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
         auditError={relay.auditError}
         loading={relay.loading}
         globalPaused={relay.globalPaused}
+        pausedPanes={relay.pausedPanes}
+        resumingNode={resumingNode}
         busy={pauseBusy}
         feedback={pauseFeedback}
         onSetGlobalPause={api?.relay_global_pause ? setGlobalPause : undefined}
+        onResumePane={api?.relay_resume_pane ? resumePane : undefined}
       />
       <HumanInbox
         items={relay.inbox.items}

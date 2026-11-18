@@ -46,8 +46,14 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 - La primera vez que un programa se conecta como operador, MCP2P te pregunta en un diálogo del sistema mostrando qué
   programa es, desde qué carpeta y quién lo lanzó, y qué proyectos podrá usar. Las tareas llegan a la bandeja del
   agente marcadas como enviadas por tu operador, nunca se teclean en su terminal.
+- Puedes quitar el registro de MCP2P en Antigravity desde la propia cabecera del panel cuando ya esté activo, y reanudar
+  desde el panel lateral cualquier terminal cuyo agente haya puesto su propio relevo en pausa.
 
 ### Mejorado
+- Mientras MCP2P espera que respondas a un diálogo de confirmación del sistema, la vista de Terminales muestra un aviso
+  claro para que sepas dónde confirmar.
+- Las terminales integradas reconocen el formato completo de avisos de estado de Claude Code y Codex (incluido cuando
+  esperan permiso) y responden a su sonda de compatibilidad sin escribir órdenes en la terminal.
 - Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que la
   espera larga del modo trabajador no se corte.
 - Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar

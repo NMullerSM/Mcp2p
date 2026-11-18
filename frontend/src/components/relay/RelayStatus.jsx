@@ -1,7 +1,7 @@
 import React from 'react';
 import { ShieldAlert, ShieldCheck } from 'lucide-react';
-import { storageLabel } from './relayModel';
-import { chip, mutedText, sectionTitle, toneBox } from './relayStyles';
+import { shortId, storageLabel } from './relayModel';
+import { btnBase, chip, mutedText, sectionTitle, toneBox } from './relayStyles';
 
 const COUNT_LABELS = [
   ['queued', 'en cola'],
@@ -16,7 +16,18 @@ const COUNT_LABELS = [
  * Estado de la auditoría encadenada del relevo + interruptor de la parada global.
  * Bajar la autonomía (activar la parada) no pide confirmación; reanudar abre un diálogo nativo en el backend.
  */
-export function RelayStatus({ audit, auditError, loading, globalPaused, busy = false, feedback = null, onSetGlobalPause }) {
+export function RelayStatus({
+  audit,
+  auditError,
+  loading,
+  globalPaused,
+  pausedPanes = [],
+  resumingNode = null,
+  busy = false,
+  feedback = null,
+  onSetGlobalPause,
+  onResumePane
+}) {
   const chain = audit?.chain;
   const counts = audit?.messages || {};
   const device = audit?.device;
@@ -49,7 +60,7 @@ export function RelayStatus({ audit, auditError, loading, globalPaused, busy = f
           data-testid="relay-global-pause-switch"
           aria-checked={globalPaused ? 'true' : 'false'}
           aria-label="Parada global del relevo"
-          disabled={busy || !onSetGlobalPause}
+          disabled={busy || Boolean(resumingNode) || !onSetGlobalPause}
           onClick={() => onSetGlobalPause?.(!globalPaused)}
           style={{
             marginLeft: 'auto',
@@ -61,7 +72,7 @@ export function RelayStatus({ audit, auditError, loading, globalPaused, busy = f
             padding: 0,
             position: 'relative',
             backgroundColor: globalPaused ? 'var(--accent-warning)' : 'var(--bg-subtle)',
-            cursor: busy ? 'wait' : 'pointer'
+            cursor: busy || Boolean(resumingNode) ? 'wait' : 'pointer'
           }}
         >
           <span
@@ -78,6 +89,80 @@ export function RelayStatus({ audit, auditError, loading, globalPaused, busy = f
           />
         </button>
       </div>
+
+      {Array.isArray(pausedPanes) && pausedPanes.length > 0 && (
+        <div
+          data-testid="relay-paused-panes"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            padding: '8px 10px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(245, 158, 11, 0.45)',
+            backgroundColor: 'rgba(245, 158, 11, 0.08)'
+          }}
+        >
+          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
+            Paneles con relevo en pausa
+          </span>
+          <ul
+            style={{
+              listStyle: 'none',
+              margin: 0,
+              padding: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '5px'
+            }}
+          >
+            {pausedPanes.map((nodeUuid) => {
+              const isResuming = resumingNode === nodeUuid;
+              const disabled = busy || Boolean(resumingNode);
+              return (
+                <li
+                  key={nodeUuid}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px'
+                  }}
+                >
+                  <span
+                    title={nodeUuid}
+                    style={{
+                      ...chip,
+                      fontSize: '11px',
+                      color: 'var(--text-primary)'
+                    }}
+                  >
+                    {shortId(nodeUuid, 12)}
+                  </span>
+                  {onResumePane && (
+                    <button
+                      type="button"
+                      data-testid={`relay-resume-pane-${nodeUuid}`}
+                      disabled={disabled}
+                      title="Abre un diálogo de confirmación del sistema para reanudar este panel."
+                      onClick={() => onResumePane(nodeUuid)}
+                      style={{
+                        ...btnBase,
+                        padding: '3px 8px',
+                        color: 'var(--accent-primary)',
+                        cursor: disabled ? 'wait' : 'pointer',
+                        opacity: disabled ? 0.65 : 1
+                      }}
+                    >
+                      {isResuming ? 'Reanudando…' : 'Reanudar'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       {feedback && (
         <div data-testid="relay-status-feedback" role="status" style={toneBox(feedback.tone)}>
