@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+import os
+import stat
 import sys
 import textwrap
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
 
+import src.adapters.terminal.pty_host as pty_host_mod
 from src.a2a.bus import A2ABus
+from src.adapters.terminal.cli_catalog import CliCatalogService
 from src.adapters.terminal.pty_common import (
     OSC_7501_PROBE_REPLY,
     Osc7501Parser,
@@ -229,21 +234,64 @@ def test_pty_real_osc7501_kv_blocked_kind_permission(tmp_path: Path) -> None:
         _close_connector(connector)
 
 
-@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
-def test_pty_real_osc7501_probe_replies_without_calling_send_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    connector = PosixPtyHostConnector(max_panes=2)
+class _MemorySettings:
+    def __init__(self) -> None:
+        self.data: Dict[Tuple[str, str], str] = {}
+
+    def get_extension_setting(self, namespace: str, key: str, default: Optional[str] = None) -> Optional[str]:
+        return self.data.get((namespace, key), default)
+
+    def set_extension_setting(self, namespace: str, key: str, value: str) -> None:
+        self.data[(namespace, key)] = value
+
+    def delete_extension_setting(self, namespace: str, key: str) -> bool:
+        return self.data.pop((namespace, key), None) is not None
+
+
+def _make_python_wrapper(tmp_path: Path, name: str, script_py: Path) -> Path:
+    wrapper = tmp_path / name
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script_py}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    return wrapper
+
+
+def _install_double_spy(
+    connector: PosixPtyHostConnector, monkeypatch: pytest.MonkeyPatch
+) -> Tuple[List[Tuple[Any, Any]], List[Tuple[int, bytes, str]]]:
     send_input_calls: List[Tuple[Any, Any]] = []
+    master_writes: List[Tuple[int, bytes, str]] = []
+    master_fds: Set[int] = set()
+
     orig_send_input = connector.send_input
+    orig_openpty = pty_host_mod.pty.openpty
+    orig_os_write = os.write
 
     def spy_send_input(pane_id: Any, data: Any) -> Dict[str, Any]:
         send_input_calls.append((pane_id, data))
         return orig_send_input(pane_id, data)
 
-    monkeypatch.setattr(connector, "send_input", spy_send_input)
+    def spy_openpty() -> Tuple[int, int]:
+        m_fd, s_fd = orig_openpty()
+        master_fds.add(m_fd)
+        return m_fd, s_fd
 
-    expected_hex = OSC_7501_PROBE_REPLY.hex()
+    def spy_os_write(fd: int, data: Any) -> int:
+        if fd in master_fds:
+            caller = inspect.stack()[1].function
+            master_writes.append((fd, bytes(data), caller))
+        return orig_os_write(fd, data)
+
+    monkeypatch.setattr(connector, "send_input", spy_send_input)
+    monkeypatch.setattr(pty_host_mod.pty, "openpty", spy_openpty)
+    monkeypatch.setattr(os, "write", spy_os_write)
+    return send_input_calls, master_writes
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_probe_replies_without_calling_send_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert OSC_7501_PROBE_REPLY == b"\x1b]7501;?1\x07"
     script_path = tmp_path / "probe_child.py"
     script_path.write_text(
         textwrap.dedent(
@@ -256,7 +304,7 @@ def test_pty_real_osc7501_probe_replies_without_calling_send_input(
                 os.write(sys.stdout.fileno(), b"\\x1b]7501;?\\x07")
                 buf = b""
                 deadline = time.monotonic() + 3.0
-                while len(buf) < 9 and time.monotonic() < deadline:
+                while len(buf) < 10 and time.monotonic() < deadline:
                     r, _, _ = select.select([fd], [], [], 0.2)
                     if r:
                         chunk = os.read(fd, 64)
@@ -271,10 +319,26 @@ def test_pty_real_osc7501_probe_replies_without_calling_send_input(
         ),
         encoding="utf-8",
     )
+    fake_claude = _make_python_wrapper(tmp_path, "fake_claude", script_path)
+    settings = _MemorySettings()
+    catalog_svc = CliCatalogService(
+        settings,
+        user_catalog_path=tmp_path / "no_user.json",
+        which=lambda _n: None,
+        home=str(tmp_path / "home"),
+        environ={"SHELL": "/bin/sh"},
+    )
+    assert catalog_svc.set_binary_path("claude", str(fake_claude))["success"] is True
+
+    connector = PosixPtyHostConnector(max_panes=2, catalog_service=catalog_svc, min_available_mb=0)
+    send_input_calls, master_writes = _install_double_spy(connector, monkeypatch)
+
+    expected_hex = b"\x1b]7501;?1\x07".hex()
     try:
         res = connector.spawn_session(
             "pane_1",
-            command=[sys.executable, str(script_path)],
+            cli_profile="claude",
+            command=None,
             cwd=tmp_path,
             use_trampoline=False,
         )
@@ -284,6 +348,193 @@ def test_pty_real_osc7501_probe_replies_without_calling_send_input(
             lambda: f"PROBE_REPLY={expected_hex}" in connector.poll_output("pane_1").get("text", "")
         )
         assert send_input_calls == []
+        assert len(master_writes) == 1
+        assert master_writes[0][1] == b"\x1b]7501;?1\x07"
+        assert master_writes[0][2] == "_write_osc_probe_reply"
+        session = connector._sessions["pane_1"]
+        assert session.osc_probes_replied == 1
+        assert session.osc_probes_dropped == 0
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+@pytest.mark.parametrize(
+    "cli_profile,use_manual_cmd",
+    [
+        ("custom_shell", False),
+        ("claude", True),
+        ("gemini", False),
+    ],
+)
+def test_pty_real_osc7501_probe_ignored_for_custom_shell_manual_and_unverified_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_profile: str,
+    use_manual_cmd: bool,
+) -> None:
+    script_path = tmp_path / "probe_silent_child.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """\
+            import os, select, sys, termios, time, tty
+            fd = sys.stdin.fileno()
+            old = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                os.write(sys.stdout.fileno(), b"\\x1b]7501;?\\x07")
+                buf = b""
+                deadline = time.monotonic() + 0.3
+                while time.monotonic() < deadline:
+                    r, _, _ = select.select([fd], [], [], 0.05)
+                    if r:
+                        chunk = os.read(fd, 64)
+                        if not chunk:
+                            break
+                        buf += chunk
+                os.write(sys.stdout.fileno(), b"PROBE_REPLY=" + buf.hex().encode() + b"\\n")
+                time.sleep(0.3)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_bin = _make_python_wrapper(tmp_path, f"fake_{cli_profile}", script_path)
+    settings = _MemorySettings()
+    catalog_svc = CliCatalogService(
+        settings,
+        user_catalog_path=tmp_path / "no_user.json",
+        which=lambda _n: None,
+        home=str(tmp_path / "home"),
+        environ={"SHELL": str(fake_bin)},
+    )
+    if not use_manual_cmd:
+        assert catalog_svc.set_binary_path(cli_profile, str(fake_bin))["success"] is True
+
+    connector = PosixPtyHostConnector(max_panes=2, catalog_service=catalog_svc, min_available_mb=0)
+    send_input_calls, master_writes = _install_double_spy(connector, monkeypatch)
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            cli_profile=cli_profile,
+            command=[sys.executable, str(script_path)] if use_manual_cmd else None,
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+        assert _wait_until(
+            lambda: "PROBE_REPLY=" in connector.poll_output("pane_1").get("text", "")
+        )
+        text = connector.poll_output("pane_1").get("text", "")
+        assert "PROBE_REPLY=\r\n" in text or "PROBE_REPLY=\n" in text
+        assert send_input_calls == []
+        assert master_writes == []
+        session = connector._sessions["pane_1"]
+        assert session.osc_probes_replied == 0
+        assert session.osc_probes_dropped >= 1
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_probe_avalanche_rate_limited_and_nonblocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script_path = tmp_path / "avalanche_child.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """\
+            import os, sys, termios, time, tty
+            fd_in = sys.stdin.fileno()
+            old = termios.tcgetattr(fd_in)
+            try:
+                tty.setraw(fd_in)
+                payload = b"\\x1b]7501;?\\x07" * 10000
+                view = memoryview(payload)
+                off = 0
+                while off < len(view):
+                    off += os.write(sys.stdout.fileno(), view[off:])
+                os.write(sys.stdout.fileno(), b"\\nAFTER_AVALANCHE\\n")
+                time.sleep(0.5)
+            finally:
+                termios.tcsetattr(fd_in, termios.TCSADRAIN, old)
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_claude = _make_python_wrapper(tmp_path, "fake_claude_avalanche", script_path)
+    settings = _MemorySettings()
+    catalog_svc = CliCatalogService(
+        settings,
+        user_catalog_path=tmp_path / "no_user.json",
+        which=lambda _n: None,
+        home=str(tmp_path / "home"),
+        environ={"SHELL": "/bin/sh"},
+    )
+    assert catalog_svc.set_binary_path("claude", str(fake_claude))["success"] is True
+
+    connector = PosixPtyHostConnector(max_panes=2, catalog_service=catalog_svc, min_available_mb=0)
+    send_input_calls, master_writes = _install_double_spy(connector, monkeypatch)
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            cli_profile="claude",
+            command=None,
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+        assert _wait_until(
+            lambda: "AFTER_AVALANCHE" in connector.poll_output("pane_1").get("text", ""),
+            timeout_s=5.0,
+        )
+        assert send_input_calls == []
+        assert 1 <= len(master_writes) <= 2
+        assert all(
+            data == b"\x1b]7501;?1\x07" and caller == "_write_osc_probe_reply"
+            for _, data, caller in master_writes
+        )
+        session = connector._sessions["pane_1"]
+        assert session.osc_probes_replied <= 2
+        assert session.osc_probes_dropped >= 9998
+    finally:
+        _close_connector(connector)
+
+
+@pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="PTY POSIX no disponible")
+def test_pty_real_osc7501_state_clear_resets_status_and_kind(tmp_path: Path) -> None:
+    connector = PosixPtyHostConnector(max_panes=2)
+    script = (
+        "import sys, time; "
+        "sys.stdout.write('\\x1b]7501;state=blocked:kind=permission\\x07'); sys.stdout.flush(); "
+        "sys.stdin.readline(); "
+        "sys.stdout.write('\\x1b]7501;state=clear\\x07CLEARED_OK\\n'); sys.stdout.flush(); "
+        "time.sleep(0.5)"
+    )
+    try:
+        res = connector.spawn_session(
+            "pane_1",
+            command=[sys.executable, "-c", script],
+            cwd=tmp_path,
+            use_trampoline=False,
+        )
+        assert res["success"] is True
+        assert _wait_until(
+            lambda: connector.get_pane_activity("pane_1").get("osc_status") == "blocked"
+        )
+        assert connector.get_pane_activity("pane_1").get("osc_kind") == "permission"
+
+        assert connector.send_input("pane_1", "\n")["success"] is True
+        assert _wait_until(
+            lambda: (
+                "CLEARED_OK" in connector.poll_output("pane_1").get("text", "")
+                and connector.get_pane_activity("pane_1").get("osc_status") is None
+            )
+        )
+        activity = connector.get_pane_activity("pane_1")
+        assert activity["osc_status"] is None
+        assert activity["osc_kind"] is None
     finally:
         _close_connector(connector)
 

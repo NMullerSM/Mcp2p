@@ -249,9 +249,12 @@ class PtyOutputRingBuffer:
 
 
 OSC_7501_PREFIX = b"\x1b]7501;"
-OSC_7501_PROBE_REPLY = b"\x1b]7501;1\x07"
+OSC_7501_PROBE_REPLY = b"\x1b]7501;?1\x07"
 OSC_7501_MAX_PENDING = 512
+OSC_7501_MAX_PROBE_REPLIES_PER_READ = 1
+OSC_7501_MAX_PROBE_REPLIES_PER_SEC = 2
 _ANSI_CSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+_INCOMPLETE_ANSI_TAIL_RE = re.compile(rb"\x1b(?:\[[0-?]*[ -/]*)?$")
 OSC_7501_STATUS_MAP: Dict[str, str] = {
     "idle": "idle",
     "working": "working",
@@ -267,8 +270,10 @@ class Osc7501Parser:
 
     def __init__(self) -> None:
         self._buf = bytearray()
+        self._trail_buf = bytearray()
         self.last_kind: Optional[str] = None
         self.trailing_output: bool = False
+        self.cleared: bool = False
         self._probes: int = 0
 
     def take_probes(self) -> int:
@@ -284,16 +289,37 @@ class Osc7501Parser:
         cleaned = _ANSI_CSI_RE.sub(b"", data)
         return any(byte > 0x20 for byte in cleaned)
 
+    def _consume_non_osc(self, data: bytes) -> None:
+        """Acumula bytes fuera de OSC 7501 reteniendo escapes/CSI incompletos al final."""
+        if not data:
+            return
+        self._trail_buf.extend(data)
+        if len(self._trail_buf) > OSC_7501_MAX_PENDING:
+            if self._has_visible_output(bytes(self._trail_buf)):
+                self.trailing_output = True
+            self._trail_buf.clear()
+            return
+        match = _INCOMPLETE_ANSI_TAIL_RE.search(self._trail_buf)
+        if match is not None:
+            split = match.start()
+            complete = bytes(self._trail_buf[:split])
+            del self._trail_buf[:split]
+        else:
+            complete = bytes(self._trail_buf)
+            self._trail_buf.clear()
+        if complete and self._has_visible_output(complete):
+            self.trailing_output = True
+
     @staticmethod
-    def _parse_payload(raw_payload: bytes) -> Tuple[Optional[str], Optional[str], bool]:
-        """Devuelve (status_mapeado, kind, is_probe) para el payload crudo de una secuencia OSC 7501."""
+    def _parse_payload(raw_payload: bytes) -> Tuple[Optional[str], Optional[str], bool, bool]:
+        """Devuelve (status_mapeado, kind, is_probe, is_clear) para el payload crudo de OSC 7501."""
         text = raw_payload.decode("utf-8", errors="replace").strip()
         if text == "?":
-            return None, None, True
+            return None, None, True, False
 
         parts = [p.strip() for p in re.split(r"[;:]", text.lower()) if p.strip()]
         if not parts:
-            return None, None, False
+            return None, None, False, False
 
         state_token: Optional[str] = None
         kind_value: Optional[str] = None
@@ -315,21 +341,24 @@ class Osc7501Parser:
             state_token = parts[0]
 
         if state_token is None:
-            return None, None, False
+            return None, None, False, False
+
+        if state_token == "clear":
+            return None, None, False, True
 
         mapped = OSC_7501_STATUS_MAP.get(state_token)
         if mapped is None:
-            return None, None, False
+            return None, None, False, False
         if kind_value is None and state_token == "permission":
             kind_value = "permission"
-        return mapped, kind_value, False
+        return mapped, kind_value, False, False
 
     def feed(self, chunk: bytes) -> List[str]:
-        self.trailing_output = False
         if not chunk:
             return []
         self._buf.extend(chunk)
         statuses: List[str] = []
+        max_buf_len = OSC_7501_MAX_PENDING + len(OSC_7501_PREFIX)
 
         while self._buf:
             start = self._buf.find(OSC_7501_PREFIX)
@@ -343,16 +372,14 @@ class Osc7501Parser:
                         kept = tail
                         break
                 consumed = bytes(self._buf[: len(self._buf) - len(kept)])
-                if self._has_visible_output(consumed):
-                    self.trailing_output = True
+                self._consume_non_osc(consumed)
                 self._buf.clear()
                 if kept:
                     self._buf.extend(kept)
                 break
 
             if start > 0:
-                if self._has_visible_output(bytes(self._buf[:start])):
-                    self.trailing_output = True
+                self._consume_non_osc(bytes(self._buf[:start]))
                 del self._buf[:start]
 
             body_start = len(OSC_7501_PREFIX)
@@ -364,19 +391,28 @@ class Osc7501Parser:
             elif st_idx != -1:
                 term_idx, term_len = st_idx, 2
             else:
-                if len(self._buf) > OSC_7501_MAX_PENDING:
+                if len(self._buf) > max_buf_len:
                     del self._buf[:body_start]
                     continue
                 break
 
+            if term_idx - body_start > OSC_7501_MAX_PENDING:
+                del self._buf[:body_start]
+                continue
+
             raw_payload = bytes(self._buf[body_start:term_idx])
             del self._buf[: term_idx + term_len]
 
-            mapped, kind_value, is_probe = self._parse_payload(raw_payload)
+            mapped, kind_value, is_probe, is_clear = self._parse_payload(raw_payload)
             if is_probe:
                 self._probes += 1
+            elif is_clear:
+                self.cleared = True
+                self.last_kind = None
             elif mapped is not None:
+                self.cleared = False
                 self.last_kind = kind_value
+                self._trail_buf.clear()
                 self.trailing_output = False
                 statuses.append(mapped)
 

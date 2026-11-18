@@ -27,6 +27,13 @@
         "verified": true,
         "note": "Verificado con `claude --help` local: -c/--continue y -r/--resume <id>."
       },
+      "osc7501": {
+        "status": "verified",
+        "probe_reply_payload": "?1",
+        "verified_with_cli_version": "2.1.325",
+        "verified_on": "2026-11-18",
+        "note": "Medido en binario local claude 2.1.325 (Rki/HE): espera ESC ] 7501 ; ?1 BEL (data.startsWith('?')). Emite state=idle|working|blocked|clear[:kind=permission]."
+      },
       "install": {
         "linux": [
           {
@@ -117,6 +124,10 @@
         "verified": false,
         "note": "No verificado: gemini no esta instalado en esta maquina."
       },
+      "osc7501": {
+        "status": "unverified",
+        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
+      },
       "install": {
         "linux": [
           {
@@ -185,6 +196,10 @@
         "argv": ["resume"],
         "verified": true,
         "note": "Documentado: `codex resume` reabre un chat reciente."
+      },
+      "osc7501": {
+        "status": "unverified",
+        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
       },
       "install": {
         "linux": [
@@ -269,6 +284,10 @@
         "verified": true,
         "note": "Verificado con `opencode run --help` local: -c/--continue y -s/--session."
       },
+      "osc7501": {
+        "status": "unverified",
+        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
+      },
       "install": {
         "linux": [
           {
@@ -345,6 +364,10 @@
         "verified": true,
         "note": "Verificado con `agy --help` local: -c/--continue y --conversation <id>."
       },
+      "osc7501": {
+        "status": "unverified",
+        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
+      },
       "install": {
         "linux": [
           {
@@ -399,6 +422,10 @@
         "argv": [],
         "verified": true,
         "note": ""
+      },
+      "osc7501": {
+        "status": "unverified",
+        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
       },
       "install": {
         "linux": [],

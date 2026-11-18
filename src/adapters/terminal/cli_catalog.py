@@ -248,6 +248,16 @@ class InstallOption:
         return install_requirements(self.method, self.command)
 
 
+def _default_osc7501() -> Dict[str, str]:
+    return {
+        "status": "unverified",
+        "probe_reply_payload": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "",
+    }
+
+
 @dataclass(frozen=True)
 class CliSpec:
     id: str
@@ -264,6 +274,7 @@ class CliSpec:
     source: str = "repo"
     verified: bool = True
     shell_env: Optional[str] = None
+    osc7501: Mapping[str, str] = field(default_factory=_default_osc7501)
 
     def mcp_verified(self, frozen: Optional[bool] = None) -> bool:
         """True si la integracion MCP de este CLI esta verificada para el modo de ejecucion pedido.
@@ -276,6 +287,19 @@ class CliSpec:
         is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
         key = "verified_frozen" if is_frozen else "verified_dev"
         return bool(self.mcp.get(key, self.mcp.get("verified", False)))
+
+    def osc7501_probe_reply_bytes(self) -> Optional[bytes]:
+        """Devuelve la respuesta a la sonda OSC 7501 solo para CLIs verificados del catalogo del repo."""
+        if self.source != "repo" or self.kind != "agent_cli":
+            return None
+        if self.osc7501.get("status") != "verified":
+            return None
+        payload = self.osc7501.get("probe_reply_payload", "")
+        if not isinstance(payload, str) or not payload:
+            return None
+        if _OSC7501_PROBE_PAYLOAD_RE.fullmatch(payload) is None:
+            return None
+        return f"\x1b]7501;{payload}\x07".encode("ascii")
 
     @property
     def binary_names(self) -> Tuple[str, ...]:
@@ -303,13 +327,15 @@ class CliCatalog:
 
 _ENTRY_KEYS = (
     "id", "display_name", "icon", "kind", "binary", "binary_aliases", "candidate_paths",
-    "launch_flags", "mcp", "resume", "install", "shell_env",
+    "launch_flags", "mcp", "resume", "install", "shell_env", "osc7501",
 )
 _INSTALL_KEYS = ("method", "command", "verified", "source_url", "note")
 _MCP_KEYS = (
     "method", "format", "argv", "env", "path", "verified", "note",
     "verified_dev", "verified_frozen", "verified_with_cli_version", "verified_on",
 )
+_OSC7501_KEYS = ("status", "probe_reply_payload", "verified_with_cli_version", "verified_on", "note")
+_OSC7501_PROBE_PAYLOAD_RE = re.compile(r"\?[0-9A-Za-z:;_=-]{0,31}")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _CLI_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,31}")
 _RESUME_KEYS = ("argv", "verified", "note")
@@ -482,6 +508,52 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
             )
         install[plat] = tuple(parsed)
 
+    osc_raw = raw.get("osc7501")
+    if osc_raw is None:
+        osc_raw = {}
+    if not isinstance(osc_raw, dict):
+        raise CatalogValidationError(f"{where}.osc7501: se esperaba un objeto.")
+    _only_keys(osc_raw, _OSC7501_KEYS, f"{where}.osc7501")
+    osc_status = _text(osc_raw.get("status", "unverified"), f"{where}.osc7501.status", max_len=16)
+    if osc_status not in ("verified", "unverified"):
+        raise CatalogValidationError(f"{where}.osc7501.status: debe ser 'verified' o 'unverified'.")
+    osc_payload = _text(
+        osc_raw.get("probe_reply_payload", ""),
+        f"{where}.osc7501.probe_reply_payload",
+        max_len=32,
+        allow_empty=True,
+    )
+    osc_cli_version = _text(
+        osc_raw.get("verified_with_cli_version", ""),
+        f"{where}.osc7501.verified_with_cli_version",
+        max_len=32,
+        allow_empty=True,
+    )
+    osc_verified_on = _text(
+        osc_raw.get("verified_on", ""),
+        f"{where}.osc7501.verified_on",
+        max_len=10,
+        allow_empty=True,
+    )
+    osc_note = _text(osc_raw.get("note", ""), f"{where}.osc7501.note", max_len=300, allow_empty=True)
+    if source == "user" or kind == "shell":
+        osc_status = "unverified"
+        osc_payload = ""
+    if osc_status == "verified":
+        if not osc_payload or _OSC7501_PROBE_PAYLOAD_RE.fullmatch(osc_payload) is None:
+            raise CatalogValidationError(f"{where}.osc7501.probe_reply_payload invalido.")
+        if not osc_cli_version or _CLI_VERSION_RE.fullmatch(osc_cli_version) is None:
+            raise CatalogValidationError(f"{where}.osc7501.verified_with_cli_version invalido.")
+        if not osc_verified_on or _DATE_RE.fullmatch(osc_verified_on) is None:
+            raise CatalogValidationError(f"{where}.osc7501.verified_on: se esperaba AAAA-MM-DD.")
+    osc7501: Dict[str, str] = {
+        "status": osc_status,
+        "probe_reply_payload": osc_payload,
+        "verified_with_cli_version": osc_cli_version,
+        "verified_on": osc_verified_on,
+        "note": osc_note,
+    }
+
     return CliSpec(
         id=cli_id,
         display_name=_text(raw.get("display_name"), f"{where}.display_name", max_len=60),
@@ -497,6 +569,7 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
         source=source,
         verified=(source == "repo"),
         shell_env=shell_env,
+        osc7501=osc7501,
     )
 
 
