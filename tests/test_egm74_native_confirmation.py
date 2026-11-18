@@ -3,7 +3,9 @@ de binario o abrir un panel con un comando propio. El JS puede llamar al puente,
 
 from __future__ import annotations
 
+import os
 import stat
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -15,7 +17,7 @@ from src.adapters.terminal.mcp_injection import PaneMcpConfigStore
 from src.app.api_bridge import ApiBridge
 from src.app.native_confirm import NativeConfirmationService
 
-pytestmark = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
+posix_only = pytest.mark.skipif(not PosixPtyHostConnector.is_available(), reason="Solo POSIX")
 
 
 @pytest.fixture(autouse=True)
@@ -24,19 +26,31 @@ def _real_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def bridge(tmp_path: Path):
+def bridge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("src.app.ui_adapters.extensions_lab_ui.is_unsupported_terminal_platform", lambda: False)
     b = ApiBridge(db_manager=make_test_db())
     primary = b.core_kernel.terminal_connector.primary
-    primary.catalog_service = CliCatalogService(
+    plat = "win32" if sys.platform == "win32" else "linux"
+    catalog = CliCatalogService(
         b.core_kernel.extension_repo,
         user_catalog_path=tmp_path / "sin_usuario.json",
         which=lambda name: "/usr/bin/" + name if name in {"npm", "node"} else None,
-        platform="linux",
+        platform=plat,
         home=str(tmp_path / "home"),
-        environ={"SHELL": "/bin/sh"},
+        environ=(
+            {"COMSPEC": os.environ.get("COMSPEC", "C:\\Windows\\System32\\cmd.exe")}
+            if plat == "win32"
+            else {"SHELL": "/bin/sh"}
+        ),
     )
-    primary.min_available_mb = 0
-    primary._mcp_store = PaneMcpConfigStore(tmp_path / "mcp")
+    if hasattr(primary, "catalog_service"):
+        primary.catalog_service = catalog
+    else:
+        monkeypatch.setattr(b.extensions_ui, "_catalog_service", lambda: catalog)
+    if hasattr(primary, "min_available_mb"):
+        primary.min_available_mb = 0
+    if hasattr(primary, "_mcp_store"):
+        primary._mcp_store = PaneMcpConfigStore(tmp_path / "mcp")
     try:
         yield b
     finally:
@@ -55,6 +69,11 @@ class _Dialog:
 
 
 def _exec(path: Path) -> Path:
+    if sys.platform == "win32":
+        target = path if path.suffix.lower() in {".cmd", ".exe"} else path.with_suffix(".cmd")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        return target
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\nexit 0\n")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -94,6 +113,7 @@ def test_set_cli_path_shows_the_exact_path_and_only_persists_when_accepted(bridg
     assert dialog.calls == []
 
 
+@posix_only
 def test_custom_shell_with_command_shows_the_exact_argv_and_runs_only_when_accepted(bridge: ApiBridge, tmp_path: Path) -> None:
     marker = tmp_path / "ejecutado"
     dialog = _Dialog([False, True])
@@ -115,6 +135,7 @@ def test_custom_shell_with_command_shows_the_exact_argv_and_runs_only_when_accep
     assert marker.exists()
 
 
+@posix_only
 def test_plain_shell_and_catalog_clis_need_no_dialog(bridge: ApiBridge, tmp_path: Path) -> None:
     dialog = _Dialog([])
     bridge.confirmations.dialog = dialog

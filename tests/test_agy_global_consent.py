@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
+import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
-from test_egm70_cli_hub_connection import _install_fake, lab, posix_only  # noqa: F401  (fixture `lab`)
+from conftest import make_test_db
+from src.adapters.outbound.extension_gate import NullAgentTerminalConnector
+from src.adapters.terminal import CliCatalogService
+from src.adapters.terminal.mcp_injection import PaneMcpConfigStore
+from src.app.api_bridge import ApiBridge
 
 
 class Dialog:
@@ -23,15 +30,81 @@ class Dialog:
         return self.answers.pop(0) if self.answers else False
 
 
+def _install_fake_agy(home: Path) -> Path:
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        exe = bin_dir / "agy.cmd"
+        exe.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        return exe
+    exe = bin_dir / "agy"
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    return exe
+
+
 @pytest.fixture
-def agy(lab, monkeypatch: pytest.MonkeyPatch):
-    home: Path = lab["home"]
+def agy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("MCP2P_TEST_AUTO_CONFIRM", raising=False)  # estos tests SI pasan por el dialogo
-    _install_fake(home, "agy")
-    lab["cfg"] = home / ".gemini" / "config" / "mcp_config.json"
-    return lab
+    monkeypatch.setattr("src.app.ui_adapters.extensions_lab_ui.is_unsupported_terminal_platform", lambda: False)
+    fake_agy = _install_fake_agy(home)
+
+    b = ApiBridge(db_manager=make_test_db())
+    terminal = b.extensions_ui._get_terminal_connector()
+    primary = getattr(terminal, "primary", terminal)
+    plat = "win32" if sys.platform == "win32" else "linux"
+    catalog_svc = CliCatalogService(
+        b.core_kernel.extension_repo,
+        user_catalog_path=tmp_path / "sin_usuario.json",
+        which=lambda name: str(fake_agy) if name in {"agy", "antigravity"} else None,
+        platform=plat,
+        home=str(home),
+        environ=(
+            {"COMSPEC": os.environ.get("COMSPEC", "C:\\Windows\\System32\\cmd.exe")}
+            if plat == "win32"
+            else {"SHELL": "/bin/sh"}
+        ),
+    )
+    store = PaneMcpConfigStore(tmp_path / "mcp-store")
+
+    if isinstance(primary, NullAgentTerminalConnector) or not hasattr(primary, "_mcp_store"):
+        monkeypatch.setattr(b.extensions_ui, "_catalog_service", lambda: catalog_svc)
+
+        def _fake_spawn_session(**kw: Any) -> Dict[str, Any]:
+            spec = catalog_svc.get_spec(kw.get("cli_profile"))
+            injection = store.prepare(
+                spec,
+                session_id=f"{kw['pane_id']}-fake",
+                hub_url=kw.get("hub_url"),
+                token=kw.get("session_token"),
+            )
+            return {
+                "success": True,
+                "degraded": False,
+                "pane_id": kw["pane_id"],
+                "session_id": f"{kw['pane_id']}-fake",
+                "mcp_injection": injection.public(),
+            }
+
+        monkeypatch.setattr(terminal, "spawn_session", _fake_spawn_session)
+    else:
+        primary.catalog_service = catalog_svc
+        primary.min_available_mb = 0
+        primary._mcp_store = store
+
+    try:
+        yield {
+            "bridge": b,
+            "home": home,
+            "cfg": home / ".gemini" / "config" / "mcp_config.json",
+            "tmp": tmp_path,
+        }
+    finally:
+        b._close_terminal_matrix()
+        b.core_kernel.close()
 
 
 def _spawn(lab, pane: int):
@@ -40,7 +113,6 @@ def _spawn(lab, pane: int):
     return res["mcp_injection"]
 
 
-@posix_only
 def test_spawn_with_declined_dialog_opens_panel_but_writes_nothing_and_does_not_ask_again(agy) -> None:
     dialog = Dialog(False)
     agy["bridge"].confirmations.dialog = dialog
@@ -57,7 +129,6 @@ def test_spawn_with_declined_dialog_opens_panel_but_writes_nothing_and_does_not_
     assert agy["bridge"].pty_get_agy_mcp_status()["consent"] == "declined"
 
 
-@posix_only
 def test_spawn_without_window_keeps_needs_consent_and_asks_again_next_time(agy) -> None:
     # Sin ventana ni dialogo inyectado: CONFIRMATION_UNAVAILABLE. No se registra ni se recuerda nada.
     agy["bridge"].confirmations.dialog = None
@@ -67,7 +138,6 @@ def test_spawn_without_window_keeps_needs_consent_and_asks_again_next_time(agy) 
     assert agy["bridge"].pty_get_agy_mcp_status()["consent"] == "unset"
 
 
-@posix_only
 def test_accepted_dialog_registers_shows_exact_entry_and_is_remembered(agy) -> None:
     dialog = Dialog(True)
     agy["bridge"].confirmations.dialog = dialog
@@ -89,7 +159,6 @@ def test_accepted_dialog_registers_shows_exact_entry_and_is_remembered(agy) -> N
     assert len(dialog.shown) == 1
 
 
-@posix_only
 def test_register_button_retries_with_dialog_after_a_decline(agy) -> None:
     agy["bridge"].confirmations.dialog = Dialog(False)
     assert _spawn(agy, 1)["status"] == "needs_consent"
@@ -105,7 +174,6 @@ def test_register_button_retries_with_dialog_after_a_decline(agy) -> None:
     assert agy["bridge"].pty_get_agy_mcp_status()["registration"] == "managed"
 
 
-@posix_only
 def test_register_button_declined_writes_nothing(agy) -> None:
     agy["bridge"].confirmations.dialog = Dialog(False)
     res = agy["bridge"].pty_register_agy_mcp()
@@ -113,7 +181,6 @@ def test_register_button_declined_writes_nothing(agy) -> None:
     assert not (agy["home"] / ".gemini").exists()
 
 
-@posix_only
 def test_dialog_warns_when_a_manual_entry_will_be_replaced_and_keeps_it_in_the_backup(agy) -> None:
     cfg: Path = agy["cfg"]
     cfg.parent.mkdir(parents=True)
@@ -131,7 +198,6 @@ def test_dialog_warns_when_a_manual_entry_will_be_replaced_and_keeps_it_in_the_b
     assert cfg.with_name(cfg.name + ".mcp2p.bak").read_bytes() == original
 
 
-@posix_only
 def test_revoke_removes_only_our_entry_and_stops_future_registration(agy) -> None:
     cfg: Path = agy["cfg"]
     cfg.parent.mkdir(parents=True)
@@ -151,7 +217,6 @@ def test_revoke_removes_only_our_entry_and_stops_future_registration(agy) -> Non
     assert "mcp2p" not in json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]
 
 
-@posix_only
 def test_revoke_leaves_a_manual_entry_alone(agy) -> None:
     cfg: Path = agy["cfg"]
     cfg.parent.mkdir(parents=True)

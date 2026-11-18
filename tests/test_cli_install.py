@@ -134,11 +134,17 @@ def _write_user_catalog(path: Path) -> Path:
     return path
 
 
-def _make_bridge(tmp_path: Path, available_tools: set[str], *, user_catalog: bool = False) -> ApiBridge:
+def _make_bridge(
+    tmp_path: Path,
+    available_tools: set[str],
+    *,
+    user_catalog: bool = False,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+) -> ApiBridge:
     bridge = ApiBridge(db_manager=make_test_db())
     primary = bridge.core_kernel.terminal_connector.primary
     ucat = _write_user_catalog(tmp_path / "u.json") if user_catalog else tmp_path / "sin_usuario.json"
-    primary.catalog_service = CliCatalogService(
+    catalog = CliCatalogService(
         bridge.core_kernel.extension_repo,
         user_catalog_path=ucat,
         which=lambda name: f"/usr/bin/{name}" if name in available_tools else None,
@@ -146,16 +152,24 @@ def _make_bridge(tmp_path: Path, available_tools: set[str], *, user_catalog: boo
         home=str(tmp_path / "home"),
         environ={"SHELL": "/bin/sh"},
     )
-    primary.min_available_mb = 0
+    if hasattr(primary, "catalog_service"):
+        primary.catalog_service = catalog
+    elif monkeypatch is not None:
+        monkeypatch.setattr(bridge.extensions_ui, "_catalog_service", lambda svc=catalog: svc)
+    else:
+        bridge.extensions_ui._catalog_service = lambda svc=catalog: svc  # type: ignore[method-assign]
+    if hasattr(primary, "min_available_mb"):
+        primary.min_available_mb = 0
     return bridge
 
 
 @pytest.fixture
-def make_bridge(tmp_path: Path):
+def make_bridge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("src.app.ui_adapters.extensions_lab_ui.is_unsupported_terminal_platform", lambda: False)
     created: List[ApiBridge] = []
 
     def _factory(tools: set[str], **kw: Any) -> ApiBridge:
-        b = _make_bridge(tmp_path, tools, **kw)
+        b = _make_bridge(tmp_path, tools, monkeypatch=monkeypatch, **kw)
         created.append(b)
         return b
 
@@ -165,7 +179,6 @@ def make_bridge(tmp_path: Path):
         b.core_kernel.close()
 
 
-@posix_only
 def test_prepare_returns_exact_catalog_command_token_and_prefers_package_manager(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node", "curl", "bash"})
     res = b.pty_prepare_install("claude")
@@ -183,7 +196,6 @@ def test_prepare_returns_exact_catalog_command_token_and_prefers_package_manager
     assert res2["command"] == "curl -fsSL https://claude.ai/install.sh | bash"
 
 
-@posix_only
 def test_prepare_reports_missing_prerequisites_without_token_or_install(make_bridge: Any) -> None:
     b = make_bridge(set())
     res = b.pty_prepare_install("claude")
@@ -198,7 +210,6 @@ def test_prepare_reports_missing_prerequisites_without_token_or_install(make_bri
     assert b.pty_get_matrix_status()["sessions"] == []
 
 
-@posix_only
 @pytest.mark.parametrize(
     "bad_id",
     ["nope", "", None, 7, ["claude"], {"id": "claude"}, "claude; rm -rf /", "claude && id", "claude\nid",
@@ -211,7 +222,6 @@ def test_prepare_and_install_reject_unknown_or_injected_cli_ids(make_bridge: Any
     assert b.pty_get_matrix_status()["sessions"] == []
 
 
-@posix_only
 def test_install_without_or_with_bad_token_never_runs(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node"})
     prep = b.pty_prepare_install("claude")
@@ -227,7 +237,6 @@ def test_install_without_or_with_bad_token_never_runs(make_bridge: Any) -> None:
     assert b.extensions_ui._get_install_broker().pending_count() == 1
 
 
-@posix_only
 def test_token_for_another_cli_is_rejected_and_burned(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node"})
     claude_tok = b.pty_prepare_install("claude")["confirmation_token"]
@@ -236,7 +245,6 @@ def test_token_for_another_cli_is_rejected_and_burned(make_bridge: Any) -> None:
     assert b.pty_get_matrix_status()["sessions"] == []
 
 
-@posix_only
 def test_expired_token_is_rejected(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node"})
     clock = _Clock()
@@ -285,7 +293,6 @@ def test_install_runs_catalog_command_in_a_real_pane_once(make_bridge: Any, tmp_
     assert b.pty_install_cli("claude", prep["confirmation_token"])["code"] == "INSTALL_TOKEN_INVALID"
 
 
-@posix_only
 def test_install_pane_selection_and_pane_id_injection(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node"})
     for bad_pane in ("pane_1; id", "../x", "pane_9", 99, "x\n", True):
@@ -298,7 +305,6 @@ def test_install_pane_selection_and_pane_id_injection(make_bridge: Any) -> None:
     assert b.extensions_ui._get_install_broker().pending_count() == 1
 
 
-@posix_only
 def test_user_catalog_cli_is_listed_but_not_installable_and_malicious_entry_is_dropped(make_bridge: Any) -> None:
     b = make_bridge({"npm", "node", "curl", "bash"}, user_catalog=True)
     ids = {c["id"] for c in b.pty_list_cli_catalog()["clis"]}
