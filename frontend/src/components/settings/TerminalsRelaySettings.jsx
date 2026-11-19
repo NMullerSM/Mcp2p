@@ -1,12 +1,14 @@
 import React, { useEffect, useRef } from 'react';
 import { HELP_SECTIONS } from './helpTexts';
 import { DeliverySettingsSection } from './DeliverySettingsSection';
+import { CliMeasurementSettingsSection } from './CliMeasurementSettingsSection';
 import { SessionRestoreSettingsSection } from './SessionRestoreSettingsSection';
 import { ConfirmationPrefsSection } from './ConfirmationPrefsSection';
 import { NodesSettingsSection } from './NodesSettingsSection';
 
 const SLOT_COMPONENTS = {
   'ajustes-entrega': DeliverySettingsSection,
+  'ajustes-medicion': CliMeasurementSettingsSection,
   'ajustes-sesiones': SessionRestoreSettingsSection,
   'ajustes-confirmaciones': ConfirmationPrefsSection,
   'ajustes-nodos': NodesSettingsSection

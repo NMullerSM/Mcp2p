@@ -10,6 +10,7 @@ const EXPECTED_ANCHORS = [
   'ayuda-auto-relay',
   'ayuda-modo-trabajador',
   'ayuda-entrega-directa',
+  'ayuda-medicion',
   'ayuda-roles',
   'ayuda-mandato',
   'ayuda-otros-equipos',
@@ -19,6 +20,7 @@ const EXPECTED_ANCHORS = [
 
 const EXPECTED_SLOTS = [
   'ajustes-entrega',
+  'ajustes-medicion',
   'ajustes-sesiones',
   'ajustes-confirmaciones',
   'ajustes-nodos'
