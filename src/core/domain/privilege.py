@@ -13,7 +13,7 @@ del catalogo y no es exhaustiva (un falso positivo solo hace que se pida confirm
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence
+from typing import Dict, FrozenSet, Iterable, Optional, Sequence
 
 SHELL = "shell"
 STANDARD = "standard"
@@ -25,20 +25,20 @@ ELEVATED_FLAGS = frozenset(
         "--dangerously-skip-permissions",  # Claude Code
         "--allow-dangerously-skip-permissions",  # Claude Code (permite activarlo en caliente)
         "--dangerously-bypass-approvals-and-sandbox",  # Codex
-        "--yolo",  # Codex (alias) / Gemini / otros
+        "--yolo",  # Codex (alias) / otros
     }
 )
 # Pares opcion=valor (se aceptan `--opt valor` y `--opt=valor`).
 ELEVATED_OPTION_VALUES = {
     "--permission-mode": frozenset({"bypasspermissions"}),  # Claude Code
-    "--approval-mode": frozenset({"yolo"}),  # Gemini
+    "--approval-mode": frozenset({"yolo"}),  # flag generico de aprobacion automatica
     "--sandbox": frozenset({"danger-full-access"}),  # Codex
     "-s": frozenset({"danger-full-access"}),  # Codex (corta)
     "--ask-for-approval": frozenset({"never"}),  # Codex
     "-a": frozenset({"never"}),  # Codex (corta)
 }
 # Opciones cortas que solo significan «sin permisos» en un CLI concreto.
-PROFILE_SHORT_FLAGS = {"gemini": frozenset({"-y"})}
+PROFILE_SHORT_FLAGS: Dict[str, FrozenSet[str]] = {}
 
 
 def _argv_is_elevated(argv: Sequence[str], profile: str) -> bool:

@@ -8,7 +8,7 @@ afterEach(cleanup);
 
 const TARGETS = [
   { paneId: 'pane_1', label: 'Terminal 1 · Claude' },
-  { paneId: 'pane_2', label: 'Terminal 2 · Gemini' }
+  { paneId: 'pane_2', label: 'Terminal 2 · Codex' }
 ];
 
 function type(text) {
@@ -30,7 +30,7 @@ describe('SendToAgent', () => {
   });
 
   it('no deja enviar vacio; con texto envia (panel, texto, tipo) y limpia el campo al acertar', async () => {
-    const onSend = vi.fn(async () => ({ ok: true, text: 'Enviado a la bandeja de Terminal 2 · Gemini.' }));
+    const onSend = vi.fn(async () => ({ ok: true, text: 'Enviado a la bandeja de Terminal 2 · Codex.' }));
     render(<SendToAgent targets={TARGETS} onSend={onSend} />);
     expect(screen.getByTestId('send-to-agent-submit').disabled).toBe(true);
     fireEvent.change(screen.getByTestId('send-to-agent-target'), { target: { value: 'pane_2' } });

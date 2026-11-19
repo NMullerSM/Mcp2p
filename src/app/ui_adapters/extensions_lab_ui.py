@@ -805,6 +805,26 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         """Lista los CLIs del catalogo con estado de instalacion; no ejecuta ningun binario."""
         try:
             svc = self._catalog_service()
+            settings_store = getattr(svc, "_settings", None) or getattr(self.core_kernel, "extension_repo", None) or self.db
+            cleaned = svc.cleanup_removed_profiles(settings_store)
+            removed_profiles: List[Dict[str, str]] = []
+            if cleaned:
+                notice_key = "catalog.removed_notice.gemini"
+                getter = getattr(self.db, "get_setting", None)
+                setter = getattr(self.db, "set_setting", None)
+                already_shown = False
+                if callable(getter):
+                    try:
+                        already_shown = getter(notice_key) == "shown"
+                    except Exception:
+                        already_shown = False
+                if not already_shown:
+                    removed_profiles = cleaned
+                    if callable(setter):
+                        try:
+                            setter(notice_key, "shown")
+                        except Exception as exc:
+                            logger.warning("No se pudo guardar %s: %s", notice_key, exc)
             view = svc.describe()
             terminal = self._get_terminal_connector()
             return {
@@ -814,6 +834,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 "max_panes": self._terminal_max_panes(terminal),
                 "hard_max_panes": HARD_MAX_PANES,
                 "terminal_platform_supported": not is_unsupported_terminal_platform(),
+                "removed_profiles": removed_profiles,
                 **view,
             }
         except Exception as exc:

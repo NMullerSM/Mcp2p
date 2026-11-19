@@ -25,7 +25,7 @@ const PARKED = {
   msg_id: 'park-1',
   reason: 'CHAIN_DEPTH_EXCEEDED',
   from: { kind: 'pane', agent_name: 'claude-1', pane_id: 'pane_1' },
-  to: { kind: 'pane', agent_name: 'gemini-2', pane_id: 'pane_2' },
+  to: { kind: 'pane', agent_name: 'codex-2', pane_id: 'pane_2' },
   kind: 'note',
   chain: { hop: 2, max_depth: 1 },
   trust: 'pane_authenticated',
@@ -54,7 +54,7 @@ describe('SwarmTerminalMatrix: modo trabajador por terminal', () => {
     const pty_set_worker_mode = vi.fn(async (paneId, enabled) => ({ success: true, pane_id: paneId, worker_mode: Boolean(enabled) }));
     renderMatrix(makeMatrixApi({ pty_set_worker_mode }));
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
 
     const description = (await screen.findByTestId('worker-mode-description')).textContent;
     expect(description).toContain('inbox_wait');
@@ -182,7 +182,7 @@ describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
     );
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     await waitFor(() => expect(screen.getByTestId('pane-provenance-paused-pane_2').textContent).toBe('Relevo en pausa'));
     expect(screen.queryByTestId('pane-provenance-paused-pane_1')).toBeNull();
 
@@ -196,7 +196,7 @@ describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
     const api = makeMatrixApi(relayApi());
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     fireEvent.change(await screen.findByTestId('send-to-agent-target'), { target: { value: 'pane_2' } });
     fireEvent.change(screen.getByTestId('send-to-agent-text'), { target: { value: 'revisa develop' } });
     fireEvent.click(screen.getByTestId('send-to-agent-submit'));

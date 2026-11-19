@@ -110,9 +110,9 @@ describe('describeTerminalError', () => {
       code: 'CLI_BINARY_NOT_FOUND',
       install_available: false,
       install_missing_requirements: ['npm'],
-      cli_profile: 'gemini'
+      cli_profile: 'codex'
     });
-    expect(e.actions).toEqual([{ kind: 'configure_path', cliId: 'gemini' }]);
+    expect(e.actions).toEqual([{ kind: 'configure_path', cliId: 'codex' }]);
     expect(e.hint).toContain('npm');
   });
 
@@ -120,6 +120,15 @@ describe('describeTerminalError', () => {
     const e = describeTerminalError({ code: 'CLI_PROFILE_UNKNOWN', known_profiles: ['claude', 'codex'] });
     expect(e.title).toMatch(/Perfil de CLI/);
     expect(e.hint).toContain('claude, codex');
+  });
+
+  it('CLI_PROFILE_UNKNOWN para gemini redirige a Antigravity', () => {
+    const e = describeTerminalError({
+      code: 'CLI_PROFILE_UNKNOWN',
+      cli_profile: 'gemini',
+      known_profiles: ['claude', 'codex', 'opencode', 'antigravity', 'custom_shell']
+    });
+    expect(e.message).toContain('Gemini CLI se retiró del catálogo; abre Antigravity en su lugar');
   });
 
   it.each([
@@ -197,5 +206,17 @@ describe('reglas de instalacion', () => {
     expect(describeInstallBlock({ ...ok, install: { available: false, missing_requirements: ['npm'] } })).toMatch(/npm/);
     expect(describeInstallBlock({ ...ok, install: { available: false } })).toMatch(/instálalo manualmente/);
     expect(describeInstallBlock(ok)).toBeNull();
+  });
+
+  it('describeInstallBlock_windows_without_method_names_the_cli', () => {
+    const msg = describeInstallBlock({
+      id: 'opencode',
+      display_name: 'OpenCode',
+      installed: false,
+      kind: 'agent_cli',
+      verified: true,
+      install: { available: false, code: 'NO_INSTALL_METHOD', command: null, method: null }
+    });
+    expect(msg).toBe('No hay un método de instalación verificado de OpenCode para este sistema: instálalo manualmente.');
   });
 });

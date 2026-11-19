@@ -6,7 +6,7 @@
 
 > Ver [`CHANGELOG.md`](CHANGELOG.md) para el historial de versiones.
 
-> **Plataforma de Escritorio Local-First** construida con **PyWebView**, **React + Vite**, **Model Context Protocol (MCP)** y persistencia determinista **SQLite (WAL)** para la orquestación, concurrencia y desarrollo colaborativo entre humanos y agentes de Inteligencia Artificial (Claude, Gemini, Antigravity, Cursor, etc.).
+> **Plataforma de Escritorio Local-First** construida con **PyWebView**, **React + Vite**, **Model Context Protocol (MCP)** y persistencia determinista **SQLite (WAL)** para la orquestación, concurrencia y desarrollo colaborativo entre humanos y agentes de Inteligencia Artificial (Claude, Codex, OpenCode, Antigravity, Cursor, etc.).
 
 ---
 

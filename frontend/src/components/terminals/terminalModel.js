@@ -209,6 +209,16 @@ export function describeTerminalError(res, context = {}) {
     }
     case 'CLI_PROFILE_UNKNOWN': {
       const known = listOrEmpty(data.known_profiles);
+      if (cliId === 'gemini') {
+        return {
+          ...base,
+          title: 'Perfil de CLI no reconocido',
+          message: 'Gemini CLI se retiró del catálogo; abre Antigravity en su lugar.',
+          hint: known.length
+            ? `Elige uno de los CLIs del catálogo: ${known.join(', ')}.`
+            : 'Elige Antigravity u otro CLI de la lista del catálogo.'
+        };
+      }
       return {
         ...base,
         title: 'Perfil de CLI no reconocido',
@@ -382,7 +392,8 @@ export function describeInstallBlock(cli) {
   if (missing.length) {
     return `Faltan herramientas previas: ${missing.join(', ')}. Instálalas primero; esta interfaz no las instala.`;
   }
-  return 'No hay un método de instalación verificado para este sistema: instálalo manualmente.';
+  const name = cli.display_name || cli.id || 'este CLI';
+  return `No hay un método de instalación verificado de ${name} para este sistema: instálalo manualmente.`;
 }
 
 export function canOfferInstall(cli) {

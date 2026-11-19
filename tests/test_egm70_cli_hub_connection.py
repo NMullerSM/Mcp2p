@@ -54,10 +54,6 @@ elif os.environ.get("OPENCODE_CONFIG"):
     cfg_path = os.environ["OPENCODE_CONFIG"]
     srv = json.loads(Path(cfg_path).read_text(encoding="utf-8"))["mcp"]["mcp2p"]
     url, token, out["mode"] = srv["url"], srv["headers"]["Authorization"].split(" ", 1)[1], "opencode_env"
-elif os.environ.get("GEMINI_CLI_SYSTEM_SETTINGS_PATH"):
-    cfg_path = os.environ["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]
-    srv = json.loads(Path(cfg_path).read_text(encoding="utf-8"))["mcpServers"]["mcp2p"]
-    url, token, out["mode"] = srv["httpUrl"], srv["headers"]["Authorization"].split(" ", 1)[1], "gemini_env"
 elif "-c" in sys.argv:
     kv = dict(a.split("=", 1) for a in sys.argv if a.startswith("mcp_servers.mcp2p."))
     url = json.loads(kv["mcp_servers.mcp2p.url"])
@@ -179,7 +175,7 @@ def _all_text(bridge: ApiBridge, pane: Any) -> str:
 @pty_required
 @pytest.mark.parametrize(
     "cli,mode,pane",
-    [("claude", "claude_flag", 1), ("opencode", "opencode_env", 2), ("gemini", "gemini_env", 3)],
+    [("claude", "claude_flag", 1), ("opencode", "opencode_env", 2)],
 )
 def test_cli_connects_to_embedded_hub_with_its_panel_token(lab, cli: str, mode: str, pane: int) -> None:
     bridge, home, store, registry = lab["bridge"], lab["home"], lab["store"], lab["registry"]
@@ -268,15 +264,15 @@ def test_config_is_deleted_when_the_panel_is_closed(lab) -> None:
 def test_resume_uses_only_verified_catalog_argv(lab) -> None:
     bridge, home = lab["bridge"], lab["home"]
     _install_fake(home, "claude")
-    _install_fake(home, "gemini")
+    _install_fake(home, "codex")
     res = bridge.pty_spawn_pane(1, "claude", "implementer", None, 100, 28, True, str(lab["tmp"]), True)
     assert res["success"] is True
     out = _wait_result(home, "claude")
     assert out["argv"][0] == "--continue" and "--mcp-config" in out["argv"]
-    # gemini: resume sin verificar -> se rechaza en vez de adivinar el flag
-    bad = bridge.pty_spawn_pane(2, "gemini", "implementer", None, 100, 28, True, str(lab["tmp"]), True)
+    # codex: resume sin verificar -> se rechaza en vez de adivinar el flag
+    bad = bridge.pty_spawn_pane(2, "codex", "implementer", None, 100, 28, True, str(lab["tmp"]), True)
     assert bad["success"] is False and bad["code"] == "RESUME_NOT_AVAILABLE"
-    assert bridge.pty_spawn_pane(2, "gemini", "implementer", None, 100, 28, True, str(lab["tmp"]), "si")["code"] == "INVALID_ARGUMENT"
+    assert bridge.pty_spawn_pane(2, "codex", "implementer", None, 100, 28, True, str(lab["tmp"]), "si")["code"] == "INVALID_ARGUMENT"
 
 
 @posix_only

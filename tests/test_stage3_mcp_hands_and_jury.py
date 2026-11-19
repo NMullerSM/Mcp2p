@@ -30,7 +30,7 @@ def stage3_env(tmp_path):
 
     # Registrar 2 nodos
     db_mgr.register_or_update_node("node_alpha", "Desarrollador Alfa", "agent_claude")
-    db_mgr.register_or_update_node("node_beta", "Desarrollador Beta", "agent_gemini")
+    db_mgr.register_or_update_node("node_beta", "Desarrollador Beta", "agent_codex")
 
     return {
         "db": db_mgr,

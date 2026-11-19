@@ -154,7 +154,7 @@ describe('Sondeo adaptativo de la salida', () => {
     });
     renderMatrix(api);
     await openClaude();
-    fireEvent.click(screen.getByTestId('cli-open-gemini'));
+    fireEvent.click(screen.getByTestId('cli-open-codex'));
     await advance(1);
     await advance(2000);
 

@@ -19,7 +19,7 @@ vi.mock('@xterm/addon-fit', () => import('./terminals/xtermTestDouble'));
 
 const TOKEN = 'tok-secreto-8f3a21';
 // Comando con caracteres que un armado en el frontend podria "limpiar": debe mostrarse tal cual.
-const EXACT_COMMAND = 'npm install -g @example/gemini-cli@1.2.3  # --registry=https://registry.example.com';
+const EXACT_COMMAND = 'npm install -g @example/codex-cli@1.2.3  # --registry=https://registry.example.com';
 
 afterEach(() => {
   cleanup();
@@ -35,15 +35,15 @@ function prepareResponse(over = {}) {
     success: true,
     code: 'OK',
     requires_confirmation: true,
-    cli_id: 'gemini',
-    display_name: 'Gemini',
+    cli_id: 'codex',
+    display_name: 'Codex',
     command: EXACT_COMMAND,
     method: 'npm',
     downloads_script: false,
     warning: '',
     requires: ['npm'],
     platform: 'linux',
-    source_url: 'https://example.com/gemini',
+    source_url: 'https://example.com/codex',
     note: '',
     confirmation_token: TOKEN,
     expires_in_s: 120,
@@ -56,14 +56,14 @@ function installApi(over = {}) {
   const api = makeMatrixApi({
     pty_list_cli_catalog: vi.fn(async () => makeCatalogResponse([
       makeCli('claude'),
-      notInstalled('gemini'),
+      notInstalled('codex'),
       makeCli('custom_shell')
     ])),
     pty_prepare_install: vi.fn(async () => prepareResponse()),
     pty_install_cli: vi.fn(async () => ({
       success: true,
       code: 'INSTALL_STARTED',
-      cli_id: 'gemini',
+      cli_id: 'codex',
       pane_id: 'pane_1',
       session_id: 'install-sess-1',
       pid: 5151,
@@ -90,14 +90,14 @@ describe('Instalar un CLI que falta', () => {
     const { api, state } = installApi();
     renderMatrix(api);
 
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
-    await waitFor(() => expect(api.pty_prepare_install).toHaveBeenCalledWith('gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
+    await waitFor(() => expect(api.pty_prepare_install).toHaveBeenCalledWith('codex'));
 
-    const confirm = await screen.findByTestId('install-confirm-gemini');
+    const confirm = await screen.findByTestId('install-confirm-codex');
     expect(within(confirm).getByTestId('install-command').textContent).toBe(EXACT_COMMAND);
     expect(within(confirm).getByTestId('install-method').textContent).toContain('npm');
     expect(within(confirm).getByTestId('install-requires').textContent).toContain('npm');
-    expect(within(confirm).getByTestId('install-source').textContent).toContain('https://example.com/gemini');
+    expect(within(confirm).getByTestId('install-source').textContent).toContain('https://example.com/codex');
     // Todavia no se instala nada y el token nunca llega a la pantalla ni a ningun almacen.
     expect(api.pty_install_cli).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain(TOKEN);
@@ -107,8 +107,8 @@ describe('Instalar un CLI que falta', () => {
     const catalogCallsBefore = api.pty_list_cli_catalog.mock.calls.length;
     fireEvent.click(screen.getByTestId('install-confirm-btn'));
     await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledTimes(1));
-    expect(api.pty_install_cli).toHaveBeenCalledWith('gemini', TOKEN);
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(api.pty_install_cli).toHaveBeenCalledWith('codex', TOKEN);
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
 
     // El backend abre un panel real con la salida de la instalacion.
     const pane = await screen.findByTestId('terminal-pane-pane_1');
@@ -126,16 +126,16 @@ describe('Instalar un CLI que falta', () => {
     const { api } = installApi();
     renderMatrix(api);
 
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
-    await screen.findByTestId('install-confirm-gemini');
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
+    await screen.findByTestId('install-confirm-codex');
     await new Promise((r) => setTimeout(r, 60));
     expect(api.pty_install_cli).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId('install-cancel-btn'));
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
     expect(api.pty_install_cli).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId('cli-install-gemini'));
+    fireEvent.click(screen.getByTestId('cli-install-codex'));
     await waitFor(() => expect(api.pty_prepare_install).toHaveBeenCalledTimes(2));
     expect(api.pty_install_cli).not.toHaveBeenCalled();
   });
@@ -143,7 +143,7 @@ describe('Instalar un CLI que falta', () => {
   it('el token es de un solo uso: tras confirmar no queda nada que reenviar', async () => {
     const { api } = installApi();
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
     fireEvent.click(await screen.findByTestId('install-confirm-btn'));
     await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('install-confirm-btn')).toBeNull();
@@ -161,7 +161,7 @@ describe('Instalar un CLI que falta', () => {
       }))
     });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
 
     expect((await screen.findByTestId('install-script-warning')).textContent).toMatch(/descarga un script de Internet/);
     expect(screen.getByTestId('install-warning').textContent).toMatch(/script descargado/);
@@ -175,7 +175,7 @@ describe('Instalar un CLI que falta', () => {
     fireEvent.click(screen.getByTestId('install-script-ack'));
     expect(screen.getByTestId('install-confirm-btn').disabled).toBe(false);
     fireEvent.click(screen.getByTestId('install-confirm-btn'));
-    await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledWith('gemini', TOKEN));
+    await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledWith('codex', TOKEN));
   });
 
   it('un CLI con verified:false no ofrece instalar y explica por que', async () => {
@@ -195,35 +195,35 @@ describe('Instalar un CLI que falta', () => {
   it('sin install.available no hay boton Instalar y se explica lo que falta', async () => {
     const { api } = installApi({
       pty_list_cli_catalog: vi.fn(async () => makeCatalogResponse([
-        notInstalled('gemini', { available: false, code: 'PREREQUISITE_MISSING', missing_requirements: ['npm'] }),
+        notInstalled('claude', { available: false, code: 'PREREQUISITE_MISSING', missing_requirements: ['npm'] }),
         notInstalled('codex', { available: false, code: 'NO_INSTALL_METHOD', command: null, method: null, verified: false }),
         notInstalled('opencode', { verified: false }),
         makeCli('custom_shell')
       ]))
     });
     renderMatrix(api);
-    await screen.findByTestId('cli-row-gemini');
-    ['gemini', 'codex', 'opencode'].forEach((id) => expect(screen.queryByTestId(`cli-install-${id}`)).toBeNull());
-    expect(screen.getByTestId('cli-install-block-gemini').textContent).toMatch(/Faltan herramientas previas: npm/);
+    await screen.findByTestId('cli-row-claude');
+    ['claude', 'codex', 'opencode'].forEach((id) => expect(screen.queryByTestId(`cli-install-${id}`)).toBeNull());
+    expect(screen.getByTestId('cli-install-block-claude').textContent).toMatch(/Faltan herramientas previas: npm/);
     expect(screen.getByTestId('cli-install-block-codex').textContent).toMatch(/método de instalación verificado/);
     expect(screen.getByTestId('cli-install-block-opencode').textContent).toMatch(/no está verificado/);
     expect(api.pty_prepare_install).not.toHaveBeenCalled();
   });
 
   it.each([
-    [{ success: false, code: 'PREREQUISITE_MISSING', missing: ['npm'], message: 'Faltan herramientas previas para instalar Gemini: npm.' }, /Faltan herramientas previas/, /npm/],
+    [{ success: false, code: 'PREREQUISITE_MISSING', missing: ['npm'], message: 'Faltan herramientas previas para instalar Codex: npm.' }, /Faltan herramientas previas/, /npm/],
     [{ success: false, code: 'INSTALL_NOT_ALLOWED', message: 'Catálogo del usuario' }, /no se puede instalar desde la interfaz/, /manualmente/],
     [{ success: false, code: 'ALREADY_INSTALLED', message: 'ya instalado' }, /ya está instalado/, /Actualiza el estado/]
   ])('si prepare falla (%o) no hay confirmacion y se explica la causa', async (res, titleRx, hintRx) => {
     const { api } = installApi({ pty_prepare_install: vi.fn(async () => res) });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
 
     const notice = await screen.findByTestId('slider-notice');
     expect(notice.getAttribute('data-code')).toBe(res.code);
     expect(screen.getByTestId('slider-notice-title').textContent).toMatch(titleRx);
     expect(screen.getByTestId('slider-notice-hint').textContent).toMatch(hintRx);
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
     expect(api.pty_install_cli).not.toHaveBeenCalled();
   });
 
@@ -231,16 +231,16 @@ describe('Instalar un CLI que falta', () => {
     const { api } = installApi({
       pty_prepare_install: vi.fn(async () => ({
         success: false, degraded: true, code: 'TERMINAL_PLATFORM_UNSUPPORTED',
-        manual_command: MANUAL_CMD, install_command: 'winget install Example.Gemini'
+        manual_command: MANUAL_CMD, install_command: 'winget install Example.Codex'
       }))
     });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
     await screen.findByTestId('slider-notice');
     expect(screen.getByTestId('slider-notice-title').textContent).toMatch(/Windows/);
     expect(screen.getByTestId('slider-notice-manual-cmd').textContent).toBe(MANUAL_CMD);
-    expect(screen.getByTestId('slider-notice-install-command').textContent).toBe('winget install Example.Gemini');
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(screen.getByTestId('slider-notice-install-command').textContent).toBe('winget install Example.Codex');
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
   });
 
   it('si el token vence o ya se uso, install lo explica y no abre ningun panel', async () => {
@@ -248,14 +248,14 @@ describe('Instalar un CLI que falta', () => {
       pty_install_cli: vi.fn(async () => ({ success: false, code: 'INSTALL_TOKEN_EXPIRED', message: 'La confirmacion vencio' }))
     });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
     fireEvent.click(await screen.findByTestId('install-confirm-btn'));
 
     await screen.findByTestId('slider-notice');
     expect(screen.getByTestId('slider-notice').getAttribute('data-code')).toBe('INSTALL_TOKEN_EXPIRED');
     expect(screen.getByTestId('slider-notice-hint').textContent).toMatch(/Pulsa «Instalar» otra vez/);
     expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull();
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
   });
 
   it('la confirmacion se retira sola al vencer su plazo', async () => {
@@ -263,10 +263,10 @@ describe('Instalar un CLI que falta', () => {
       pty_prepare_install: vi.fn(async () => prepareResponse({ expires_in_s: 0.05 }))
     });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
-    await screen.findByTestId('install-confirm-gemini');
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
+    await screen.findByTestId('install-confirm-codex');
 
-    await waitFor(() => expect(screen.queryByTestId('install-confirm-gemini')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('install-confirm-codex')).toBeNull());
     expect(screen.getByTestId('slider-notice').getAttribute('data-code')).toBe('INSTALL_TOKEN_EXPIRED');
     expect(api.pty_install_cli).not.toHaveBeenCalled();
   });
@@ -274,15 +274,15 @@ describe('Instalar un CLI que falta', () => {
   it('desde CLI_BINARY_NOT_FOUND con install_available, "Revisar instalación" abre la confirmacion; sin ella solo ofrece la ruta', async () => {
     const found = installApi({
       pty_spawn_pane: vi.fn(async () => ({
-        success: false, degraded: false, code: 'CLI_BINARY_NOT_FOUND', cli_profile: 'gemini', install_available: true
+        success: false, degraded: false, code: 'CLI_BINARY_NOT_FOUND', cli_profile: 'codex', install_available: true
       }))
     });
-    // gemini figura instalado en el catalogo pero el spawn no lo encuentra (carrera): el aviso manda.
+    // codex figura instalado en el catalogo pero el spawn no lo encuentra (carrera): el aviso manda.
     found.api.pty_list_cli_catalog.mockImplementation(async () => makeCatalogResponse([
-      makeCli('gemini'), makeCli('custom_shell')
+      makeCli('codex'), makeCli('custom_shell')
     ]));
     const first = renderMatrix(found.api);
-    fireEvent.click(await screen.findByTestId('cli-open-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-open-codex'));
     await screen.findByTestId('slider-notice');
     expect(screen.getByTestId('slider-notice-action-configure_path')).toBeTruthy();
     expect(screen.getByTestId('slider-notice-action-install')).toBeTruthy();
@@ -303,18 +303,52 @@ describe('Instalar un CLI que falta', () => {
   it('la accion "Revisar instalación" del aviso prepara la instalacion de ese CLI', async () => {
     const { api } = installApi({
       pty_spawn_pane: vi.fn(async () => ({
-        success: false, degraded: false, code: 'CLI_BINARY_NOT_FOUND', cli_profile: 'gemini', install_available: true
+        success: false, degraded: false, code: 'CLI_BINARY_NOT_FOUND', cli_profile: 'codex', install_available: true
       }))
     });
     api.pty_list_cli_catalog.mockImplementation(async () => makeCatalogResponse([
-      makeCli('gemini'), makeCli('custom_shell')
+      makeCli('codex'), makeCli('custom_shell')
     ]));
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-open-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-open-codex'));
     fireEvent.click(await screen.findByTestId('slider-notice-action-install'));
-    await waitFor(() => expect(api.pty_prepare_install).toHaveBeenCalledWith('gemini'));
-    expect(await screen.findByTestId('install-confirm-gemini')).toBeTruthy();
+    await waitFor(() => expect(api.pty_prepare_install).toHaveBeenCalledWith('codex'));
+    expect(await screen.findByTestId('install-confirm-codex')).toBeTruthy();
     expect(api.pty_install_cli).not.toHaveBeenCalled();
+  });
+
+  it('shows_install_button_for_codex_on_win32_catalog', async () => {
+    const { api } = installApi({
+      pty_list_cli_catalog: vi.fn(async () => makeCatalogResponse(
+        [notInstalled('codex'), makeCli('custom_shell')],
+        { platform: 'win32', terminal_platform_supported: true }
+      ))
+    });
+    renderMatrix(api);
+    expect(await screen.findByTestId('cli-install-codex')).toBeTruthy();
+  });
+
+  it('muestra aviso del slider cuando el catalogo devuelve removed_profiles', async () => {
+    const { api } = installApi({
+      pty_list_cli_catalog: vi.fn(async () => makeCatalogResponse(
+        [makeCli('claude'), makeCli('custom_shell')],
+        {
+          removed_profiles: [
+            {
+              id: 'gemini',
+              replacement: 'antigravity',
+              message: 'Gemini CLI ya no está en el catálogo: usa Antigravity.'
+            }
+          ]
+        }
+      ))
+    });
+    renderMatrix(api);
+    const notice = await screen.findByTestId('slider-notice');
+    expect(notice.getAttribute('data-code')).toBe('CLI_PROFILE_REMOVED');
+    expect(screen.getByTestId('slider-notice-message').textContent).toContain(
+      'Gemini CLI ya no está en el catálogo: usa Antigravity.'
+    );
   });
 });
 
@@ -394,11 +428,11 @@ describe('Confirmacion nativa rechazada (CONFIRMATION_DECLINED)', () => {
   it('al rechazar la instalacion se muestra un aviso discreto y no se abre ningun panel', async () => {
     const { api } = installApi({ pty_install_cli: vi.fn(async () => DECLINED) });
     renderMatrix(api);
-    fireEvent.click(await screen.findByTestId('cli-install-gemini'));
+    fireEvent.click(await screen.findByTestId('cli-install-codex'));
     fireEvent.click(await screen.findByTestId('install-confirm-btn'));
     await waitFor(() => expect(api.pty_install_cli).toHaveBeenCalledTimes(1));
     await expectDiscreetDeclinedNotice();
-    expect(screen.queryByTestId('install-confirm-gemini')).toBeNull();
+    expect(screen.queryByTestId('install-confirm-codex')).toBeNull();
   });
 
   it('al rechazar fijar la ruta de un binario se muestra el aviso', async () => {

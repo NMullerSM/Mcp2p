@@ -146,7 +146,7 @@ def test_sqlite_collaboration_repository_online_only_and_mark_offline(tmp_path: 
 
         db.register_or_update_node("n_online", "On", "claude", status="online")
         db.register_or_update_node("n_busy", "Busy", "codex", status="busy")
-        db.register_or_update_node("n_offline", "Off", "gemini", status="offline")
+        db.register_or_update_node("n_offline", "Off", "opencode", status="offline")
         for nid in ("n_online", "n_busy", "n_offline", "n_missing_swarm"):
             db.add_or_request_collaborator(p_uuid, nid, status="approved")
 

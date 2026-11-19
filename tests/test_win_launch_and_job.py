@@ -223,10 +223,10 @@ def test_catalog_resolves_npm_cmd_shims_from_appdata_candidates(tmp_path: Path) 
     appdata = tmp_path / "AppData"
     appdata.mkdir()
     # Los patrones del catalogo usan "\\": en Linux el "archivo" es un unico nombre con barras invertidas.
-    cmd = _touch_exe(Path(str(appdata) + "\\npm\\gemini.cmd"))
-    res = _win_service(tmp_path, environ={"APPDATA": str(appdata)}).resolve("gemini")
+    cmd = _touch_exe(Path(str(appdata) + "\\npm\\codex.cmd"))
+    res = _win_service(tmp_path, environ={"APPDATA": str(appdata)}).resolve("codex")
     assert res.found and res.source == "candidate" and res.path == cmd
-    argv, _, spec = _win_service(tmp_path, environ={"APPDATA": str(appdata)}).build_launch("gemini")
+    argv, _, spec = _win_service(tmp_path, environ={"APPDATA": str(appdata)}).build_launch("codex")
     assert argv == [cmd] and spec is not None
 
 
@@ -267,12 +267,12 @@ def test_install_command_wrapper_per_platform() -> None:
     assert posix[1] == "-c" and posix[2].startswith("npm install -g @openai/codex; rc=$?") and posix[0].endswith("sh")
     win = build_install_command('powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
                                 "win32", lambda n: r"C:\ps\powershell.exe" if n == "powershell" else None)
-    assert win[:4] == [r"C:\ps\powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
-    assert win[4].startswith("powershell -ExecutionPolicy ByPass") and "$LASTEXITCODE" in win[4] and win[4].endswith("exit $rc")
+    assert win[:6] == [r"C:\ps\powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+    assert win[6].startswith("powershell -ExecutionPolicy ByPass") and "$LASTEXITCODE" in win[6] and win[6].endswith("exit $rc")
     assert build_install_command("winget install X.Y", "win32", lambda n: None)[0] == "powershell.exe"
     # y el argv de PowerShell se lanza directo (.exe), sin pasar por cmd.exe
     launch = build_windows_launch([r"C:\ps\powershell.exe", *win[1:]])
-    assert launch.kind == "exe" and launch.cmdline is not None and launch.cmdline.startswith("-NoLogo -NoProfile -Command")
+    assert launch.kind == "exe" and launch.cmdline is not None and launch.cmdline.startswith("-NoLogo -NoProfile -ExecutionPolicy Bypass -Command")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="rutas POSIX")

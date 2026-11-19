@@ -221,7 +221,7 @@ def test_cli_catalog_osc7501_verification_and_user_isolation(tmp_path: Path) -> 
     assert claude.osc7501["status"] == "verified"
     assert claude.osc7501_probe_reply_bytes() == b"\x1b]7501;?1\x07"
 
-    for profile_id in ("gemini", "codex", "opencode", "antigravity", "custom_shell"):
+    for profile_id in ("codex", "opencode", "antigravity", "custom_shell"):
         spec = repo_cat.get(profile_id)
         assert spec is not None
         assert spec.osc7501["status"] == "unverified"

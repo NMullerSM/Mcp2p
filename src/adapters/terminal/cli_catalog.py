@@ -67,7 +67,7 @@ INSTALL_METHODS = tuple(_INSTALL_PATTERNS)
 # que no admite configuracion MCP de sesion; `stdio_env_proxy` usa config stdio estatica + proxy por entorno.
 _MCP_METHODS = frozenset({"flag", "subcommand", "config_file", "env", "none", "unsupported", "stdio_env_proxy"})
 # Formatos del archivo de configuracion MCP por panel (los renderiza `mcp_injection.py`).
-MCP_CONFIG_FORMATS = frozenset({"none", "claude_mcp_json", "opencode_json", "gemini_settings_json"})
+MCP_CONFIG_FORMATS = frozenset({"none", "claude_mcp_json", "opencode_json"})
 # Marcadores permitidos en `mcp.argv` / `mcp.env`. NO existe un marcador de token: el token del panel no
 # puede llegar al argv ni a las variables inyectadas desde el catalogo; solo viaja dentro del archivo 0600.
 MCP_PLACEHOLDERS = ("{mcp_config_file}", "{hub_url}")
@@ -1243,6 +1243,36 @@ class CliCatalogService:
         first = sorted(annotated, key=lambda pair: pair[0].downloads_script)[0]
         return InstallSelection(first[0], "PREREQUISITE_MISSING", first[1], annotated)
 
+    _REMOVED_PROFILES: Tuple[Tuple[str, str, str], ...] = (
+        ("gemini", "antigravity", "Gemini CLI ya no está en el catálogo: usa Antigravity."),
+    )
+
+    @staticmethod
+    def cleanup_removed_profiles(settings_db: Optional[SettingsStore]) -> List[Dict[str, str]]:
+        """Elimina rutas configuradas de perfiles retirados y devuelve avisos para la UI."""
+        if settings_db is None:
+            return []
+        getter = getattr(settings_db, "get_extension_setting", None)
+        deleter = getattr(settings_db, "delete_extension_setting", None)
+        if not callable(getter) or not callable(deleter):
+            return []
+        removed: List[Dict[str, str]] = []
+        for cli_id, replacement, message in CliCatalogService._REMOVED_PROFILES:
+            key = CliCatalogService._setting_key(cli_id)
+            try:
+                existing = getter(SETTINGS_NAMESPACE, key, None)
+            except Exception as exc:
+                logger.debug("No se pudo leer ajuste retirado %s: %s", cli_id, exc)
+                continue
+            if existing:
+                try:
+                    deleter(SETTINGS_NAMESPACE, key)
+                except Exception as exc:
+                    logger.warning("No se pudo borrar ajuste retirado %s: %s", cli_id, exc)
+                    continue
+                removed.append({"id": cli_id, "replacement": replacement, "message": message})
+        return removed
+
     def install_hint(self, cli_id: Any) -> Dict[str, Any]:
         """Datos para adjuntar a `CLI_BINARY_NOT_FOUND` (`install_available`, comando propuesto)."""
         spec = self.get_spec(cli_id)
@@ -1250,8 +1280,7 @@ class CliCatalogService:
             return {"install_available": False, "install_command": None}
         sel = self.select_install(spec)
         opt = sel.option
-        installable = bool(opt and opt.verified and spec.verified and spec.source == "repo"
-                           and self.platform != "win32")
+        installable = bool(opt and opt.verified and spec.verified and spec.source == "repo")
         return {
             "install_available": installable and sel.code == "OK",
             "install_command": opt.command if opt else None,

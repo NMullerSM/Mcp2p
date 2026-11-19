@@ -247,13 +247,11 @@ def test_inbox_responses_report_worker_mode_and_hint_only_for_worker_panes(tmp_p
 # ----------------------------------------------------------------------------------------------------------------
 
 
-def test_claude_and_gemini_configs_raise_the_per_server_tool_timeout() -> None:
+def test_claude_config_raises_the_per_server_tool_timeout() -> None:
     from src.adapters.terminal.mcp_injection import _render_config
 
     claude = _render_config("claude_mcp_json", "http://127.0.0.1:1/mcp", "tok")["mcpServers"]["mcp2p"]
     assert claude["timeout"] == worker_protocol.TOOL_TIMEOUT_MS
-    gemini = _render_config("gemini_settings_json", "http://127.0.0.1:1/mcp", "tok")["mcpServers"]["mcp2p"]
-    assert gemini["timeout"] == worker_protocol.TOOL_TIMEOUT_MS
     assert worker_protocol.TOOL_TIMEOUT_MS > worker_protocol.MAX_WAIT_MS
 
 
