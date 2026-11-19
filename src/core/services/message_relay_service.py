@@ -761,6 +761,10 @@ class MessageRelayService:
 
     # -- entrega directa (WP-6b) ---------------------------------------------------------------------------------
 
+    def label_of(self, principal_uri: str) -> Dict[str, Any]:
+        """Procedencia legible de un principal (público para la entrega directa y el chat)."""
+        return self._label(principal_uri)
+
     def _waiting_delta(self, node_uuid: str, delta: int) -> None:
         with self._waiting_lock:
             count = self._waiting.get(node_uuid, 0) + delta

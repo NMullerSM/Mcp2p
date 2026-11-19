@@ -197,3 +197,11 @@ def _finish(content: str, msg_ids: Tuple[str, ...], removed: int, paste_mode: st
         raise ValueError("La carga a escribir no está acotada por los marcadores de pegado.")
     return InjectionPayload(paste=paste, submit="\r", msg_ids=msg_ids, removed=removed, pointer_only=False)
 
+
+
+def build_human_paste(text: str, *, paste_mode: str) -> InjectionPayload:
+    """Lo que el humano teclea desde el chat: texto saneado sin cabecera (D12-ter 2a), mismo pegado y Enter aparte."""
+    if paste_mode not in PASTE_MODES:
+        raise ValueError(f"paste_mode desconocido: {paste_mode!r}")
+    body = sanitize_for_injection(text, single_line=paste_mode == "single_line")
+    return _finish(body.text, (), body.removed, paste_mode)
