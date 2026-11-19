@@ -15,7 +15,7 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
-    'yaml', 'msgpack', 'cbor2', 'src', 'src.app', 'src.app.api_bridge', 'src.app.auto_updater',
+    'yaml', 'msgpack', 'cbor2', 'src', 'src.app', 'src.app.api_bridge', 'src.app.auto_updater', 'src.app.hook_client',
     'src.app.paths', 'src.runtime.paths', 'src.runtime.identity', 'src.adapters.provisioning.defaults',
     'src.mcp.transport_options', 'src.storage', 'src.storage.db', 'src.storage.okf_adapter',
     'src.storage.github_sync', 'src.storage.code_scanner', 'src.p2p', 'src.p2p.network',

@@ -110,6 +110,9 @@ if __name__ == "__main__" and len(sys.argv) > 1:
     if sys.argv[1] == "--operator-proxy":  # Ola 4: proxy stdio del operador (tubo al Hub de la GUI, sin BD)
         from src.mcp.operator_proxy import main as operator_proxy_main
         sys.exit(operator_proxy_main(sys.argv[2:]))
+    if sys.argv[1] == "--hook-post":  # v2.0.2 WP-5a: cliente minimo de hooks sin importar PyWebView/Hub
+        from src.app.hook_client import main as hook_client_main
+        sys.exit(hook_client_main(sys.argv[2:]))
 
 import argparse
 import logging
@@ -267,6 +270,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if raw_argv[0] == "--operator-proxy":
             from src.mcp.operator_proxy import main as operator_proxy_main
             return operator_proxy_main(raw_argv[1:])
+        if raw_argv[0] == "--hook-post":
+            from src.app.hook_client import main as hook_client_main
+            return hook_client_main(raw_argv[1:])
 
     args = parse_arguments(raw_argv)
 
