@@ -27,6 +27,12 @@ export const HELP_SECTIONS = [
     slotId: 'ajustes-entrega'
   },
   {
+    id: 'ayuda-medicion',
+    title: 'Medición de CLIs',
+    body: 'Comprueba en este equipo si cada CLI avisa de sus turnos y acepta mensajes pegados. Si sale bien, activa la entrega directa para ese CLI. Gasta unos pocos tokens por CLI.',
+    slotId: 'ajustes-medicion'
+  },
+  {
     id: 'ayuda-roles',
     title: 'Roles',
     body: 'El rol lo eliges tú y decide qué tipos de mensaje puede enviar cada agente.'
