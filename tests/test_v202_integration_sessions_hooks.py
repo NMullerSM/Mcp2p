@@ -52,6 +52,15 @@ def _verified_claude_spec():
                 "verified_on": "2026-11-18",
                 "note": "I3",
             },
+            "session": {
+                "status": "verified",
+                "platforms": ["linux", "darwin", "win32"],
+                "assign_argv": ["--session-id", "{cli_session_id}"],
+                "resume_by_id_argv": ["--resume", "{cli_session_id}"],
+                "verified_with_cli_version": "2.1.0",
+                "verified_on": "2026-11-18",
+                "note": "I3",
+            },
         },
         source="repo",
     )
