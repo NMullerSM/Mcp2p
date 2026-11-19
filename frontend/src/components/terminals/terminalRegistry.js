@@ -6,7 +6,7 @@ import { createUrlLinkProvider } from './terminalLinks';
 /**
  * Registro de instancias de xterm, UNA por panel y FUERA de React.
  *
- * Por que fuera: un TUI (claude, gemini...) entra en pantalla alterna (ESC[?1049h) una sola vez
+ * Por que fuera: un TUI (claude, codex, opencode...) entra en pantalla alterna (ESC[?1049h) una sola vez
  * al arrancar. Si la instancia se destruyera al cambiar de pestana o de layout, al volver habria
  * que repetir la salida desde el principio y el ring buffer del backend, ya truncado, habria
  * perdido esa entrada: la pantalla quedaria corrupta. Aqui la instancia (y el cursor

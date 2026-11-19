@@ -263,6 +263,17 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
         warnings: Array.isArray(res.warnings) ? res.warnings : [],
         version: res.catalog_version || null
       });
+      if (Array.isArray(res.removed_profiles) && res.removed_profiles.length > 0) {
+        const removedMsg = res.removed_profiles.map((r) => r?.message).filter(Boolean).join(' ')
+          || 'Gemini CLI ya no está en el catálogo: usa Antigravity.';
+        setNotice((prev) => prev || {
+          code: 'CLI_PROFILE_REMOVED',
+          tone: 'info',
+          title: 'Catálogo de CLIs actualizado',
+          message: removedMsg,
+          actions: []
+        });
+      }
     } catch (err) {
       if (mountedRef.current) {
         setCatalog((prev) => ({ ...prev, loaded: true, loading: false, error: err?.message || String(err) }));

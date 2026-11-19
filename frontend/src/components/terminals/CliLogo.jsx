@@ -6,7 +6,7 @@ import React from 'react';
  * oficial, solo distinguir un panel de otro de un vistazo.
  */
 
-export const CLI_ICON_IDS = ['claude', 'gemini', 'codex', 'opencode', 'antigravity', 'shell'];
+export const CLI_ICON_IDS = ['claude', 'codex', 'opencode', 'antigravity', 'shell'];
 
 const ICON_ALIASES = {
   custom_shell: 'shell',
@@ -25,7 +25,6 @@ export function resolveCliIconId(cliId, icon) {
 
 const TINTS = {
   claude: '#c8765a',
-  gemini: '#7b9bd6',
   codex: '#8f9aa8',
   opencode: '#9aa3ad',
   antigravity: '#a58bd4',
@@ -44,14 +43,6 @@ function Glyph({ iconId, letter }) {
           <line x1="6" y1="6" x2="18" y2="18" />
           <line x1="18" y1="6" x2="6" y2="18" />
         </g>
-      );
-    case 'gemini':
-      // Estrella de cuatro puntas.
-      return (
-        <path
-          d="M12 2.5c.6 5.2 4.3 8.9 9.5 9.5-5.2.6-8.9 4.3-9.5 9.5-.6-5.2-4.3-8.9-9.5-9.5 5.2-.6 8.9-4.3 9.5-9.5z"
-          fill="currentColor"
-        />
       );
     case 'codex':
       // Hexagono con prompt.
