@@ -468,7 +468,7 @@ class PaneMcpConfigStore:
             raise McpInjectionError(f"el archivo de sesion {clean!r} excede {MAX_SESSION_FILE_BYTES} bytes.")
         session_dir = self.ensure_session_dir(session_id)
         target = session_dir / clean
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
         try:
             fd = os.open(target, flags, 0o600)
             _restrict_to_owner(fd, target)

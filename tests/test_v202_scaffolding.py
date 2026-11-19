@@ -331,6 +331,51 @@ def test_capability_verified_requires_repo_status_and_platform() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_fake_winpty_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    store: PaneMcpConfigStore,
+    svc: Any,
+    which_fn: Any,
+    captured_cmds: List[List[str]],
+    before_spawn: Optional[Any] = None,
+) -> WinPtyHostConnector:
+    from src.adapters.terminal import winpty_host
+
+    class _FakeWinPty:
+        def __init__(self, cols: int, rows: int, backend: Any = 0) -> None:
+            self.pid = 2002
+
+        def spawn(self, appname: str, cmdline: str = "", cwd: Any = None, env: Any = None) -> bool:
+            return True
+
+        def isalive(self) -> bool:
+            return False
+
+        def read(self, n: int = 4096) -> str:
+            return ""
+
+    win_host = WinPtyHostConnector(
+        catalog_service=svc,
+        mcp_config_store=store,
+        winpty_module=SimpleNamespace(Backend=SimpleNamespace(ConPTY=0), PTY=_FakeWinPty),
+    )
+    monkeypatch.setattr(winpty_host, "is_windows_platform", lambda: True)
+    monkeypatch.setattr(win_host, "_which_executable", lambda b, cwd=None: which_fn(b))
+
+    def _fake_win_launch(cmd: List[str], comspec: Optional[str] = None) -> SimpleNamespace:
+        copied = list(cmd)
+        captured_cmds.append(copied)
+        if before_spawn is not None:
+            before_spawn(copied)
+        return SimpleNamespace(appname=cmd[0], cmdline=" ".join(cmd), display=copied, kind="exe")
+
+    monkeypatch.setattr(winpty_host, "build_windows_launch", _fake_win_launch)
+    monkeypatch.setattr(win_host, "_reader_loop", lambda sess: None)
+    return win_host
+
+
 def test_noop_augmenters_keep_launch_argv_identical(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -345,67 +390,67 @@ def test_noop_augmenters_keep_launch_argv_identical(
             exe.chmod(0o755)
         return str(exe)
 
-    # 1. POSIX host
-    from src.adapters.terminal import cli_catalog, pty_host
+    from src.adapters.terminal.cli_catalog import CliCatalogService
 
-    for cli_id, spec in cat.profiles.items():
-        store = PaneMcpConfigStore(base_dir=tmp_path / f"posix_store_{cli_id}")
-        from src.adapters.terminal.cli_catalog import CliCatalogService
+    # 1. POSIX host (solo plataformas POSIX donde existe `pty`)
+    if os.name == "posix":
+        from src.adapters.terminal import pty_host
 
-        svc = CliCatalogService(
-            include_user_catalog=False,
-            which=_fake_which,
-            platform="linux",
-            home=str(tmp_path / "home"),
-            environ={"SHELL": _fake_which("sh")},
-        )
-        host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-        captured_cmds: List[List[str]] = []
+        for cli_id, spec in cat.profiles.items():
+            store = PaneMcpConfigStore(base_dir=tmp_path / f"posix_store_{cli_id}")
+            svc = CliCatalogService(
+                include_user_catalog=False,
+                which=_fake_which,
+                platform="linux",
+                home=str(tmp_path / "home"),
+                environ={"SHELL": _fake_which("sh")},
+            )
+            host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
+            captured_cmds: List[List[str]] = []
 
-        monkeypatch.setattr(pty_host.pty, "openpty", lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)))
-        monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-        monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+            monkeypatch.setattr(
+                pty_host.pty,
+                "openpty",
+                lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
+            )
+            monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
+            monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
 
-        def _fake_popen(cmd: List[str], **kw: Any) -> _DummyProc:
-            captured_cmds.append(list(cmd))
-            return _DummyProc(1001)
+            def _fake_popen(cmd: List[str], **kw: Any) -> _DummyProc:
+                captured_cmds.append(list(cmd))
+                return _DummyProc(1001)
 
-        monkeypatch.setattr(pty_host.subprocess, "Popen", _fake_popen)
-        monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
+            monkeypatch.setattr(pty_host.subprocess, "Popen", _fake_popen)
+            monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
 
-        res = host.spawn_session(
-            1,
-            cli_profile=cli_id,
-            hub_url="http://127.0.0.1:8765/mcp",
-            session_token="tok-abc",
-            node_uuid="node-1",
-            use_trampoline=False,
-        )
-        assert res["success"] is True, res
-        assert res["launch_meta"] == {}
-        assert res["launch_notes"] == []
+            res = host.spawn_session(
+                1,
+                cli_profile=cli_id,
+                hub_url="http://127.0.0.1:8765/mcp",
+                session_token="tok-abc",
+                node_uuid="node-1",
+                use_trampoline=False,
+            )
+            assert res["success"] is True, res
+            assert res["launch_meta"] == {}
+            assert res["launch_notes"] == []
 
-        expected_argv, _, _ = svc.build_launch(cli_id)
-        assert expected_argv is not None
-        # Con aumentadores no-op, el argv lanzado coincide exactamente con base + mcp_injection.
-        inj_argv = [
-            t.replace("{hub_url}", "http://127.0.0.1:8765/mcp")
-            for t in spec.mcp.get("argv", [])
-        ]
-        if "{mcp_config_file}" in " ".join(inj_argv):
-            assert len(captured_cmds[-1]) == len(expected_argv) + len(inj_argv)
-            assert captured_cmds[-1][: len(expected_argv)] == expected_argv
-        else:
-            assert captured_cmds[-1] == [*expected_argv, *inj_argv]
-        host.close()
+            expected_argv, _, _ = svc.build_launch(cli_id)
+            assert expected_argv is not None
+            inj_argv = [
+                t.replace("{hub_url}", "http://127.0.0.1:8765/mcp")
+                for t in spec.mcp.get("argv", [])
+            ]
+            if "{mcp_config_file}" in " ".join(inj_argv):
+                assert len(captured_cmds[-1]) == len(expected_argv) + len(inj_argv)
+                assert captured_cmds[-1][: len(expected_argv)] == expected_argv
+            else:
+                assert captured_cmds[-1] == [*expected_argv, *inj_argv]
+            host.close()
 
-    # 2. Windows host (simulado con fake winpty)
-    from src.adapters.terminal import winpty_host
-
+    # 2. Windows host (simulado con fake winpty; portable POSIX y win32)
     for cli_id, spec in cat.profiles.items():
         store = PaneMcpConfigStore(base_dir=tmp_path / f"win_store_{cli_id}")
-        from src.adapters.terminal.cli_catalog import CliCatalogService
-
         svc = CliCatalogService(
             include_user_catalog=False,
             which=_fake_which,
@@ -413,34 +458,15 @@ def test_noop_augmenters_keep_launch_argv_identical(
             home=str(tmp_path / "home"),
             environ={"COMSPEC": _fake_which("cmd.exe")},
         )
-        class _FakeWinPty:
-            def __init__(self, cols: int, rows: int, backend: Any = 0) -> None:
-                self.pid = 2002
-
-            def spawn(self, appname: str, cmdline: str = "", cwd: Any = None, env: Any = None) -> bool:
-                return True
-
-            def isalive(self) -> bool:
-                return False
-
-            def read(self, n: int = 4096) -> str:
-                return ""
-
-        win_host = WinPtyHostConnector(
-            catalog_service=svc,
-            mcp_config_store=store,
-            winpty_module=SimpleNamespace(Backend=SimpleNamespace(ConPTY=0), PTY=_FakeWinPty),
-        )
         captured_win: List[List[str]] = []
-        monkeypatch.setattr(winpty_host, "is_windows_platform", lambda: True)
-        monkeypatch.setattr(win_host, "_which_executable", lambda b, cwd=None: _fake_which(b))
-
-        def _fake_win_launch(cmd: List[str], comspec: Optional[str] = None) -> SimpleNamespace:
-            captured_win.append(list(cmd))
-            return SimpleNamespace(appname=cmd[0], cmdline=" ".join(cmd), display=list(cmd), kind="exe")
-
-        monkeypatch.setattr(winpty_host, "build_windows_launch", _fake_win_launch)
-        monkeypatch.setattr(win_host, "_reader_loop", lambda sess: None)
+        win_host = _build_fake_winpty_host(
+            tmp_path,
+            monkeypatch,
+            store=store,
+            svc=svc,
+            which_fn=_fake_which,
+            captured_cmds=captured_win,
+        )
 
         res = win_host.spawn_session(
             1,
@@ -501,12 +527,79 @@ def test_launch_addition_validation_rejects_controls_denied_env_and_bad_files(
         assert len(out.notes) == 1 and "descartado" in out.notes[0]
 
 
+def _run_custom_shell_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    kind: str,
+    store: PaneMcpConfigStore,
+    captured: List[List[str]],
+    before_spawn: Optional[Any] = None,
+) -> Dict[str, Any]:
+    from src.adapters.terminal.cli_catalog import CliCatalogService
+
+    if kind == "posix":
+        from src.adapters.terminal import pty_host
+
+        sh_bin = tmp_path / "sh"
+        sh_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        sh_bin.chmod(0o755)
+        svc = CliCatalogService(
+            include_user_catalog=False,
+            which=lambda n: str(sh_bin),
+            platform="linux",
+            environ={"SHELL": str(sh_bin)},
+        )
+        host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
+        monkeypatch.setattr(
+            pty_host.pty,
+            "openpty",
+            lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
+        )
+        monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
+        monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+
+        def _fake_popen(cmd: List[str], **kw: Any) -> _DummyProc:
+            copied = list(cmd)
+            captured.append(copied)
+            if before_spawn is not None:
+                before_spawn(copied)
+            return _DummyProc()
+
+        monkeypatch.setattr(pty_host.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
+        try:
+            return host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False)
+        finally:
+            host.close()
+
+    cmd_bin = tmp_path / "cmd.exe"
+    cmd_bin.write_text("@echo off\r\n", encoding="utf-8")
+    cmd_bin.chmod(0o755)
+    svc = CliCatalogService(
+        include_user_catalog=False,
+        which=lambda n: str(cmd_bin),
+        platform="win32",
+        environ={"COMSPEC": str(cmd_bin)},
+    )
+    win_host = _build_fake_winpty_host(
+        tmp_path,
+        monkeypatch,
+        store=store,
+        svc=svc,
+        which_fn=lambda n: str(cmd_bin),
+        captured_cmds=captured,
+        before_spawn=before_spawn,
+    )
+    try:
+        return win_host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False)
+    finally:
+        win_host.close()
+
+
 def test_failing_augmenter_is_ignored_with_note_and_pane_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from src.adapters.terminal import pty_host
-    from src.adapters.terminal.cli_catalog import CliCatalogService
-
     def _boom(ctx: LaunchContext) -> LaunchAddition:
         raise RuntimeError("fallo simulado")
 
@@ -515,39 +608,25 @@ def test_failing_augmenter_is_ignored_with_note_and_pane_opens(
 
     monkeypatch.setattr(launch_augment, "AUGMENTERS", (_boom, _ok))
 
-    sh_bin = tmp_path / "sh"
-    sh_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    sh_bin.chmod(0o755)
-    svc = CliCatalogService(
-        include_user_catalog=False,
-        which=lambda n: str(sh_bin),
-        platform="linux",
-        environ={"SHELL": str(sh_bin)},
-    )
-    store = PaneMcpConfigStore(base_dir=tmp_path / "store")
-    host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-    captured: List[List[str]] = []
-
-    monkeypatch.setattr(pty_host.pty, "openpty", lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)))
-    monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-    monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
-    monkeypatch.setattr(pty_host.subprocess, "Popen", lambda cmd, **kw: (captured.append(list(cmd)), _DummyProc())[1])
-    monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
-
-    res = host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False)
-    assert res["success"] is True
-    assert res["launch_meta"] == {"ok": "1"}
-    assert any("descartado" in n and "fallo simulado" in n for n in res["launch_notes"])
-    assert "--extra-flag" in captured[0]
-    host.close()
+    kinds = ("posix", "win32") if os.name == "posix" else ("win32",)
+    for kind in kinds:
+        captured: List[List[str]] = []
+        res = _run_custom_shell_spawn(
+            tmp_path,
+            monkeypatch,
+            kind=kind,
+            store=PaneMcpConfigStore(base_dir=tmp_path / f"store_{kind}"),
+            captured=captured,
+        )
+        assert res["success"] is True, (kind, res)
+        assert res["launch_meta"] == {"ok": "1"}
+        assert any("descartado" in n and "fallo simulado" in n for n in res["launch_notes"])
+        assert "--extra-flag" in captured[0]
 
 
 def test_session_files_are_written_0600_before_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from src.adapters.terminal import pty_host
-    from src.adapters.terminal.cli_catalog import CliCatalogService
-
     store = PaneMcpConfigStore(base_dir=tmp_path / "store")
 
     # Rechazos directos de PaneMcpConfigStore.write_session_file
@@ -564,7 +643,7 @@ def test_session_files_are_written_0600_before_spawn(
         # O_EXCL impide sobreescribir
         store.write_session_file("pane_1-s1", "direct.txt", b"otro")
 
-    # Escritura antes de Popen mediante aumentador
+    # Escritura antes del spawn mediante aumentador
     def _writer_aug(ctx: LaunchContext) -> LaunchAddition:
         target = ctx.session_file("role.md")
         return LaunchAddition(
@@ -575,42 +654,33 @@ def test_session_files_are_written_0600_before_spawn(
 
     monkeypatch.setattr(launch_augment, "AUGMENTERS", (_writer_aug,))
 
-    sh_bin = tmp_path / "sh"
-    sh_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    sh_bin.chmod(0o755)
-    svc = CliCatalogService(
-        include_user_catalog=False,
-        which=lambda n: str(sh_bin),
-        platform="linux",
-        environ={"SHELL": str(sh_bin)},
-    )
-    host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-    observed_before_popen: Dict[str, Any] = {}
+    kinds = ("posix", "win32") if os.name == "posix" else ("win32",)
+    for kind in kinds:
+        observed_before_spawn: Dict[str, Any] = {}
 
-    monkeypatch.setattr(pty_host.pty, "openpty", lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)))
-    monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-    monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+        def _inspect(cmd: List[str]) -> None:
+            idx = cmd.index("--role-file")
+            p = Path(cmd[idx + 1])
+            observed_before_spawn["exists"] = p.is_file()
+            observed_before_spawn["bytes"] = p.read_bytes()
+            observed_before_spawn["mode"] = stat.S_IMODE(p.stat().st_mode)
+            observed_before_spawn["dir_mode"] = stat.S_IMODE(p.parent.stat().st_mode)
 
-    def _inspect_popen(cmd: List[str], **kw: Any) -> _DummyProc:
-        idx = cmd.index("--role-file")
-        p = Path(cmd[idx + 1])
-        observed_before_popen["exists"] = p.is_file()
-        observed_before_popen["bytes"] = p.read_bytes()
-        observed_before_popen["mode"] = stat.S_IMODE(p.stat().st_mode)
-        observed_before_popen["dir_mode"] = stat.S_IMODE(p.parent.stat().st_mode)
-        return _DummyProc()
-
-    monkeypatch.setattr(pty_host.subprocess, "Popen", _inspect_popen)
-    monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
-
-    res = host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False)
-    assert res["success"] is True
-    assert observed_before_popen["exists"] is True
-    assert observed_before_popen["bytes"] == b"rol de prueba"
-    if sys.platform != "win32":
-        assert observed_before_popen["mode"] == 0o600
-        assert observed_before_popen["dir_mode"] == 0o700
-    host.close()
+        captured: List[List[str]] = []
+        res = _run_custom_shell_spawn(
+            tmp_path,
+            monkeypatch,
+            kind=kind,
+            store=PaneMcpConfigStore(base_dir=tmp_path / f"store_{kind}"),
+            captured=captured,
+            before_spawn=_inspect,
+        )
+        assert res["success"] is True, (kind, res)
+        assert observed_before_spawn["exists"] is True
+        assert observed_before_spawn["bytes"] == b"rol de prueba"
+        if sys.platform != "win32":
+            assert observed_before_spawn["mode"] == 0o600
+            assert observed_before_spawn["dir_mode"] == 0o700
 
 
 # ---------------------------------------------------------------------------
