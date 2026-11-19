@@ -246,4 +246,45 @@ describe('RelayPanel', () => {
     expect(screen.getByTestId('relay-resume-pane-pane-1234567890ab').disabled).toBe(false);
     expect(screen.getByTestId('relay-global-pause-switch').disabled).toBe(false);
   });
+
+  it('Descartar pasando por CONFIRMATION_REQUIRED abre AppConfirmDialog y confirma con ui_confirm_action', async () => {
+    let parked = [PARKED];
+    const api = makeApi({
+      relay_list_human_inbox: vi.fn(async () => ({ success: true, items: parked })),
+      relay_resolve_parked: vi.fn(async (_id, decision) => {
+        if (decision === 'discard') {
+          return {
+            success: false,
+            code: 'CONFIRMATION_REQUIRED',
+            confirmation: {
+              token: 'tok-discard-9',
+              action_id: 'relay.discard_parked',
+              title: 'Descartar un mensaje entre agentes',
+              message: 'Texto exacto:\ntercer mensaje',
+              rememberable: false,
+              expires_in_s: 120
+            }
+          };
+        }
+        parked = [];
+        return { success: true, state: 'queued' };
+      }),
+      ui_confirm_action: vi.fn(async () => {
+        parked = [];
+        return { success: true, state: 'discarded' };
+      })
+    });
+
+    render(<Harness api={api} />);
+    fireEvent.click(await screen.findByTestId('human-inbox-discard-m-9'));
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByTestId('app-confirm-remember')).toBeNull();
+
+    await waitFor(() => expect(screen.getByTestId('app-confirm-accept').disabled).toBe(false), { timeout: 1500 });
+    fireEvent.click(screen.getByTestId('app-confirm-accept'));
+
+    await waitFor(() => expect(api.ui_confirm_action).toHaveBeenCalledWith('tok-discard-9', true, false));
+    await waitFor(() => expect(screen.getByTestId('human-inbox-feedback').textContent).toContain('Mensaje descartado'));
+    await waitFor(() => expect(screen.getByTestId('human-inbox-empty')).toBeTruthy());
+  });
 });

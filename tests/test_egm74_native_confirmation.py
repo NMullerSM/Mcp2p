@@ -146,7 +146,7 @@ def test_plain_shell_and_catalog_clis_need_no_dialog(bridge: ApiBridge, tmp_path
     assert dialog.calls == []
 
 
-def test_install_needs_token_then_native_dialog_with_the_exact_command(bridge: ApiBridge, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_needs_token_then_app_confirmation_with_the_exact_command(bridge: ApiBridge, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned: List[Dict[str, Any]] = []
     terminal = bridge.extensions_ui._get_terminal_connector()
     monkeypatch.setattr(
@@ -155,19 +155,29 @@ def test_install_needs_token_then_native_dialog_with_the_exact_command(bridge: A
     dialog = _Dialog([False, True])
     bridge.confirmations.dialog = dialog
 
-    # Token invalido: ni siquiera se abre el dialogo (no se puede inundar de dialogos sin token)
+    # Token invalido: ni siquiera se pide confirmacion
     bad = bridge.pty_install_cli("claude", "token-falso")
     assert bad["code"] == "INSTALL_TOKEN_INVALID" and dialog.calls == []
 
     prep = bridge.pty_prepare_install("claude")
-    declined = bridge.pty_install_cli("claude", prep["confirmation_token"])
-    assert declined["code"] == "CONFIRMATION_DECLINED" and spawned == []
-    assert prep["command"] in dialog.calls[0][1]
-    # el token se gasto: hay que preparar de nuevo
+    req1 = bridge.pty_install_cli("claude", prep["confirmation_token"])
+    assert req1["success"] is False and req1["code"] == "CONFIRMATION_REQUIRED"
+    assert dialog.calls == []  # superficie propia: no usa el dialogo nativo
+    assert prep["command"] in req1["confirmation"]["message"]
+    assert req1["confirmation"]["action_id"] == "cli.install.package_manager"
+    assert req1["confirmation"]["rememberable"] is True
+    # el token de instalacion se gasto: hay que preparar de nuevo
     assert bridge.pty_install_cli("claude", prep["confirmation_token"])["code"] == "INSTALL_TOKEN_INVALID"
 
+    declined = bridge.ui_confirm_action(req1["confirmation"]["token"], False, False)
+    assert declined["code"] == "CONFIRMATION_DECLINED" and spawned == []
+    # token de confirmacion de un solo uso
+    assert bridge.ui_confirm_action(req1["confirmation"]["token"], True, False)["code"] == "CONFIRMATION_TOKEN_INVALID"
+
     prep2 = bridge.pty_prepare_install("claude")
-    ok = bridge.pty_install_cli("claude", prep2["confirmation_token"])
+    req2 = bridge.pty_install_cli("claude", prep2["confirmation_token"])
+    assert req2["code"] == "CONFIRMATION_REQUIRED"
+    ok = bridge.ui_confirm_action(req2["confirmation"]["token"], True, False)
     assert ok["success"] is True and ok["code"] == "INSTALL_STARTED"
     assert len(spawned) == 1 and prep2["command"] in spawned[0]["command"][-1]
 

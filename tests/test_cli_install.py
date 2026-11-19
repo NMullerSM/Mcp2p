@@ -343,3 +343,30 @@ def test_win32_returns_platform_unsupported_with_manual_command(monkeypatch: pyt
     finally:
         monkeypatch.undo()
         bridge.core_kernel.close()
+
+
+def test_install_does_not_hold_pane_lock_when_confirmation_required(
+    make_bridge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MCP2P_TEST_AUTO_CONFIRM", raising=False)
+    b = make_bridge({"curl", "bash"})
+    terminal = b.extensions_ui._get_terminal_connector()
+    spawned: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        terminal, "spawn_session", lambda *a, **k: spawned.append(k) or {"success": True, "session_id": "s1", "pid": 1}
+    )
+
+    prep = b.pty_prepare_install("claude")
+    req = b.pty_install_cli("claude", prep["confirmation_token"])
+    assert req["success"] is False and req["code"] == "CONFIRMATION_REQUIRED"
+    assert req["confirmation"]["action_id"] == "cli.install.script"
+    assert req["confirmation"]["rememberable"] is False
+
+    # El cerrojo del panel NO queda adquirido entre RPCs mientras se espera confirmacion.
+    pane_lock = b.extensions_ui._pane_lock("pane_1")
+    assert pane_lock.acquire(blocking=False) is True
+    pane_lock.release()
+
+    ok = b.ui_confirm_action(req["confirmation"]["token"], True, True)
+    assert ok["success"] is True and ok["code"] == "INSTALL_STARTED" and len(spawned) == 1
+    assert b.db.get_setting("confirm.remember.cli.install.script") is None

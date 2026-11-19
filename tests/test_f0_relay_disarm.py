@@ -499,32 +499,37 @@ class _Dialog:
         return self.answers.pop(0) if self.answers else False
 
 
-def test_enabling_auto_relay_needs_native_confirmation_and_disabling_does_not(bridge) -> None:
+def test_enabling_auto_relay_needs_app_confirmation_and_disabling_does_not(bridge) -> None:
     # D2: el Auto-Relay es por panel; la firma global antigua (un solo booleano) se rechaza.
     registry = bridge.extensions_ui._get_pane_registry()
     registry.register_pane("pane_1", cli_profile="custom_shell")
     assert bridge.pty_set_auto_relay(True)["code"] == "INVALID_ARGUMENT"
     assert bridge.pty_set_auto_relay("pane_5", True)["code"] == "PANE_NOT_FOUND"
 
-    # sin ventana: se rechaza y el panel sigue apagado
-    res = bridge.pty_set_auto_relay("pane_1", True)
-    assert res["success"] is False and res["code"] == "CONFIRMATION_UNAVAILABLE"
+    # WP-9: activar Auto-Relay usa dialogo propio recordable (CONFIRMATION_REQUIRED -> ui_confirm_action)
+    dialog = _Dialog([])
+    bridge.confirmations.dialog = dialog
+    req1 = bridge.pty_set_auto_relay("pane_1", True)
+    assert req1["success"] is False and req1["code"] == "CONFIRMATION_REQUIRED"
+    assert req1["confirmation"]["action_id"] == "auto_relay.enable"
+    assert req1["confirmation"]["rememberable"] is True
+    assert dialog.calls == []
     assert registry.get_pane("pane_1").auto_relay_enabled is False
 
-    dialog = _Dialog([False, True])
-    bridge.confirmations.dialog = dialog
-    declined = bridge.pty_set_auto_relay("pane_1", True)
+    declined = bridge.ui_confirm_action(req1["confirmation"]["token"], False, False)
     assert declined["success"] is False and declined["code"] == "CONFIRMATION_DECLINED"
     assert registry.get_pane("pane_1").auto_relay_enabled is False
 
-    accepted = bridge.pty_set_auto_relay("pane_1", True)
+    req2 = bridge.pty_set_auto_relay("pane_1", True)
+    assert req2["code"] == "CONFIRMATION_REQUIRED"
+    message = req2["confirmation"]["message"]
+    assert "bandeja" in message and "ninguna terminal" in message and "pane_1" in message
+
+    accepted = bridge.ui_confirm_action(req2["confirmation"]["token"], True, False)
     assert accepted["success"] is True and accepted["auto_relay_enabled"] is True
     assert accepted["pane_id"] == "pane_1"
     assert "key_encrypted" not in accepted and "deferred_count" not in accepted  # Gate 0c ya no aplica
-    title, message = dialog.calls[-1]
-    assert "bandeja" in message and "ninguna terminal" in message and "pane_1" in message
 
-    calls_before = len(dialog.calls)
     off = bridge.pty_set_auto_relay("pane_1", False)
     assert off["success"] is True and off["auto_relay_enabled"] is False
-    assert len(dialog.calls) == calls_before  # apagar no abre dialogo
+    assert dialog.calls == []  # ni activar ni apagar abren dialogo nativo
