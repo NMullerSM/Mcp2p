@@ -11,7 +11,7 @@ Tres canales, todos de solo lectura para el agente (el Hub no teclea nunca en un
    depende del panel y es lo que mantiene el bucle vivo mientras el humano tenga activado el modo.
 
 Tiempos de espera: ``inbox_wait`` admite hasta ``MAX_WAIT_MS``. Cada CLI corta las llamadas MCP largas a su manera
-(Codex: ``tool_timeout_sec``, 60 s por defecto; Claude Code y Gemini CLI: ``timeout`` por servidor en ms). El Hub
+(Codex: ``tool_timeout_sec``, 60 s por defecto; Claude Code: ``timeout`` por servidor en ms). El Hub
 sube ese limite en la configuracion MCP que genera para el panel (``TOOL_TIMEOUT_MS``), pero solo se recomienda una
 espera larga donde se pudo comprobar con el binario; en el resto, una por debajo del limite mas bajo conocido.
 """

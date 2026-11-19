@@ -139,118 +139,6 @@
       }
     },
     {
-      "id": "gemini",
-      "display_name": "Gemini CLI",
-      "icon": "gemini",
-      "kind": "agent_cli",
-      "binary": "gemini",
-      "binary_aliases": [],
-      "candidate_paths": {
-        "linux": ["~/.local/bin/gemini", "~/.npm-global/bin/gemini"],
-        "darwin": ["~/.local/bin/gemini", "/opt/homebrew/bin/gemini", "/usr/local/bin/gemini"],
-        "win32": ["%APPDATA%\\npm\\gemini.cmd"]
-      },
-      "launch_flags": [],
-      "mcp": {
-        "method": "env",
-        "format": "gemini_settings_json",
-        "env": {"GEMINI_CLI_SYSTEM_SETTINGS_PATH": "{mcp_config_file}"},
-        "verified": false,
-        "note": "NO verificado con binario (gemini no esta instalado). Segun la documentacion, GEMINI_CLI_SYSTEM_SETTINGS_PATH sustituye el archivo de ajustes del sistema (maxima precedencia) y mcpServers de los distintos ambitos se fusionan; httpUrl + headers para Streamable HTTP."
-      },
-      "resume": {
-        "argv": ["--resume"],
-        "verified": false,
-        "note": "No verificado: gemini no esta instalado en esta maquina."
-      },
-      "osc7501": {
-        "status": "unverified",
-        "note": "No verificado con binario local; no se responde a sondas OSC 7501."
-      },
-      "activity": {
-        "status": "unverified",
-        "platforms": [],
-        "hook_install": "none",
-        "events": {},
-        "session_id_field": "",
-        "verified_with_cli_version": "",
-        "verified_on": "",
-        "note": "Pendiente de medir (WP-5b)."
-      },
-      "delivery": {
-        "status": "unverified",
-        "platforms": [],
-        "paste_mode": "bracketed",
-        "submit_delay_ms": 300,
-        "max_inject_bytes": 2048,
-        "confirm_event": "",
-        "verified_with_cli_version": "",
-        "verified_on": "",
-        "note": "Pendiente de medir (WP-5b)."
-      },
-      "role_launch": {
-        "status": "unverified",
-        "platforms": [],
-        "system_prompt_file_argv": [],
-        "readonly_argv": [],
-        "verified_with_cli_version": "",
-        "verified_on": "",
-        "note": "Pendiente de medir (WP-5b)."
-      },
-      "session": {
-        "status": "unverified",
-        "platforms": [],
-        "assign_argv": [],
-        "resume_by_id_argv": [],
-        "verified_with_cli_version": "",
-        "verified_on": "",
-        "note": "Pendiente de medir (WP-5b)."
-      },
-      "install": {
-        "linux": [
-          {
-            "method": "npm",
-            "command": "npm install -g @google/gemini-cli",
-            "verified": true,
-            "source_url": "https://github.com/google-gemini/gemini-cli",
-            "note": "Node.js 20+ segun https://www.geminicli.com/docs/get-started/installation. Desde 2026-06-18 el acceso gratuito individual paso a Antigravity CLI."
-          },
-          {
-            "method": "brew",
-            "command": "brew install gemini-cli",
-            "verified": true,
-            "source_url": "https://github.com/google-gemini/gemini-cli",
-            "note": ""
-          }
-        ],
-        "darwin": [
-          {
-            "method": "brew",
-            "command": "brew install gemini-cli",
-            "verified": true,
-            "source_url": "https://github.com/google-gemini/gemini-cli",
-            "note": ""
-          },
-          {
-            "method": "npm",
-            "command": "npm install -g @google/gemini-cli",
-            "verified": true,
-            "source_url": "https://github.com/google-gemini/gemini-cli",
-            "note": ""
-          }
-        ],
-        "win32": [
-          {
-            "method": "npm",
-            "command": "npm install -g @google/gemini-cli",
-            "verified": true,
-            "source_url": "https://github.com/google-gemini/gemini-cli",
-            "note": ""
-          }
-        ]
-      }
-    },
-    {
       "id": "codex",
       "display_name": "Codex",
       "icon": "codex",
@@ -272,8 +160,8 @@
       },
       "resume": {
         "argv": ["resume"],
-        "verified": true,
-        "note": "Documentado: `codex resume` reabre un chat reciente."
+        "verified": false,
+        "note": "Pendiente de medir (WP-5b)."
       },
       "osc7501": {
         "status": "unverified",

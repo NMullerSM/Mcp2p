@@ -96,10 +96,6 @@ def _render_config(fmt: str, hub_url: str, token: str) -> Dict[str, Any]:
             "$schema": "https://opencode.ai/config.json",
             "mcp": {MCP_SERVER_NAME: {"type": "remote", "url": hub_url, "headers": auth, "enabled": True}},
         }
-    if fmt == "gemini_settings_json":
-        return {
-            "mcpServers": {MCP_SERVER_NAME: {"httpUrl": hub_url, "headers": auth, "timeout": TOOL_TIMEOUT_MS}}
-        }
     raise McpInjectionError(f"formato de configuracion MCP desconocido: {fmt!r}")
 
 

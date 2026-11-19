@@ -111,7 +111,8 @@ def build_install_command(
 ) -> List[str]:
     """
     argv que ejecuta el comando EXACTO del catalogo en una shell y avisa del codigo de salida: `sh -c` en POSIX,
-    `powershell -Command` en Windows (el catalogo usa `irm ... | iex`, `winget` y `npm`, validos en PowerShell).
+    `powershell -ExecutionPolicy Bypass -Command` en Windows (ambito del proceso; el catalogo usa `irm ... | iex`,
+    `winget` y `npm`, validos en PowerShell).
     """
     if platform == "win32":
         shell = which("powershell") or which("pwsh") or "powershell.exe"
@@ -121,7 +122,7 @@ def build_install_command(
             "Cierre este panel y vuelva a abrir el selector de CLI.\"; "
             "exit $rc"
         )
-        return [shell, "-NoLogo", "-NoProfile", "-Command", wrapper]
+        return [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", wrapper]
     wrapper = (
         f"{command}; rc=$?; echo; "
         'echo "[mcp2p] El instalador termino con codigo $rc. Cierre este panel y vuelva a abrir el selector de CLI."; '
