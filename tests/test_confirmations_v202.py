@@ -489,7 +489,7 @@ def test_agy_install_cli_with_remembered_grant_asks_native_dialog_when_file_miss
         catalog = CliCatalogService(
             bridge.core_kernel.extension_repo,
             user_catalog_path=tmp_path / "sin_usuario.json",
-            which=lambda name: f"/usr/bin/{name}" if name in {"curl", "bash"} else None,
+            which=lambda name: f"/usr/bin/{name}" if name in {"curl", "bash", "powershell"} else None,
             platform=plat,
             home=str(home),
             environ={"SHELL": "/bin/sh"} if plat != "win32" else {"COMSPEC": "cmd.exe"},
