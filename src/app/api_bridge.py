@@ -144,6 +144,10 @@ class ApiBridge:
         self.roles_ui = RolesUIAdapter(self)
         # --- fin WP-3a ---
         # --- v2.0.2 WP-4a: sesiones ---
+        from src.app.ui_adapters.sessions_ui import SessionsUIAdapter, wire_sessions
+
+        self.sessions_ui = SessionsUIAdapter(self)
+        wire_sessions(self)
         # --- fin WP-4a ---
         # --- v2.0.2 WP-6a: actividad por hooks ---
         # --- fin WP-6a ---
@@ -830,6 +834,23 @@ class ApiBridge:
         return self.roles_ui.pty_get_pane_role(pane_id=pane_id)
     # --- fin WP-3a ---
     # --- v2.0.2 WP-4a: sesiones ---
+    def pty_relaunch_pane(self, pane_id: Any) -> Dict[str, Any]:
+        return self.sessions_ui.pty_relaunch_pane(pane_id=pane_id)
+
+    def pty_get_restorable_session(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        return self.sessions_ui.pty_get_restorable_session(project_uuid=project_uuid)
+
+    def pty_restore_session(self, project_uuid: Any, pane_slots: Any = None) -> Dict[str, Any]:
+        return self.sessions_ui.pty_restore_session(project_uuid=project_uuid, pane_slots=pane_slots)
+
+    def pty_dismiss_restore(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
+        return self.sessions_ui.pty_dismiss_restore(project_uuid=project_uuid)
+
+    def pty_get_restore_policy(self) -> Dict[str, Any]:
+        return self.sessions_ui.pty_get_restore_policy()
+
+    def pty_set_restore_policy(self, policy: Any) -> Dict[str, Any]:
+        return self.sessions_ui.pty_set_restore_policy(policy=policy)
     # --- fin WP-4a ---
     # --- v2.0.2 WP-6b: entrega directa ---
     # --- fin WP-6b ---
