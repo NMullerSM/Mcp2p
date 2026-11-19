@@ -6,6 +6,7 @@ y se encarga de limpiar los directorios temporales que esos helpers crean,
 evitando que queden huérfanos en /tmp tras ejecutar la suite completa.
 """
 
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -14,6 +15,12 @@ from typing import List
 import pytest
 
 from src.storage.db import DatabaseManager
+
+# Las mediciones locales de CLIs (WP-5d) viven en un archivo del directorio de datos; en las pruebas se apunta a uno
+# inexistente para que nunca dependan de lo medido en la máquina de desarrollo.
+os.environ.setdefault(
+    "MCP2P_MEASUREMENTS_FILE", os.path.join(tempfile.mkdtemp(prefix="mcp2p-meas-"), "cli_measurements.json")
+)
 
 # Directorios temporales creados por los helpers de este módulo durante la
 # sesión de pruebas. Se eliminan todos en pytest_sessionfinish.

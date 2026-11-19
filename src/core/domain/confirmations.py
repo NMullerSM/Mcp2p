@@ -46,6 +46,13 @@ _SPECS: tuple[ConfirmationSpec, ...] = (
         label_es="Activar entrega directa en un panel",
     ),
     ConfirmationSpec(
+        action_id="cli.measure",
+        risk="medium",
+        surface="app",
+        rememberable=False,
+        label_es="Medir un CLI en este equipo",
+    ),
+    ConfirmationSpec(
         action_id="cli.install.package_manager",
         risk="medium",
         surface="app",

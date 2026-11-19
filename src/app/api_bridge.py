@@ -160,6 +160,11 @@ class ApiBridge:
         self.delivery_ui = DeliveryUIAdapter(self)
         wire_delivery(self)
         # --- fin WP-6b ---
+        # --- v2.0.2 WP-5d: medicion automatica de CLIs ---
+        from src.app.ui_adapters.measurement_ui import MeasurementUIAdapter
+
+        self.measurement_ui = MeasurementUIAdapter(self)
+        # --- fin WP-5d ---
         # --- v2.0.2 WP-7: politica de nodos ---
         from src.app.ui_adapters.nodes_ui import NodesUIAdapter, wire_nodes
 
@@ -898,6 +903,19 @@ class ApiBridge:
     def relay_list_threads(self, project_uuid: Any, since_ms: Any = 0, limit: Any = 200) -> Dict[str, Any]:
         return self.delivery_ui.relay_list_threads(project_uuid=project_uuid, since_ms=since_ms, limit=limit)
     # --- fin WP-6b ---
+    # --- v2.0.2 WP-5d: medicion automatica de CLIs ---
+    def pty_get_cli_measurements(self) -> Dict[str, Any]:
+        return self.measurement_ui.pty_get_cli_measurements()
+
+    def pty_measure_cli(self, cli_id: Any) -> Dict[str, Any]:
+        return self.measurement_ui.pty_measure_cli(cli_id=cli_id)
+
+    def pty_cancel_cli_measurement(self) -> Dict[str, Any]:
+        return self.measurement_ui.pty_cancel_cli_measurement()
+
+    def pty_forget_cli_measurement(self, cli_id: Any) -> Dict[str, Any]:
+        return self.measurement_ui.pty_forget_cli_measurement(cli_id=cli_id)
+    # --- fin WP-5d ---
     # --- v2.0.2 WP-7: politica de nodos ---
     def relay_list_nodes(self) -> Dict[str, Any]:
         return self.nodes_ui.relay_list_nodes()
