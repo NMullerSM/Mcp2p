@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAppConfirmation } from '../common/useAppConfirmation';
 import { describeTerminalError } from './terminalModel';
 
 /**
@@ -22,6 +23,7 @@ export function useInstallFlow({
   const [installBusyCliId, setInstallBusyCliId] = useState(null);
   const installTokenRef = useRef(null);
   const installingRef = useRef(false);
+  const { dialog: installConfirmDialog, run: runWithAppConfirmation } = useAppConfirmation(api);
 
   useEffect(() => () => {
     installTokenRef.current = null;
@@ -81,7 +83,7 @@ export function useInstallFlow({
     installingRef.current = true;
     setInstallBusyCliId(plan.cliId);
     try {
-      const res = await runWithNativeDialogNotice(() => api.pty_install_cli(plan.cliId, token));
+      const res = await runWithAppConfirmation(() => api.pty_install_cli(plan.cliId, token));
       if (!mountedRef.current) return;
       if (!res?.success || !res.pane_id) {
         showNotice(res || { code: 'INTERNAL_ERROR', message: 'No se pudo iniciar la instalación.' }, context);
@@ -105,7 +107,7 @@ export function useInstallFlow({
       installingRef.current = false;
       if (mountedRef.current) setInstallBusyCliId(null);
     }
-  }, [api, mountedRef, installPlan, discardInstallPlan, runWithNativeDialogNotice, showNotice, setNotice, markPaneOpened, requestTerminalFocus, closeSlider, refreshMatrixStatus]);
+  }, [api, mountedRef, installPlan, discardInstallPlan, runWithAppConfirmation, showNotice, setNotice, markPaneOpened, requestTerminalFocus, closeSlider, refreshMatrixStatus]);
 
   // La confirmacion vence (el backend la invalida a los 120 s); se retira tambien de la pantalla.
   useEffect(() => {
@@ -119,6 +121,7 @@ export function useInstallFlow({
   }, [installPlan, setNotice]);
 
   return {
+    installConfirmDialog,
     installPlan,
     installBusyCliId,
     discardInstallPlan,

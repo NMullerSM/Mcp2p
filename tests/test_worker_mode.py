@@ -135,7 +135,7 @@ def gui(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         bridge.core_kernel.close()
 
 
-def test_gui_worker_mode_toggle_asks_natively_to_enable_and_persists(gui, tmp_path: Path) -> None:
+def test_gui_worker_mode_toggle_asks_app_confirmation_to_enable_and_persists(gui, tmp_path: Path) -> None:
     bridge, term = gui
     proj = bridge.db.create_project("A", str(tmp_path / "wa"))["project_uuid"]
     bridge.pty_spawn_pane("pane_1", "custom_shell", start_hub=False, project_uuid=proj)
@@ -143,13 +143,19 @@ def test_gui_worker_mode_toggle_asks_natively_to_enable_and_persists(gui, tmp_pa
 
     asked: List[tuple] = []
     bridge.confirmations.dialog = lambda title, message: asked.append((title, message)) or False
-    refused = bridge.pty_set_worker_mode("pane_2", True)
-    assert refused["success"] is False and asked, "activar el modo trabajador exige el dialogo nativo"
-    assert "pane_2" in asked[0][1] and "ninguna terminal" in asked[0][1]
+    req1 = bridge.pty_set_worker_mode("pane_2", True)
+    assert req1["success"] is False and req1["code"] == "CONFIRMATION_REQUIRED"
+    assert req1["confirmation"]["action_id"] == "worker_mode.enable"
+    assert req1["confirmation"]["rememberable"] is True
+    assert "pane_2" in req1["confirmation"]["message"] and "ninguna terminal" in req1["confirmation"]["message"]
+    assert asked == []
+    refused = bridge.ui_confirm_action(req1["confirmation"]["token"], False, False)
+    assert refused["success"] is False and refused["code"] == "CONFIRMATION_DECLINED"
     assert bridge.db.get_pane_identity(proj, "pane_2")["worker_mode"] is False
 
-    bridge.confirmations.dialog = lambda _t, _m: True
-    on = bridge.pty_set_worker_mode("pane_2", True)
+    req2 = bridge.pty_set_worker_mode("pane_2", True)
+    assert req2["code"] == "CONFIRMATION_REQUIRED"
+    on = bridge.ui_confirm_action(req2["confirmation"]["token"], True, False)
     assert on["success"] is True and on["worker_mode"] is True and on["project_uuid"] == proj
     panes = {p["pane_id"]: p["worker_mode"] for p in bridge.pty_get_matrix_status()["panes"]}
     assert panes == {"pane_1": False, "pane_2": True}

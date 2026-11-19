@@ -896,6 +896,27 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         message += "\n\nAcepte solo si reconoce este archivo y esta entrada."
         return self._confirm_native("Registrar MCP2P en Antigravity", message), state
 
+    def _agy_entry_matches_current(self, state: Optional[Dict[str, Any]] = None) -> bool:
+        """True solo si `agy_registration_state()` es `managed` y la entrada coincide con `build_agy_entry()`."""
+        st = state if state is not None else _mcp_injection.agy_registration_state()
+        if st.get("state") != "managed":
+            return False
+        path_raw = st.get("path")
+        if not isinstance(path_raw, str) or not path_raw:
+            return False
+        try:
+            data, _original, error = _mcp_injection._load_agy_config(Path(path_raw))
+            if error is not None:
+                return False
+            servers = data.get("mcpServers")
+            existing = servers.get(_mcp_injection.MCP_SERVER_NAME) if isinstance(servers, dict) else None
+            if not isinstance(existing, dict):
+                return False
+            desired = _mcp_injection.build_agy_entry()
+            return set(existing.keys()) == set(desired.keys()) and _mcp_injection._same_launch(existing, desired)
+        except Exception:
+            return False
+
     def _spawn_session_with_agy_consent(self, terminal: Any, **kwargs: Any) -> Any:
         """`terminal.spawn_session(**kwargs)`; para `antigravity` resuelve antes el consentimiento del registro global.
 
@@ -903,17 +924,30 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         fuera del perfil del panel. Un rechazo se recuerda para no preguntar en cada spawn.
         """
         consent = False
+        replace_manual = False
         if kwargs.get("cli_profile") == "antigravity":
             remembered = self._agy_consent_state()
             if remembered == "granted":
-                consent = True
+                if self._agy_entry_matches_current():
+                    consent = True
+                else:
+                    declined, state = self._confirm_agy_registration()
+                    if declined is None:
+                        consent = True
+                        replace_manual = state.get("state") == "manual" and not state.get("hub_proxy_only")
             elif remembered is None:
-                declined, _state = self._confirm_agy_registration()
+                declined, state = self._confirm_agy_registration()
                 if declined is None:
                     self._set_agy_consent_state("granted")
                     consent = True
+                    replace_manual = state.get("state") == "manual" and not state.get("hub_proxy_only")
                 elif declined.get("code") == "CONFIRMATION_DECLINED":
                     self._set_agy_consent_state("declined")
+        if consent and replace_manual:
+            try:
+                _mcp_injection.ensure_agy_mcp_registered(replace_unmanaged=True)
+            except Exception:
+                pass
         with _mcp_injection.global_registration_consent(consent):
             return terminal.spawn_session(**kwargs)
 
@@ -1128,8 +1162,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                            reason="max_panes", max_panes=max_panes)
 
     def pty_install_cli(self, cli_id: Any, confirmation_token: Any, pane_id: Any = None) -> Dict[str, Any]:
-        """Paso 2: con un token valido abre un panel real que ejecuta el comando del catalogo."""
-        pane_lock: Optional[threading.Lock] = None
+        """Paso 2: valida token de instalación, pide confirmación propia y abre el panel bajo `_pane_lock`."""
         try:
             if is_unsupported_terminal_platform():
                 return {**unsupported_platform_response(), "cli_id": cli_id if isinstance(cli_id, str) else None}
@@ -1142,8 +1175,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             target_pane, pane_error = self._pick_install_pane(terminal, pane_id)
             if pane_error is not None or target_pane is None:
                 return {**(pane_error or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
-            pane_lock = self._pane_lock(target_pane)
-            pane_lock.acquire()
 
             verdict = self._get_install_broker().consume(spec.id, confirmation_token, option.command, svc.platform)
             if verdict == "INSTALL_TOKEN_EXPIRED":
@@ -1153,62 +1184,102 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 return _fail("INSTALL_TOKEN_INVALID",
                              "Token de confirmacion invalido o ya usado; prepare la instalacion de nuevo.",
                              cli_id=spec.id)
-            # El token es anti-accidente (lo valida el mismo puente al que llama el JS); la barrera real es el
-            # dialogo NATIVO con el comando exacto (EGM-74). Con el token ya gastado, rechazar obliga a preparar de nuevo.
-            declined = self._confirm_native(
-                f"Instalar {spec.display_name}",
+
+            gate = getattr(self._bridge, "confirm_gate", None)
+            if gate is None:
+                return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion; la accion se rechaza.",
+                             cli_id=spec.id)
+
+            action_id = "cli.install.script" if option.downloads_script else "cli.install.package_manager"
+            title = f"Instalar {spec.display_name}"
+            message = (
                 f"Se ejecutara en una terminal visible ({target_pane}):\n\n{option.command}\n\n"
                 + ("ATENCION: es un script descargado de Internet y ejecutado en su shell.\n\n"
                    if option.downloads_script else "")
-                + "Acepte solo si reconoce este comando.",
+                + "Acepte solo si reconoce este comando."
             )
-            if declined is not None:
-                return {**declined, "cli_id": spec.id}
+            args_digest = f"install:{spec.id}:{svc.platform}:{pane_id or ''}:{option.command}"
 
-            install_argv = build_install_command(option.command, svc.platform, svc.which)
-            spawn_res = dict(
-                terminal.spawn_session(
-                    pane_id=target_pane,
-                    cli_profile="custom_shell",
-                    role="installer",
-                    command=install_argv,
-                    cwd=None,
-                    cols=100,
-                    rows=28,
-                    hub_url=None,
-                    session_token=None,
-                    node_uuid=None,
-                )
-            )
-            if not spawn_res.get("success"):
-                cleaned = _strip_secret_fields(spawn_res)
-                cleaned.setdefault("code", "PTY_SPAWN_FAILED")
-                cleaned["success"] = False
-                cleaned["cli_id"] = spec.id
-                return cleaned
-            if spec.id == "antigravity" and self._agy_consent_state() == "granted":
-                # Solo con el consentimiento ya concedido en esta maquina; si no, el primer panel de agy lo pedira.
+            def _execute() -> Dict[str, Any]:
+                exec_lock: Optional[threading.Lock] = None
                 try:
-                    _mcp_injection.ensure_agy_mcp_registered()
-                except Exception:
-                    pass
-            return {
-                "success": True,
-                "code": "INSTALL_STARTED",
-                "message": f"Instalando {spec.display_name} en {target_pane}; revise la salida en la terminal.",
-                "cli_id": spec.id,
-                "pane_id": target_pane,
-                "session_id": spawn_res.get("session_id"),
-                "pid": spawn_res.get("pid"),
-                "command": option.command,
-                "method": option.method,
-                "downloads_script": option.downloads_script,
-            }
+                    chosen_pane, pick_err = self._pick_install_pane(terminal, pane_id if pane_id is not None else target_pane)
+                    if (pick_err is not None or chosen_pane is None) and pane_id is None:
+                        chosen_pane, pick_err = self._pick_install_pane(terminal, None)
+                    if pick_err is not None or chosen_pane is None:
+                        return {**(pick_err or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
+
+                    exec_lock = self._pane_lock(chosen_pane)
+                    exec_lock.acquire()
+                    recheck_pane, recheck_err = self._pick_install_pane(terminal, chosen_pane)
+                    if recheck_err is not None or recheck_pane is None:
+                        if pane_id is not None:
+                            return {**(recheck_err or _fail("PANE_ALREADY_ACTIVE", "El panel ya esta ocupado.")),
+                                    "cli_id": spec.id}
+                        exec_lock.release()
+                        exec_lock = None
+                        alt_pane, alt_err = self._pick_install_pane(terminal, None)
+                        if alt_err is not None or alt_pane is None:
+                            return {**(alt_err or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
+                        exec_lock = self._pane_lock(alt_pane)
+                        exec_lock.acquire()
+                        recheck_pane, recheck_err = self._pick_install_pane(terminal, alt_pane)
+                        if recheck_err is not None or recheck_pane is None:
+                            return {**(recheck_err or _fail("PANE_LIMIT_REACHED", "Sin paneles libres.")), "cli_id": spec.id}
+                        chosen_pane = recheck_pane
+
+                    install_argv = build_install_command(option.command, svc.platform, svc.which)
+                    spawn_res = dict(
+                        terminal.spawn_session(
+                            pane_id=chosen_pane,
+                            cli_profile="custom_shell",
+                            role="installer",
+                            command=install_argv,
+                            cwd=None,
+                            cols=100,
+                            rows=28,
+                            hub_url=None,
+                            session_token=None,
+                            node_uuid=None,
+                        )
+                    )
+                    if not spawn_res.get("success"):
+                        cleaned = _strip_secret_fields(spawn_res)
+                        cleaned.setdefault("code", "PTY_SPAWN_FAILED")
+                        cleaned["success"] = False
+                        cleaned["cli_id"] = spec.id
+                        return cleaned
+                    if spec.id == "antigravity" and self._agy_consent_state() == "granted":
+                        try:
+                            if not self._agy_entry_matches_current():
+                                declined, state = self._confirm_agy_registration()
+                                if declined is None:
+                                    replace_manual = state.get("state") == "manual" and not state.get("hub_proxy_only")
+                                    _mcp_injection.ensure_agy_mcp_registered(replace_unmanaged=replace_manual)
+                        except Exception:
+                            pass
+                    return {
+                        "success": True,
+                        "code": "INSTALL_STARTED",
+                        "message": f"Instalando {spec.display_name} en {chosen_pane}; revise la salida en la terminal.",
+                        "cli_id": spec.id,
+                        "pane_id": chosen_pane,
+                        "session_id": spawn_res.get("session_id"),
+                        "pid": spawn_res.get("pid"),
+                        "command": option.command,
+                        "method": option.method,
+                        "downloads_script": option.downloads_script,
+                    }
+                finally:
+                    if exec_lock is not None:
+                        exec_lock.release()
+
+            res = gate.require(action_id, title, message, _execute, args_digest=args_digest)
+            if res.get("success") is False and "cli_id" not in res:
+                return {**res, "cli_id": spec.id}
+            return res
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
-        finally:
-            if pane_lock is not None:
-                pane_lock.release()
 
     def _resolve_pane_project(self, project_uuid: Any) -> tuple[str, Optional[Dict[str, Any]]]:
         """Proyecto del panel: el que envia la GUI (debe existir) o el activo; '' si no hay ninguno."""
@@ -1630,7 +1701,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         """Activa o desactiva el Auto-Relay de UN panel (D2) y lo persiste por (proyecto, ranura).
 
         Activarlo solo significa «dejar avisos de asignacion en la bandeja de ESE panel»; nunca escribe en un PTY.
-        Activarlo exige confirmacion NATIVA (EGM-74); apagarlo no pregunta (es la direccion segura).
+        Activarlo pasa por `ConfirmationGate` (`auto_relay.enable`, recordable); apagarlo no pregunta.
         """
         try:
             if not isinstance(enabled, bool):
@@ -1642,34 +1713,46 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 rec = None
             if rec is None or rec.status == "closed":
                 return _fail("PANE_NOT_FOUND", "No hay un panel activo con ese identificador.")
-            if enabled:
-                project_label = rec.project_uuid or "(sin proyecto)"
-                try:
-                    proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
-                    if proj and proj.get("name"):
-                        project_label = f"{proj['name']} ({rec.project_uuid})"
-                except Exception:
-                    pass
-                declined = self._confirm_native(
-                    "Activar Auto-Relay en un panel",
-                    f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
-                    "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja del agente de este "
-                    "panel, ademas de los mensajes directos que ya recibe.\n\n"
-                    "No escribe nada en ninguna terminal: el agente decide cuando recoger los avisos. "
-                    "Acepte solo si quiere ese comportamiento.",
-                )
-                if declined is not None:
-                    return {**declined, "pane_id": rec.pane_id}
-            updated = registry.set_auto_relay(rec.pane_id, enabled)
-            if updated is None:
-                return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
-            return {
-                "success": True,
-                "code": "OK",
-                "pane_id": updated.pane_id,
-                "project_uuid": updated.project_uuid,
-                "auto_relay_enabled": bool(updated.auto_relay_enabled),
-            }
+
+            def _apply() -> Dict[str, Any]:
+                updated = registry.set_auto_relay(rec.pane_id, enabled)
+                if updated is None:
+                    return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
+                return {
+                    "success": True,
+                    "code": "OK",
+                    "pane_id": updated.pane_id,
+                    "project_uuid": updated.project_uuid,
+                    "auto_relay_enabled": bool(updated.auto_relay_enabled),
+                }
+
+            if not enabled:
+                return _apply()
+
+            gate = getattr(self._bridge, "confirm_gate", None)
+            if gate is None:
+                return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion; la accion se rechaza.")
+            project_label = rec.project_uuid or "(sin proyecto)"
+            try:
+                proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
+                if proj and proj.get("name"):
+                    project_label = f"{proj['name']} ({rec.project_uuid})"
+            except Exception:
+                pass
+            res = gate.require(
+                "auto_relay.enable",
+                "Activar Auto-Relay en un panel",
+                f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
+                "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja del agente de este "
+                "panel, ademas de los mensajes directos que ya recibe.\n\n"
+                "No escribe nada en ninguna terminal: el agente decide cuando recoger los avisos. "
+                "Acepte solo si quiere ese comportamiento.",
+                _apply,
+                args_digest=f"auto_relay:{rec.project_uuid}:{rec.pane_id}:1",
+            )
+            if res.get("success") is False and "pane_id" not in res:
+                return {**res, "pane_id": rec.pane_id}
+            return res
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
@@ -1678,8 +1761,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
         Con el modo activo, las respuestas de `inbox_next`/`inbox_wait` de ese panel traen `worker_mode: true` y una
         instruccion para que el agente se quede en `inbox_wait` y responda con `inbox_reply`. Nunca escribe en un PTY.
-        Activarlo exige confirmacion NATIVA (EGM-74): el agente pasa a esperar trabajo sin que nadie le escriba;
-        apagarlo no pregunta (es la direccion segura).
+        Activarlo pasa por `ConfirmationGate` (`worker_mode.enable`, recordable); apagarlo no pregunta.
         """
         try:
             if not isinstance(enabled, bool):
@@ -1691,34 +1773,46 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 rec = None
             if rec is None or rec.status == "closed":
                 return _fail("PANE_NOT_FOUND", "No hay un panel activo con ese identificador.")
-            if enabled:
-                project_label = rec.project_uuid or "(sin proyecto)"
-                try:
-                    proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
-                    if proj and proj.get("name"):
-                        project_label = f"{proj['name']} ({rec.project_uuid})"
-                except Exception:
-                    pass
-                declined = self._confirm_native(
-                    "Activar el modo trabajador en un panel",
-                    f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
-                    "Con el modo trabajador, el agente de este panel se quedara esperando mensajes de otros agentes "
-                    "(inbox_wait) y respondera con inbox_reply, sin que usted escriba en su terminal.\n\n"
-                    "MCP2P no escribe nada en ninguna terminal. Mientras espera, el agente consume turnos del modelo "
-                    "cada pocos minutos. Acepte solo si quiere ese comportamiento.",
-                )
-                if declined is not None:
-                    return {**declined, "pane_id": rec.pane_id}
-            updated = registry.set_worker_mode(rec.pane_id, enabled)
-            if updated is None:
-                return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
-            return {
-                "success": True,
-                "code": "OK",
-                "pane_id": updated.pane_id,
-                "project_uuid": updated.project_uuid,
-                "worker_mode": bool(updated.worker_mode),
-            }
+
+            def _apply() -> Dict[str, Any]:
+                updated = registry.set_worker_mode(rec.pane_id, enabled)
+                if updated is None:
+                    return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
+                return {
+                    "success": True,
+                    "code": "OK",
+                    "pane_id": updated.pane_id,
+                    "project_uuid": updated.project_uuid,
+                    "worker_mode": bool(updated.worker_mode),
+                }
+
+            if not enabled:
+                return _apply()
+
+            gate = getattr(self._bridge, "confirm_gate", None)
+            if gate is None:
+                return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion; la accion se rechaza.")
+            project_label = rec.project_uuid or "(sin proyecto)"
+            try:
+                proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
+                if proj and proj.get("name"):
+                    project_label = f"{proj['name']} ({rec.project_uuid})"
+            except Exception:
+                pass
+            res = gate.require(
+                "worker_mode.enable",
+                "Activar el modo trabajador en un panel",
+                f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
+                "Con el modo trabajador, el agente de este panel se quedara esperando mensajes de otros agentes "
+                "(inbox_wait) y respondera con inbox_reply, sin que usted escriba en su terminal.\n\n"
+                "MCP2P no escribe nada en ninguna terminal. Mientras espera, el agente consume turnos del modelo "
+                "cada pocos minutos. Acepte solo si quiere ese comportamiento.",
+                _apply,
+                args_digest=f"worker_mode:{rec.project_uuid}:{rec.pane_id}:1",
+            )
+            if res.get("success") is False and "pane_id" not in res:
+                return {**res, "pane_id": rec.pane_id}
+            return res
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 

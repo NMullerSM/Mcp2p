@@ -158,6 +158,11 @@ class ApiBridge:
         # --- v2.0.2 WP-8: chat del humano ---
         # --- fin WP-8 ---
         # --- v2.0.2 WP-9: confirmaciones recordables ---
+        from src.app.app_confirmations import ConfirmationGate
+        from src.app.ui_adapters.confirmations_ui import ConfirmationsUIAdapter
+
+        self.confirm_gate = ConfirmationGate(self.confirmations, self.db)
+        self.confirmations_ui = ConfirmationsUIAdapter(self)
         # --- fin WP-9 ---
 
     # ==========================
@@ -859,6 +864,17 @@ class ApiBridge:
     # --- v2.0.2 WP-8: chat del humano ---
     # --- fin WP-8 ---
     # --- v2.0.2 WP-9: confirmaciones recordables ---
+    def ui_confirm_action(self, token: Any, accepted: Any, remember: Any = False) -> Dict[str, Any]:
+        return self.confirmations_ui.ui_confirm_action(token=token, accepted=accepted, remember=remember)
+
+    def ui_list_confirmation_prefs(self) -> Dict[str, Any]:
+        return self.confirmations_ui.ui_list_confirmation_prefs()
+
+    def ui_forget_confirmation(self, action_id: Any) -> Dict[str, Any]:
+        return self.confirmations_ui.ui_forget_confirmation(action_id=action_id)
+
+    def ui_forget_all_confirmations(self) -> Dict[str, Any]:
+        return self.confirmations_ui.ui_forget_all_confirmations()
     # --- fin WP-9 ---
 
     def public_js_functions(self) -> List[Callable[..., Any]]:

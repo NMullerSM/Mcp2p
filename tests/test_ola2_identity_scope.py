@@ -489,8 +489,9 @@ def test_gui_auto_relay_toggle_is_per_pane_and_persists(gui, tmp_path: Path) -> 
     proj = bridge.db.create_project("A", str(tmp_path / "ra"))["project_uuid"]
     bridge.pty_spawn_pane("pane_1", "custom_shell", start_hub=False, project_uuid=proj)
     bridge.pty_spawn_pane("pane_2", "custom_shell", start_hub=False, project_uuid=proj)
-    bridge.confirmations.dialog = lambda _t, _m: True
-    on = bridge.pty_set_auto_relay("pane_2", True)
+    req = bridge.pty_set_auto_relay("pane_2", True)
+    assert req["code"] == "CONFIRMATION_REQUIRED"
+    on = bridge.ui_confirm_action(req["confirmation"]["token"], True, False)
     assert on["success"] is True and on["auto_relay_enabled"] is True and on["project_uuid"] == proj
     panes = {p["pane_id"]: p["auto_relay_enabled"] for p in bridge.pty_get_matrix_status()["panes"]}
     assert panes == {"pane_1": False, "pane_2": True}

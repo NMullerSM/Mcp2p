@@ -1190,7 +1190,7 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
     await waitFor(() => expect(pty_get_matrix_status).toHaveBeenCalledTimes(2));
   });
 
-  it('EGM-85: muestra native-dialog-pending-banner mientras hay una confirmacion nativa en curso y desaparece al resolverse', async () => {
+  it('EGM-85: muestra native-dialog-pending-banner solo en acciones nativas y usa AppConfirmDialog en Auto-Relay e instalación', async () => {
     let resolveRegister;
     const pty_register_agy_mcp = vi.fn(
       () =>
@@ -1198,14 +1198,22 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
           resolveRegister = resolve;
         })
     );
-    let resolveAutoRelay;
-    const pty_set_auto_relay = vi.fn((_paneId, enabled) => {
+    const pty_set_auto_relay = vi.fn(async (_paneId, enabled) => {
       if (enabled) {
-        return new Promise((resolve) => {
-          resolveAutoRelay = resolve;
-        });
+        return {
+          success: false,
+          code: 'CONFIRMATION_REQUIRED',
+          confirmation: {
+            token: 'tok-auto-1',
+            action_id: 'auto_relay.enable',
+            title: 'Activar Auto-Relay',
+            message: 'Confirmar Auto-Relay',
+            rememberable: true,
+            expires_in_s: 120
+          }
+        };
       }
-      return Promise.resolve({ success: true, auto_relay_enabled: false });
+      return { success: true, auto_relay_enabled: false };
     });
     let resolveSetPath;
     const pty_set_cli_path = vi.fn(
@@ -1214,7 +1222,6 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
           resolveSetPath = resolve;
         })
     );
-    let resolveInstallCli;
     const pty_prepare_install = vi.fn(async (cliId) => ({
       success: true,
       requires_confirmation: true,
@@ -1224,12 +1231,24 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
       method: 'npm',
       downloads_script: false
     }));
-    const pty_install_cli = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveInstallCli = resolve;
-        })
-    );
+    const pty_install_cli = vi.fn(async () => ({
+      success: false,
+      code: 'CONFIRMATION_REQUIRED',
+      confirmation: {
+        token: 'tok-inst-1',
+        action_id: 'cli.install.package_manager',
+        title: 'Instalar missing_cli',
+        message: 'npm install -g @example/missing_cli',
+        rememberable: true,
+        expires_in_s: 120
+      }
+    }));
+    const ui_confirm_action = vi.fn(async (token) => {
+      if (token === 'tok-auto-1') {
+        return { success: true, pane_id: 'pane_1', auto_relay_enabled: true };
+      }
+      return { success: true, code: 'INSTALL_STARTED', pane_id: 'pane_3', session_id: 's3', pid: 303 };
+    });
 
     const api = makeMatrixApi({
       pty_register_agy_mcp,
@@ -1237,6 +1256,7 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
       pty_set_cli_path,
       pty_prepare_install,
       pty_install_cli,
+      ui_confirm_action,
       pty_list_cli_catalog: vi.fn(async () =>
         makeCatalogResponse([makeCli('claude'), notInstalled('missing_cli')])
       ),
@@ -1256,20 +1276,21 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
     resolveRegister({ success: true, code: 'OK', message: 'MCP2P registrado en Antigravity.' });
     await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
 
-    // Activar Auto-Relay tambien muestra el banner; apagarlo no.
+    // Activar Auto-Relay usa AppConfirmDialog (sin native-dialog-pending-banner); apagarlo no pregunta.
     const autoRelayToggle = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
     fireEvent.click(autoRelayToggle);
-    expect((await screen.findByTestId('native-dialog-pending-banner')).textContent).toContain(
-      'Confirme la acción en el diálogo del sistema'
-    );
-    resolveAutoRelay({ success: true, auto_relay_enabled: true });
-    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('app-confirm-accept').disabled).toBe(false), { timeout: 1500 });
+    fireEvent.click(screen.getByTestId('app-confirm-accept'));
+    await waitFor(() => expect(ui_confirm_action).toHaveBeenCalledWith('tok-auto-1', true, false));
+    await waitFor(() => expect(autoRelayToggle.textContent).toContain('ON'));
 
     fireEvent.click(autoRelayToggle);
     await waitFor(() => expect(pty_set_auto_relay).toHaveBeenLastCalledWith('pane_1', false));
     expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
 
-    // handleSetCliPath abre dialogo nativo y muestra el banner.
+    // handleSetCliPath sigue abriendo dialogo nativo y muestra el banner.
     fireEvent.click(await screen.findByTestId('cli-path-toggle-claude'));
     fireEvent.change(await screen.findByTestId('cli-path-input-claude'), { target: { value: '/usr/local/bin/claude' } });
     fireEvent.click(screen.getByTestId('cli-path-save-claude'));
@@ -1279,13 +1300,14 @@ describe('SwarmTerminalMatrix: registro de agy opt-in y badge verificado (R1.4/R
     resolveSetPath({ success: true, code: 'OK', cli_id: 'claude', configured_path: '/usr/local/bin/claude' });
     await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
 
-    // handleConfirmInstall abre dialogo nativo y muestra el banner.
+    // handleConfirmInstall usa AppConfirmDialog (sin native-dialog-pending-banner) y resuelve con ui_confirm_action.
     fireEvent.click(await screen.findByTestId('cli-install-missing_cli'));
     fireEvent.click(await screen.findByTestId('install-confirm-btn'));
-    expect((await screen.findByTestId('native-dialog-pending-banner')).textContent).toContain(
-      'Confirme la acción en el diálogo del sistema'
-    );
-    resolveInstallCli({ success: true, pane_id: 'pane_3', session_id: 's3', pid: 303 });
-    await waitFor(() => expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull());
+    expect(await screen.findByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('app-confirm-accept').disabled).toBe(false), { timeout: 1500 });
+    fireEvent.click(screen.getByTestId('app-confirm-accept'));
+    await waitFor(() => expect(ui_confirm_action).toHaveBeenCalledWith('tok-inst-1', true, false));
+    expect(screen.queryByTestId('native-dialog-pending-banner')).toBeNull();
   });
 });

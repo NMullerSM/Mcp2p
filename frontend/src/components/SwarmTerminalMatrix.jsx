@@ -98,6 +98,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   // ---- Acciones sobre terminales ------------------------------------------------------
 
   const {
+    confirmDialog,
     launchingCliId,
     unregisterAgyBusy,
     resettingBreaker,
@@ -140,6 +141,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
   });
 
   const {
+    installConfirmDialog,
     installPlan,
     installBusyCliId,
     discardInstallPlan,
@@ -366,6 +368,8 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           }
         }}
       />
+      {confirmDialog}
+      {installConfirmDialog}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { useAppConfirmation } from '../common/useAppConfirmation';
 import { createInputSender } from './inputSender';
 import {
   acquireTerminal,
@@ -84,6 +85,7 @@ export function usePaneActions({
   const [launchingCliId, setLaunchingCliId] = useState(null);
   const [unregisterAgyBusy, setUnregisterAgyBusy] = useState(false);
   const [resettingBreaker, setResettingBreaker] = useState(false);
+  const { dialog: confirmDialog, run: runWithAppConfirmation } = useAppConfirmation(api);
 
   // Un emisor de entrada por panel: una sola llamada pty_write_input en vuelo y lo tecleado
   // mientras tanto sale agrupado en la siguiente, en orden (EGM-80: cada llamada del puente
@@ -319,7 +321,7 @@ export function usePaneActions({
     }
   }, [api, mountedRef, refreshCatalog, runWithNativeDialogNotice, setNotice, showNotice]);
 
-  // D2: Auto-Relay POR PANEL. Activarlo abre el dialogo nativo en el puente; el estado se persiste alli.
+  // D2: Auto-Relay POR PANEL. Activarlo usa confirmacion propia recordable; apagarlo no pregunta.
   const handleTogglePaneAutoRelay = useCallback(async (paneId) => {
     const pane = panesRef.current[paneId];
     if (!api?.pty_set_auto_relay || !pane || pane.autoRelayBusy) return;
@@ -327,7 +329,7 @@ export function usePaneActions({
     patchPane(paneId, { autoRelayBusy: true });
     try {
       const invoke = () => api.pty_set_auto_relay(paneId, nextEnabled);
-      const res = await (nextEnabled ? runWithNativeDialogNotice(invoke) : invoke());
+      const res = await (nextEnabled ? runWithAppConfirmation(invoke) : invoke());
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -342,9 +344,9 @@ export function usePaneActions({
         showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
       }
     }
-  }, [api, panesRef, mountedRef, patchPane, runWithNativeDialogNotice, showNotice]);
+  }, [api, panesRef, mountedRef, patchPane, runWithAppConfirmation, showNotice]);
 
-  // F2.4: modo trabajador POR PANEL. Activarlo abre el dialogo nativo en el puente; el estado se persiste alli.
+  // F2.4: modo trabajador POR PANEL. Activarlo usa confirmacion propia recordable; apagarlo no pregunta.
   const handleTogglePaneWorkerMode = useCallback(async (paneId) => {
     const pane = panesRef.current[paneId];
     if (!api?.pty_set_worker_mode || !pane || pane.workerModeBusy) return;
@@ -352,7 +354,7 @@ export function usePaneActions({
     patchPane(paneId, { workerModeBusy: true });
     try {
       const invoke = () => api.pty_set_worker_mode(paneId, nextEnabled);
-      const res = await (nextEnabled ? runWithNativeDialogNotice(invoke) : invoke());
+      const res = await (nextEnabled ? runWithAppConfirmation(invoke) : invoke());
       if (!mountedRef.current) return;
       if (res?.success === false) {
         showNotice(res);
@@ -367,7 +369,7 @@ export function usePaneActions({
         showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
       }
     }
-  }, [api, panesRef, mountedRef, patchPane, runWithNativeDialogNotice, showNotice]);
+  }, [api, panesRef, mountedRef, patchPane, runWithAppConfirmation, showNotice]);
 
   const handleRegisterAgyMcp = useCallback(async () => {
     if (!api?.pty_register_agy_mcp) return;
@@ -444,6 +446,7 @@ export function usePaneActions({
   }, [api, mountedRef, resettingBreaker, trippedCases, runWithNativeDialogNotice, showNotice, refreshMatrixStatus]);
 
   return {
+    confirmDialog,
     launchingCliId,
     unregisterAgyBusy,
     resettingBreaker,

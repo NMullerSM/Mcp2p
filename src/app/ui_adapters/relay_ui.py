@@ -133,30 +133,44 @@ class RelayUIAdapter(_BaseUIAdapter):
         try:
             if not isinstance(msg_id, str) or not msg_id.strip() or decision not in ("release", "discard"):
                 return _fail("INVALID_ARGUMENT", "Indique msg_id y decision ('release' o 'discard').")
+            clean_id = msg_id.strip()
             service = self._service()
             if service is None:
                 return _fail("RELAY_UNAVAILABLE", "El relevo no esta disponible.")
-            card = next((c for c in service.list_human_inbox(None) if c["msg_id"] == msg_id.strip()), None)
+            card = next((c for c in service.list_human_inbox(None) if c["msg_id"] == clean_id), None)
             if card is None:
                 return _fail("MESSAGE_NOT_FOUND", "No hay ningun mensaje aparcado con ese identificador.")
             text = card.get("text") or "(texto borrado por retencion)"
             preview = text if len(text) <= _PREVIEW_CHARS else text[:_PREVIEW_CHARS] + " [...]"
-            action = "Entregar" if decision == "release" else "Descartar"
-            declined = self._confirm_native(
-                f"{action} un mensaje entre agentes",
+            if decision == "release":
+                declined = self._confirm_native(
+                    "Entregar un mensaje entre agentes",
+                    f"De: {self._who(card['from'])}\nPara: {self._who(card['to'])}\n"
+                    f"Motivo de la retencion: {card.get('reason')}\nCadena: salto {card['chain']['hop']} "
+                    f"(maximo automatico {card['chain']['max_depth']})\n\nTexto exacto:\n{preview}\n\n"
+                    "Si lo entrega, el agente destino podra leerlo en su bandeja. No se escribe nada en ninguna "
+                    "terminal.",
+                )
+                if declined is not None:
+                    return {**declined, "msg_id": msg_id}
+                return service.resolve_parked(clean_id, decision)
+
+            gate = getattr(self._bridge, "confirm_gate", None)
+            if gate is None:
+                return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion; la accion se rechaza.")
+            res = gate.require(
+                "relay.discard_parked",
+                "Descartar un mensaje entre agentes",
                 f"De: {self._who(card['from'])}\nPara: {self._who(card['to'])}\n"
                 f"Motivo de la retencion: {card.get('reason')}\nCadena: salto {card['chain']['hop']} "
                 f"(maximo automatico {card['chain']['max_depth']})\n\nTexto exacto:\n{preview}\n\n"
-                + (
-                    "Si lo entrega, el agente destino podra leerlo en su bandeja. No se escribe nada en ninguna "
-                    "terminal."
-                    if decision == "release"
-                    else "Si lo descarta, el agente destino no lo vera nunca. Queda constancia en la auditoria."
-                ),
+                "Si lo descarta, el agente destino no lo vera nunca. Queda constancia en la auditoria.",
+                lambda: service.resolve_parked(clean_id, "discard"),
+                args_digest=f"discard:{clean_id}",
             )
-            if declined is not None:
-                return {**declined, "msg_id": msg_id}
-            return service.resolve_parked(msg_id.strip(), decision)
+            if res.get("success") is False and "msg_id" not in res:
+                return {**res, "msg_id": msg_id}
+            return res
         except Exception as exc:
             logger.warning("relay_resolve_parked fallo: %s", exc)
             return _fail("INTERNAL_ERROR", str(exc))
