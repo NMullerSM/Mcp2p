@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from 'react';
+import { useAppConfirmation } from '../common/useAppConfirmation';
 import { HumanInbox } from './HumanInbox';
 import { RelayStatus } from './RelayStatus';
 import { SendToAgent } from './SendToAgent';
@@ -18,6 +19,7 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
   const [pauseBusy, setPauseBusy] = useState(false);
   const [resumingNode, setResumingNode] = useState(null);
   const [pauseFeedback, setPauseFeedback] = useState(null);
+  const { dialog, run: runWithAppConfirmation } = useAppConfirmation(api);
 
   const resolve = useCallback(
     async (msgId, decision) => {
@@ -26,7 +28,8 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
       setBusyId(msgId);
       setInboxFeedback(null);
       try {
-        const res = await api.relay_resolve_parked(msgId, decision);
+        const invoke = () => api.relay_resolve_parked(msgId, decision);
+        const res = await (decision === 'discard' ? runWithAppConfirmation(invoke) : invoke());
         if (res?.success === false) {
           setInboxFeedback({ tone: res.code === 'CONFIRMATION_DECLINED' ? 'info' : 'error', text: describeRelayError(res, verb) });
         } else {
@@ -42,7 +45,7 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
         await relay.refresh();
       }
     },
-    [api, busyId, relay]
+    [api, busyId, relay, runWithAppConfirmation]
   );
 
   const setGlobalPause = useCallback(
@@ -139,6 +142,7 @@ export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
         onRefresh={relay.refresh}
       />
       {api?.relay_send_as_human && <SendToAgent targets={targets} onSend={send} />}
+      {dialog}
     </div>
   );
 }
