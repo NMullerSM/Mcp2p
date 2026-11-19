@@ -2487,6 +2487,7 @@ class DatabaseManager:
 
     @staticmethod
     def _pane_identity_row(row: Any) -> Dict[str, Any]:
+        keys = row.keys() if hasattr(row, "keys") else ()
         return {
             "project_uuid": row["project_uuid"],
             "pane_slot": row["pane_slot"],
@@ -2495,6 +2496,11 @@ class DatabaseManager:
             "worker_mode": bool(row["worker_mode"]),
             "created_at": row["created_at"],
             "last_spawned_at": row["last_spawned_at"],
+            "role": row["role"] if "role" in keys else "peer",
+            "mandate": row["mandate"] if "mandate" in keys else "",
+            "role_updated_at": row["role_updated_at"] if "role_updated_at" in keys else None,
+            "delivery_mode": row["delivery_mode"] if "delivery_mode" in keys else "auto",
+            "delivery_batch": bool(row["delivery_batch"]) if "delivery_batch" in keys else False,
         }
 
     def get_pane_identity(self, project_uuid: str, pane_slot: str) -> Optional[Dict[str, Any]]:
@@ -2587,6 +2593,27 @@ class DatabaseManager:
         return [self._pane_identity_row(r) for r in rows]
 
     # --- v2.0.2 WP-3a: rol y mandato por panel ---
+    def set_pane_role(self, project_uuid: str, pane_slot: str, role: str, mandate: str = "") -> Dict[str, Any]:
+        """Persiste el rol y mandato del panel (proyecto, ranura); crea la identidad si faltaba."""
+        from src.core.domain.roles import normalize_role, sanitize_mandate
+
+        clean_role = normalize_role(role).value
+        clean_mandate = sanitize_mandate(mandate)
+        now_str = datetime.now(timezone.utc).isoformat()
+        self.get_or_create_pane_identity(project_uuid, pane_slot)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE pane_identities
+                       SET role = ?, mandate = ?, role_updated_at = ?
+                     WHERE project_uuid = ? AND pane_slot = ?;
+                    """,
+                    (clean_role, clean_mandate, now_str, project_uuid or "", pane_slot),
+                )
+        identity = self.get_pane_identity(project_uuid, pane_slot)
+        assert identity is not None
+        return identity
     # --- fin WP-3a ---
     # --- v2.0.2 WP-6b: modo de entrega por panel ---
     # --- fin WP-6b ---

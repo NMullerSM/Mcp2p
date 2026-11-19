@@ -130,9 +130,15 @@ def test_stdio_subprocess_proxies_to_live_embedded_hub_and_delivers_pane_message
                     await agy_session.initialize()
 
                     tools_res = await agy_session.list_tools()
-                    assert len(tools_res.tools) == 36  # Ola 3: +6 herramientas de la bandeja
+                    assert len(tools_res.tools) == 38  # v2.0.2 WP-3a: +2 herramientas (whoami, team_roster)
                     tool_names = {t.name for t in tools_res.tools}
-                    assert {"list_swarm_panes", "send_pane_message", "await_next_assignment"} <= tool_names
+                    assert {
+                        "list_swarm_panes",
+                        "send_pane_message",
+                        "await_next_assignment",
+                        "whoami",
+                        "team_roster",
+                    } <= tool_names
 
                     panes_res = await agy_session.call_tool(
                         "list_swarm_panes",

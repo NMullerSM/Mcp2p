@@ -25,6 +25,7 @@ AUDIT_EVENTS = (
     "purged",
     "paused",
     "resumed",
+    "role_changed",
 )
 
 

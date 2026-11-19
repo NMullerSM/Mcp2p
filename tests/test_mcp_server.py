@@ -484,7 +484,7 @@ async def test_mcp_v3_dispute_discovery_and_versioning(mcp_handler):
     ver_out = json.loads(res_ver.content[0].text)
     assert ver_out["success"] is True
     assert ver_out["server_version"] == "0.3.0"
-    assert ver_out["tools_count"] == 36  # Ola 3: +6 herramientas de la bandeja
+    assert ver_out["tools_count"] == 38  # Ola 3 (+6 bandeja) + WP-3a (+2 whoami, team_roster)
     assert "edit_kanban_task" in ver_out["tools"]
     assert "submit_synthesis" in ver_out["tools"]
     assert "await_next_assignment" in ver_out["tools"]
@@ -569,10 +569,10 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     sse_out = json.loads(res_sse.content[0].text)
     assert sse_out["success"] is True
     assert sse_out["transport"] == "sse"
-    assert sse_out["tools_count"] == 36
+    assert sse_out["tools_count"] == 38
     assert "edit_kanban_task" in sse_out["tools"]
     assert isinstance(sse_out.get("tools"), list)
-    assert len(sse_out["tools"]) == 36
+    assert len(sse_out["tools"]) == 38
 
     # 2. Servidor estándar con transport="stdio" por defecto
     server_stdio = create_mcp_server(db_path=db.db_path)
@@ -580,7 +580,7 @@ async def test_mcp_v4_dynamic_version_and_transport(mcp_handler):
     stdio_out = json.loads(res_stdio.content[0].text)
     assert stdio_out["success"] is True
     assert stdio_out["transport"] == "stdio"
-    assert stdio_out["tools_count"] == 36
+    assert stdio_out["tools_count"] == 38
 
     # 3. Llamada directa a MCPToolsHandler.get_server_version() sin servidor envolvente
     # Debe calcular tools_count inspeccionando los métodos de herramientas de la clase dinámicamente

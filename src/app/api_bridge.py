@@ -139,6 +139,9 @@ class ApiBridge:
         self.ensure_local_node_registered()
         self._ensure_active_project()
         # --- v2.0.2 WP-3a: roles ---
+        from src.app.ui_adapters.roles_ui import RolesUIAdapter
+
+        self.roles_ui = RolesUIAdapter(self)
         # --- fin WP-3a ---
         # --- v2.0.2 WP-4a: sesiones ---
         # --- fin WP-4a ---
@@ -820,6 +823,11 @@ class ApiBridge:
         return self.extensions_ui.pty_get_kanban_swarm_snapshot(project_uuid=project_uuid, all_projects=all_projects)
 
     # --- v2.0.2 WP-3a: roles ---
+    def pty_set_pane_role(self, pane_id: Any, role: Any, mandate: Optional[str] = None) -> Dict[str, Any]:
+        return self.roles_ui.pty_set_pane_role(pane_id=pane_id, role=role, mandate=mandate)
+
+    def pty_get_pane_role(self, pane_id: Any) -> Dict[str, Any]:
+        return self.roles_ui.pty_get_pane_role(pane_id=pane_id)
     # --- fin WP-3a ---
     # --- v2.0.2 WP-4a: sesiones ---
     # --- fin WP-4a ---

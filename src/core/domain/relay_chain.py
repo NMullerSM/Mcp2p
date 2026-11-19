@@ -24,10 +24,13 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
 from src.core.domain.identity import TrustLevel, min_trust
+from src.core.domain.roles import ChainBudget
 
 DEFAULT_MAX_CHAIN_DEPTH = 1
 DEFAULT_CHAIN_TTL_MS = 2 * 60 * 60 * 1000
 CHAIN_DEPTH_EXCEEDED = "CHAIN_DEPTH_EXCEEDED"
+CHAIN_BUDGET_EXHAUSTED = "CHAIN_BUDGET_EXHAUSTED"
+CHAIN_BUDGET_EXPIRED = "CHAIN_BUDGET_EXPIRED"
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,13 @@ class ChainContext:
     hop: int
     origin_trust: TrustLevel
     updated_at_ms: int
+
+
+@dataclass
+class _ChainBudgetState:
+    budget: ChainBudget
+    started_at_ms: int
+    messages: int
 
 
 @dataclass(frozen=True)
@@ -47,10 +57,11 @@ class ChainLink:
     origin_trust: Optional[TrustLevel]
     max_depth: int
     inherited: bool
+    exceeded_reason: Optional[str] = None
 
     @property
     def exceeded(self) -> bool:
-        return self.hop > self.max_depth
+        return self.exceeded_reason is not None or self.hop > self.max_depth
 
 
 def _now_ms() -> int:
@@ -76,6 +87,29 @@ class ChainTracker:
         self._new_chain_id = new_chain_id or (lambda: str(uuid.uuid4()))
         self._lock = threading.Lock()
         self._contexts: Dict[str, ChainContext] = {}
+        self._chains: Dict[str, _ChainBudgetState] = {}
+
+    def _default_budget(self) -> ChainBudget:
+        return ChainBudget(
+            max_hops=self.max_depth,
+            max_messages=self.max_depth + 1,
+            max_age_ms=self.ttl_ms,
+        )
+
+    def _prune_expired_chains_locked(self, now: int) -> None:
+        active_chain_ids = {
+            ctx.chain_id
+            for ctx in self._contexts.values()
+            if now - ctx.updated_at_ms <= self.ttl_ms
+        }
+        stale_ids = [
+            cid
+            for cid, state in self._chains.items()
+            if cid not in active_chain_ids
+            and now - state.started_at_ms > max(self.ttl_ms, state.budget.max_age_ms)
+        ]
+        for cid in stale_ids:
+            self._chains.pop(cid, None)
 
     def observe_delivery(self, principal: str, *, chain_id: str, hop: int, trust: "TrustLevel | str") -> None:
         """El Hub entrego a `principal` un sobre de `(chain_id, hop)`: sube su contexto si el salto es mayor."""
@@ -118,16 +152,69 @@ class ChainTracker:
         human_turn_at_ms: Optional[int] = None,
         parent_chain_id: Optional[str] = None,
         parent_hop: Optional[int] = None,
+        sender_budget: Optional[ChainBudget] = None,
+        sender_can_extend: bool = False,
     ) -> ChainLink:
         """Eslabon del proximo sobre que emite `sender`. `parent_*` solo influyen si hay contexto vivo (respuesta
         dentro de la misma cadena): un turno humano posterior abre siempre una cadena nueva."""
         with self._lock:
-            ctx = self._live_locked(sender, int(self._clock_ms()), human_turn_at_ms=human_turn_at_ms)
-        if ctx is None:
-            return ChainLink(self._new_chain_id(), 0, None, self.max_depth, inherited=False)
-        base_hop = ctx.hop
-        chain_id = ctx.chain_id
-        if parent_chain_id and parent_hop is not None:
-            chain_id = parent_chain_id
-            base_hop = max(ctx.hop, int(parent_hop))
-        return ChainLink(chain_id, base_hop + 1, ctx.origin_trust, self.max_depth, inherited=True)
+            now = int(self._clock_ms())
+            self._prune_expired_chains_locked(now)
+            ctx = self._live_locked(sender, now, human_turn_at_ms=human_turn_at_ms)
+            default_budget = self._default_budget()
+            if ctx is None:
+                budget = sender_budget if sender_budget is not None else default_budget
+                chain_id = self._new_chain_id()
+                self._chains[chain_id] = _ChainBudgetState(budget=budget, started_at_ms=now, messages=1)
+                exceeded_reason: Optional[str] = None
+                if 0 > budget.max_hops:
+                    exceeded_reason = CHAIN_DEPTH_EXCEEDED
+                elif 1 > budget.max_messages:
+                    exceeded_reason = CHAIN_BUDGET_EXHAUSTED
+                return ChainLink(
+                    chain_id,
+                    0,
+                    None,
+                    budget.max_hops,
+                    inherited=False,
+                    exceeded_reason=exceeded_reason,
+                )
+
+            base_hop = ctx.hop
+            chain_id = ctx.chain_id
+            if parent_chain_id and parent_hop is not None:
+                chain_id = parent_chain_id
+                base_hop = max(ctx.hop, int(parent_hop))
+            new_hop = base_hop + 1
+
+            state = self._chains.get(chain_id)
+            if state is None:
+                state = _ChainBudgetState(
+                    budget=sender_budget if sender_budget is not None else default_budget,
+                    started_at_ms=ctx.updated_at_ms,
+                    messages=0,
+                )
+                self._chains[chain_id] = state
+            if sender_can_extend and sender_budget is not None:
+                state.budget = ChainBudget(
+                    max_hops=max(state.budget.max_hops, sender_budget.max_hops),
+                    max_messages=max(state.budget.max_messages, sender_budget.max_messages),
+                    max_age_ms=max(state.budget.max_age_ms, sender_budget.max_age_ms),
+                )
+            state.messages += 1
+            budget = state.budget
+            exceeded_reason = None
+            if new_hop > budget.max_hops:
+                exceeded_reason = CHAIN_DEPTH_EXCEEDED
+            elif now - state.started_at_ms > budget.max_age_ms:
+                exceeded_reason = CHAIN_BUDGET_EXPIRED
+            elif state.messages > budget.max_messages:
+                exceeded_reason = CHAIN_BUDGET_EXHAUSTED
+            return ChainLink(
+                chain_id,
+                new_hop,
+                ctx.origin_trust,
+                budget.max_hops,
+                inherited=True,
+                exceeded_reason=exceeded_reason,
+            )
