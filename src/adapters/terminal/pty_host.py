@@ -585,7 +585,13 @@ class PosixPtyHostConnector(PtyHostBase):
             "launch_notes": list(aug.notes),
         }
 
-    def send_input(self, pane_id: Any, data: Union[str, bytes]) -> Dict[str, Any]:
+    def send_input(
+        self,
+        pane_id: Any,
+        data: Union[str, bytes],
+        *,
+        expected_session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         norm_pane, _ = self._normalize_pane(pane_id)
         if isinstance(data, str):
             raw = data.encode("utf-8")
@@ -625,6 +631,14 @@ class PosixPtyHostConnector(PtyHostBase):
                     "pane_id": norm_pane,
                     "session_id": session.session_id,
                     "message": f"Descriptor PTY cerrado en {norm_pane}.",
+                }
+            if expected_session_id is not None and session.session_id != expected_session_id:
+                return {
+                    "success": False,
+                    "code": "INCARNATION_CHANGED",
+                    "pane_id": norm_pane,
+                    "session_id": session.session_id,
+                    "message": "La sesión del panel cambió; no se escribió nada.",
                 }
             while total_written < len(view):
                 try:
