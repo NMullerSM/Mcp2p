@@ -27,7 +27,7 @@ INSTRUCTIONS = (
     "Canal del operador de MCP2P. Envias tareas a los agentes de las terminales de MCP2P y lees sus respuestas. "
     "1) operator_list_targets para ver destinos (target = identidad estable del panel). 2) operator_send_task. "
     "3) operator_await_reply o operator_message_status. Tus mensajes llegan a la bandeja del agente con confianza "
-    "operator_delegated; nunca se escribe en su terminal. Los destinos con permisos amplios o shells, y los envios con "
+    "operator_delegated; y, con entrega directa activa en ese destino, tambien se escribe en su terminal. Los destinos con permisos amplios o shells, y los envios con "
     "confirm_with_human=true, esperan a que el humano los apruebe en MCP2P."
 )
 

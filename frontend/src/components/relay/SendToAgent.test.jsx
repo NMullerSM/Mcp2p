@@ -22,10 +22,11 @@ describe('SendToAgent', () => {
     expect(screen.queryByTestId('send-to-agent-submit')).toBeNull();
   });
 
-  it('explica que llega por la bandeja y que no se escribe en la terminal', () => {
+  it('explica que llega por la bandeja y, con entrega directa, tambien a la terminal', () => {
     render(<SendToAgent targets={TARGETS} onSend={vi.fn()} />);
     const section = screen.getByTestId('send-to-agent');
-    expect(section.textContent).toContain('No se escribe nada en su');
+    expect(section.textContent).toContain('Llega a su bandeja');
+    expect(section.textContent).toContain('si esa terminal tiene la entrega directa, tambien se escribe en ella');
     expect(section.textContent).toContain('inbox_next');
   });
 

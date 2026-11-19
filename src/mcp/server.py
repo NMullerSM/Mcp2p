@@ -889,8 +889,9 @@ def create_mcp_server(
         confirmWithHuman: Optional[bool] = None,
         projectUuid: Optional[str] = None,
     ) -> str:
-        """Envia un mensaje (sobre firmado por el Hub) a la bandeja de otro panel de tu proyecto. No escribe en su
-        terminal: el destino lo lee con inbox_next. kind: note | task.request | task.reply."""
+        """Envia un mensaje (sobre firmado por el Hub) a la bandeja de otro panel de tu proyecto. Llega a su bandeja y,
+        si ese panel tiene la entrega directa activa, tambien se escribe en su terminal; el destino lo lee con
+        inbox_next. kind: note | task.request | task.reply."""
         return handler.send_message(
             target_node_uuid=target_node_uuid if target_node_uuid is not None else targetNodeUuid,
             target_pane_id=target_pane_id if target_pane_id is not None else targetPaneId,

@@ -42,8 +42,8 @@ export function SendToAgent({ targets = [], onSend, defaultTarget = '' }) {
     <section data-testid="send-to-agent" aria-label="Enviar un mensaje a un agente" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <h4 style={sectionTitle}>Enviar a un agente</h4>
       <p style={{ ...mutedText, margin: 0 }}>
-        El mensaje llega a la bandeja del agente como mensaje suyo, firmado por el Hub. No se escribe nada en su
-        terminal: el agente lo lee con inbox_next o inbox_wait.
+        Llega a su bandeja y, si esa terminal tiene la entrega directa, tambien se escribe en ella: el agente lo lee
+        con inbox_next o inbox_wait.
       </p>
 
       {targets.length === 0 ? (
