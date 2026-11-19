@@ -971,6 +971,9 @@ def create_mcp_server(
         """Pone en pausa el relevo de TU panel (dejas de recibir y de enviar mensajes). Solo el humano lo reanuda."""
         return handler.relay_pause_self(reason=reason)
 
+    # --- v2.0.2 WP-3a: herramientas whoami y team_roster ---
+    # --- fin WP-3a ---
+
     setattr(server, "mcp2p_handler", handler)
     setattr(server, "mcp2p_pane_registry", pane_registry)
     return server

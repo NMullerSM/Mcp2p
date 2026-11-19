@@ -2586,6 +2586,11 @@ class DatabaseManager:
                 ).fetchall()
         return [self._pane_identity_row(r) for r in rows]
 
+    # --- v2.0.2 WP-3a: rol y mandato por panel ---
+    # --- fin WP-3a ---
+    # --- v2.0.2 WP-6b: modo de entrega por panel ---
+    # --- fin WP-6b ---
+
     # ==========================
     # Extensiones, Tablas Dinámicas y Seeds P2P
     # ==========================

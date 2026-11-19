@@ -12,7 +12,7 @@ import re
 import shlex
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from src.adapters.outbound.extension_gate import (
     ExtensionSecurityGate,
@@ -27,6 +27,7 @@ from src.adapters.terminal.cli_catalog import (
     validate_install_command,
 )
 from src.adapters.terminal.cli_install import InstallConfirmationBroker, build_install_command
+from src.adapters.terminal.launch_augment import LaunchServices
 from src.adapters.terminal import mcp_injection as _mcp_injection
 from src.adapters.terminal.pty_host import (
     DEFAULT_MANUAL_COMMAND,
@@ -37,6 +38,7 @@ from src.adapters.terminal.pty_host import (
     normalize_pane_id,
 )
 from src.app.ui_adapters import _BaseUIAdapter
+from src.app.ui_adapters.pane_lifecycle import PaneLifecycle, PaneSpawnedEvent
 from src.core.kernel import CoreKernel
 from src.core.services.kanban_swarm_adapter import KanbanSwarmAdapter
 from src.mcp.pane_registry import EmbeddedMcpHub, PaneRegistry
@@ -57,6 +59,8 @@ def _default_mcp_config(hub_url: Optional[str] = None) -> Dict[str, Any]:
 
 
 _ROLE_RE = re.compile(r"[A-Za-z0-9_.-]{1,48}")
+_CLI_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_VALID_RESUME_MODES = frozenset({"none", "continue", "by_id"})
 _MAX_CWD_LEN = 4096
 _MAX_TERMINAL_DIMENSION = 1000
 _MAX_COMMAND_LEN = 2000
@@ -86,6 +90,10 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         self._install_broker: Optional[InstallConfirmationBroker] = None
         # Un cerrojo por panel: serializa comprobar -> registrar token -> lanzar (EGM-75).
         self._pane_locks: Dict[str, threading.Lock] = {}
+        kernel = getattr(bridge, "core_kernel", None)
+        identity_repo = getattr(kernel, "pane_identity_repo", None) if kernel is not None else None
+        self.launch_services = LaunchServices(identity_repo=identity_repo)
+        self.pane_lifecycle = PaneLifecycle()
 
     def _pane_lock(self, pane_id: str) -> threading.Lock:
         with self._terminal_lock:
@@ -556,6 +564,14 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
     # Swarm Terminal Matrix (PTY + EmbeddedMcpHub + PaneRegistry)
     # ==========================
 
+    def _bind_launch_services(self, connector: Any) -> Any:
+        if self.launch_services.identity_repo is None and self.core_kernel is not None:
+            self.launch_services.identity_repo = getattr(self.core_kernel, "pane_identity_repo", None)
+        for target in (connector, getattr(connector, "primary", None)):
+            if target is not None and hasattr(target, "launch_services") and getattr(target, "launch_services", None) is None:
+                target.launch_services = self.launch_services
+        return connector
+
     def _get_terminal_connector(self) -> Any:
         kernel = self.core_kernel
         if kernel is not None:
@@ -563,11 +579,11 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if conn is None and callable(getattr(kernel, "get_connector", None)):
                 conn = kernel.get_connector(CoreKernel.PORT_AGENT_TERMINAL)
             if conn is not None:
-                return conn
+                return self._bind_launch_services(conn)
         with self._terminal_lock:
             if self._null_terminal_connector is None:
                 self._null_terminal_connector = NullAgentTerminalConnector(self._get_gate())
-            return self._null_terminal_connector
+            return self._bind_launch_services(self._null_terminal_connector)
 
     def _get_pane_registry(self) -> PaneRegistry:
         with self._terminal_lock:
@@ -1219,6 +1235,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         cwd: Optional[str] = None,
         resume: bool = False,
         project_uuid: Optional[str] = None,
+        resume_mode: Optional[str] = None,
+        cli_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Abre un panel ligado a un proyecto (Ola 2): `project_uuid` lo envia la GUI (el proyecto visible); si
         falta, se usa el proyecto activo del puente y, sin ninguno, el panel queda sin proyecto ('')."""
@@ -1293,6 +1311,37 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
             if not isinstance(resume, bool):
                 return _fail("INVALID_ARGUMENT", "resume debe ser booleano.", degraded=False, pane_id=norm_pane_id)
+            if resume_mode is not None:
+                if not isinstance(resume_mode, str) or resume_mode not in _VALID_RESUME_MODES:
+                    return _fail(
+                        "INVALID_ARGUMENT",
+                        "resume_mode invalido (permitidos: none, continue, by_id).",
+                        degraded=False,
+                        pane_id=norm_pane_id,
+                    )
+            if cli_session_id is not None:
+                if resume_mode != "by_id":
+                    return _fail(
+                        "INVALID_ARGUMENT",
+                        "cli_session_id solo se admite cuando resume_mode='by_id'.",
+                        degraded=False,
+                        pane_id=norm_pane_id,
+                    )
+                if not isinstance(cli_session_id, str) or _CLI_SESSION_ID_RE.fullmatch(cli_session_id) is None:
+                    return _fail(
+                        "INVALID_ARGUMENT",
+                        "cli_session_id invalido.",
+                        degraded=False,
+                        pane_id=norm_pane_id,
+                    )
+            elif resume_mode == "by_id":
+                return _fail(
+                    "INVALID_ARGUMENT",
+                    "resume_mode='by_id' requiere cli_session_id.",
+                    degraded=False,
+                    pane_id=norm_pane_id,
+                )
+            effective_resume = (resume_mode == "continue") or (resume_mode is None and resume)
             pane_project, project_error = self._resolve_pane_project(project_uuid)
             if project_error is not None:
                 return {**project_error, "degraded": False, "pane_id": norm_pane_id}
@@ -1336,6 +1385,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 hub = self._embedded_hub
                 hub_url = hub.url if (hub is not None and hub.is_running()) else None
 
+            launch_request = {
+                "project_uuid": pane_project,
+                "node_uuid": node_uuid,
+                "resume_mode": resume_mode or ("continue" if resume else "none"),
+                "cli_session_id": cli_session_id,
+            }
             spawn_res = dict(
                 self._spawn_session_with_agy_consent(
                     terminal,
@@ -1349,7 +1404,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                     hub_url=hub_url,
                     session_token=token,
                     node_uuid=node_uuid,
-                    resume=resume,
+                    resume=effective_resume,
+                    launch_request=launch_request,
                 )
             )
 
@@ -1391,6 +1447,19 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             session_meta.setdefault("alive", True)
             session_meta.setdefault("paused", False)
             session_meta.setdefault("rss_mb", 0.0)
+
+            self.pane_lifecycle.emit_spawned(
+                PaneSpawnedEvent(
+                    pane_id=norm_pane_id,
+                    project_uuid=pane_project,
+                    node_uuid=node_uuid,
+                    cli_profile=cli_profile,
+                    cwd=effective_cwd,
+                    session_id=spawn_res.get("session_id"),
+                    launch_meta=dict(spawn_res.get("launch_meta") or {}),
+                    request=launch_request,
+                )
+            )
 
             return {
                 "success": True,
@@ -1490,13 +1559,21 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
 
     def pty_close_pane(self, pane_id: Any) -> Dict[str, Any]:
         try:
+            registry = self._get_pane_registry()
+            try:
+                pane_rec = registry.get_pane(pane_id)
+            except ValueError:
+                pane_rec = None
             terminal = self._get_terminal_connector()
             res = _strip_secret_fields(dict(terminal.close_session(pane_id)))
-            registry = self._get_pane_registry()
             try:
                 registry.mark_pane_closed(pane_id)
             except ValueError:
                 pass
+            if res.get("success") and (res.get("closed") or pane_rec is not None):
+                closed_project = pane_rec.project_uuid if pane_rec is not None else ""
+                closed_pane_id = pane_rec.pane_id if pane_rec is not None else str(res.get("pane_id") or pane_id)
+                self.pane_lifecycle.emit_closed_by_user(closed_project, closed_pane_id)
             return res
         except Exception as exc:
             return {"success": False, "error": str(exc)}
@@ -1647,11 +1724,34 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         with self._terminal_lock:
             hub = self._embedded_hub
             reg = self._pane_registry
+        terminal: Any = None
         if reg is not None:
             try:
                 terminal = self._get_terminal_connector()
             except Exception:
                 terminal = None
+        alive_by_project: Dict[str, List[str]] = {}
+        if reg is not None:
+            alive_set: Optional[set[str]] = None
+            list_fn = getattr(terminal, "list_sessions", None) if terminal is not None else None
+            if callable(list_fn):
+                try:
+                    alive_set = {
+                        str(s["pane_id"])
+                        for s in list_fn()
+                        if isinstance(s, Mapping) and s.get("pane_id") and s.get("alive")
+                    }
+                except Exception:
+                    alive_set = None
+            for pane in list(reg.list_panes()):
+                p_id = pane.get("pane_id")
+                if not p_id:
+                    continue
+                if alive_set is None or p_id in alive_set:
+                    proj = str(pane.get("project_uuid") or "")
+                    alive_by_project.setdefault(proj, []).append(str(p_id))
+        self.pane_lifecycle.emit_app_closing(alive_by_project)
+        if reg is not None:
             for pane in list(reg.list_panes()):
                 p_id = pane.get("pane_id")
                 if not p_id:

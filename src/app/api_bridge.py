@@ -138,6 +138,20 @@ class ApiBridge:
         self._ensure_local_node()
         self.ensure_local_node_registered()
         self._ensure_active_project()
+        # --- v2.0.2 WP-3a: roles ---
+        # --- fin WP-3a ---
+        # --- v2.0.2 WP-4a: sesiones ---
+        # --- fin WP-4a ---
+        # --- v2.0.2 WP-6a: actividad por hooks ---
+        # --- fin WP-6a ---
+        # --- v2.0.2 WP-6b: entrega directa ---
+        # --- fin WP-6b ---
+        # --- v2.0.2 WP-7: politica de nodos ---
+        # --- fin WP-7 ---
+        # --- v2.0.2 WP-8: chat del humano ---
+        # --- fin WP-8 ---
+        # --- v2.0.2 WP-9: confirmaciones recordables ---
+        # --- fin WP-9 ---
 
     # ==========================
     # Helpers internos preservados para compatibilidad y concurrencia
@@ -690,6 +704,8 @@ class ApiBridge:
         cwd: Optional[str] = None,
         resume: bool = False,
         project_uuid: Optional[str] = None,
+        resume_mode: Optional[str] = None,
+        cli_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self.extensions_ui.pty_spawn_pane(
             pane_id=pane_id,
@@ -702,6 +718,8 @@ class ApiBridge:
             cwd=cwd,
             resume=resume,
             project_uuid=project_uuid,
+            resume_mode=resume_mode,
+            cli_session_id=cli_session_id,
         )
 
     def pty_list_cli_catalog(self) -> Dict[str, Any]:
@@ -800,6 +818,19 @@ class ApiBridge:
         self, project_uuid: Optional[str] = None, all_projects: bool = False
     ) -> Dict[str, Any]:
         return self.extensions_ui.pty_get_kanban_swarm_snapshot(project_uuid=project_uuid, all_projects=all_projects)
+
+    # --- v2.0.2 WP-3a: roles ---
+    # --- fin WP-3a ---
+    # --- v2.0.2 WP-4a: sesiones ---
+    # --- fin WP-4a ---
+    # --- v2.0.2 WP-6b: entrega directa ---
+    # --- fin WP-6b ---
+    # --- v2.0.2 WP-7: politica de nodos ---
+    # --- fin WP-7 ---
+    # --- v2.0.2 WP-8: chat del humano ---
+    # --- fin WP-8 ---
+    # --- v2.0.2 WP-9: confirmaciones recordables ---
+    # --- fin WP-9 ---
 
     def public_js_functions(self) -> List[Callable[..., Any]]:
         """Funciones planas para `window.expose(...)`; la ventana se crea con `js_api=None` (EGM-73).
