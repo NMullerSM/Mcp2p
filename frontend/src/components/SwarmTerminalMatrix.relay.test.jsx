@@ -50,19 +50,19 @@ function relayApi(over = {}) {
 }
 
 describe('SwarmTerminalMatrix: modo trabajador por terminal', () => {
-  it('el interruptor es por terminal, llama a pty_set_worker_mode y la descripcion dice que no escribe en la terminal', async () => {
+  it('el interruptor es por terminal, llama a pty_set_worker_mode y usa InfoHint en lugar de seccion larga', async () => {
     const pty_set_worker_mode = vi.fn(async (paneId, enabled) => ({ success: true, pane_id: paneId, worker_mode: Boolean(enabled) }));
     renderMatrix(makeMatrixApi({ pty_set_worker_mode }));
     await openCli('claude', 'pane_1');
     await openCli('codex', 'pane_2');
 
-    const description = (await screen.findByTestId('worker-mode-description')).textContent;
-    expect(description).toContain('inbox_wait');
-    expect(description).toContain('MCP2P no');
-    expect(description).toContain('escribe en ninguna terminal');
+    expect(screen.queryByTestId('worker-mode-section')).toBeNull();
+    expect(screen.queryByTestId('worker-mode-description')).toBeNull();
 
     const toggle1 = screen.getByTestId('pane-worker-mode-toggle-pane_1');
     const toggle2 = screen.getByTestId('pane-worker-mode-toggle-pane_2');
+    expect(screen.getByTestId('pane-worker-mode-hint-pane_1')).toBeTruthy();
+    expect(screen.getByTestId('pane-worker-mode-hint-pane_2')).toBeTruthy();
     expect(toggle1.textContent).toContain('OFF');
     fireEvent.click(toggle2);
     await waitFor(() => expect(pty_set_worker_mode).toHaveBeenCalledWith('pane_2', true));
@@ -204,5 +204,44 @@ describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
       expect(api.relay_send_as_human).toHaveBeenCalledWith(PROJECT.project_uuid, 'pane_2', 'revisa develop', 'note')
     );
     expect(api.pty_write_input).not.toHaveBeenCalled(); // por la bandeja, nunca por el teclado de la terminal
+  });
+
+  it('long_descriptions_removed_and_info_hints_present', async () => {
+    const onOpenSettings = vi.fn();
+    const api = makeMatrixApi({
+      pty_set_auto_relay: vi.fn(async () => ({ success: true })),
+      pty_set_worker_mode: vi.fn(async () => ({ success: true }))
+    });
+    renderMatrix(api, { onOpenSettings });
+    await openCli('claude', 'pane_1');
+
+    expect(screen.queryByTestId('auto-relay-section')).toBeNull();
+    expect(screen.queryByTestId('auto-relay-description')).toBeNull();
+    expect(screen.queryByTestId('worker-mode-section')).toBeNull();
+    expect(screen.queryByTestId('worker-mode-description')).toBeNull();
+
+    const toggleAuto = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
+    const toggleWorker = screen.getByTestId('pane-worker-mode-toggle-pane_1');
+    expect(toggleAuto.getAttribute('title')).toBeNull();
+    expect(toggleWorker.getAttribute('title')).toBeNull();
+
+    const hintAuto = screen.getByTestId('pane-auto-relay-hint-pane_1');
+    const hintWorker = screen.getByTestId('pane-worker-mode-hint-pane_1');
+    fireEvent.click(hintAuto);
+    expect(onOpenSettings).toHaveBeenNthCalledWith(1, 'terminals_relay', 'ayuda-auto-relay');
+    fireEvent.click(hintWorker);
+    expect(onOpenSettings).toHaveBeenNthCalledWith(2, 'terminals_relay', 'ayuda-modo-trabajador');
+
+    // Contrato 375 px: ningún estilo en línea en ActiveTerminalRow fija un ancho > 343 px.
+    const row = screen.getByTestId('active-row-pane_1');
+    for (const el of [row, ...row.querySelectorAll('*')]) {
+      for (const prop of ['width', 'minWidth']) {
+        const val = el.style?.[prop] || '';
+        const pxMatch = /^(\d+(?:\.\d+)?)px$/i.exec(val.trim());
+        if (pxMatch) {
+          expect(Number(pxMatch[1])).toBeLessThanOrEqual(343);
+        }
+      }
+    }
   });
 });
