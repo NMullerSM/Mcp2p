@@ -358,7 +358,7 @@ class SqliteNodePolicyStore:
                 SELECT m.msg_id FROM relay_messages m
                 JOIN remote_message_origin o ON o.msg_id = m.msg_id
                 WHERE o.device_fingerprint = ? AND m.state = 'parked' AND m.state_reason = 'UNTRUSTED_NODE_QUEUED'
-                ORDER BY m.created_at_ms ASC, m.msg_id ASC
+                ORDER BY m.created_at_ms ASC, m.rowid ASC
                 LIMIT 1;
                 """,
                 (device_fingerprint,),
