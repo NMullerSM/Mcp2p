@@ -47,7 +47,9 @@ SIGNING_DOMAIN = b"MCP2P-ENV/1\n"
 SIGNATURE_ALG = "Ed25519"
 MAX_SAFE_INT = 2**53 - 1
 # Tipos de sobre. Ninguno transporta ordenes de teclado: el contenido siempre es un DATO para el agente.
-ENVELOPE_KINDS = frozenset({"note", "task.request", "task.reply", "relay_notice"})
+ENVELOPE_KINDS = frozenset(
+    {"note", "task.request", "task.reply", "question", "finding", "status", "relay_notice"}
+)
 
 HEADER_FIELDS = (
     "v",
