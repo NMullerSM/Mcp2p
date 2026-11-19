@@ -389,6 +389,31 @@ class ApplicationFactory:
             return service
 
     # --- v2.0.2 WP-4a: sesiones de terminal ---
+    @staticmethod
+    def terminal_session_service(kernel: CoreKernel, catalog_service: Any = None) -> Any:
+        """`TerminalSessionService` único por kernel (sesiones persistentes de terminales)."""
+        with kernel._lock:
+            service = getattr(kernel, "terminal_session_service", None)
+            if service is None:
+                from src.adapters.persistence.terminal_session_sqlite import TerminalSessionSqliteRepo
+                from src.adapters.terminal.cli_catalog import CliCatalogService
+                from src.app.version import __version__
+                from src.core.services.terminal_session_service import TerminalSessionService
+
+                repo = getattr(kernel, "terminal_session_repo", None)
+                if repo is None:
+                    repo = kernel.terminal_session_repo = TerminalSessionSqliteRepo(kernel.db)
+                cat = catalog_service if catalog_service is not None else CliCatalogService(settings=kernel.db)
+                identity_repo = getattr(kernel, "pane_identity_repo", None) or kernel.db
+                service = TerminalSessionService(
+                    repo=repo,
+                    catalog=cat,
+                    identity_repo=identity_repo,
+                    settings=kernel.db,
+                    app_version=__version__,
+                )
+                kernel.terminal_session_service = service
+            return service
     # --- fin WP-4a ---
     # --- v2.0.2 WP-6a: registro de actividad ---
     # --- fin WP-6a ---
