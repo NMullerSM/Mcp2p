@@ -22,7 +22,7 @@ import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Tuple, Union
 
 import psutil
 
@@ -30,8 +30,15 @@ from src.adapters.terminal.cli_catalog import (
     CliCatalogService,
     CliSpec,
     SettingsStore,
+    current_platform,
     legacy_profiles,
     load_repo_catalog,
+)
+from src.adapters.terminal.launch_augment import (
+    LaunchAddition,
+    LaunchContext,
+    LaunchServices,
+    run_augmenters,
 )
 from src.adapters.terminal.mcp_injection import McpInjectionError, PaneMcpConfigStore
 
@@ -643,6 +650,7 @@ class PtyHostBase:
         min_available_mb: int = DEFAULT_MIN_AVAILABLE_MB,
         memory_probe: Optional[Callable[[], float]] = None,
         mcp_config_store: Optional[PaneMcpConfigStore] = None,
+        launch_services: Optional[LaunchServices] = None,
     ) -> None:
         if int(max_panes) < 1 or int(max_panes) > HARD_MAX_PANES:
             raise ValueError(f"max_panes debe estar entre 1 y {HARD_MAX_PANES}.")
@@ -651,6 +659,7 @@ class PtyHostBase:
         self.gate = gate
         self.connector_id = connector_id
         self.catalog_service = catalog_service if catalog_service is not None else CliCatalogService()
+        self.launch_services: Optional[LaunchServices] = launch_services
         self.min_available_mb = max(0, int(min_available_mb))
         self._memory_probe = memory_probe or self._default_memory_probe
         self._lock = threading.RLock()
@@ -820,6 +829,7 @@ class PtyHostBase:
         node_uuid: Optional[str] = None,
         use_trampoline: bool = True,
         resume: bool = False,
+        launch_request: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
             norm_pane, pane_index = self._normalize_pane(pane_id)
@@ -948,7 +958,7 @@ class PtyHostBase:
                 alive_others=alive_others, cli_profile=cli_profile, role=role, resolved_cmd=resolved_cmd,
                 resolved_cwd=resolved_cwd, cols_int=cols_int, rows_int=rows_int, env_overrides=env_overrides,
                 hub_url=hub_url, session_token=session_token, node_uuid=node_uuid, use_trampoline=use_trampoline,
-                launch_spec=launch_spec,
+                launch_spec=launch_spec, launch_request=launch_request,
             )
         finally:
             with self._lock:
@@ -970,6 +980,55 @@ class PtyHostBase:
 
     def _new_session_id(self, norm_pane: str) -> str:
         return f"{norm_pane}-{uuid.uuid4().hex[:12]}"
+
+    def _augment_launch(
+        self,
+        launch_spec: Optional[CliSpec],
+        session_id: str,
+        norm_pane: str,
+        hub_url: Optional[str],
+        launch_request: Optional[Mapping[str, Any]],
+    ) -> LaunchAddition:
+        """Ejecuta los aumentadores de lanzamiento sobre `launch_spec`; sin spec devuelve vacío."""
+        if launch_spec is None:
+            return LaunchAddition()
+        plat = getattr(self.catalog_service, "platform", None) or current_platform()
+        ctx = LaunchContext(
+            spec=launch_spec,
+            platform=plat,
+            pane_slot=norm_pane,
+            session_id=session_id,
+            hub_url=hub_url,
+            request=dict(launch_request or {}),
+            session_file=lambda name: self._mcp_store.session_file_path(session_id, name),
+            services=self.launch_services,
+        )
+        return run_augmenters(ctx)
+
+    def _prepare_launch_augmentation(
+        self,
+        launch_spec: Optional[CliSpec],
+        session_id: str,
+        norm_pane: str,
+        hub_url: Optional[str],
+        launch_request: Optional[Mapping[str, Any]],
+    ) -> Tuple[LaunchAddition, Optional[Dict[str, Any]]]:
+        """Ejecuta aumentadores y escribe `aug.files` (`0600`) antes del spawn."""
+        aug = self._augment_launch(launch_spec, session_id, norm_pane, hub_url, launch_request)
+        if aug.files:
+            try:
+                for fname, data in aug.files.items():
+                    self._mcp_store.write_session_file(session_id, fname, data)
+            except McpInjectionError as exc:
+                self._mcp_store.cleanup(session_id)
+                return aug, {
+                    "success": False,
+                    "degraded": False,
+                    "code": "MCP_CONFIG_FAILED",
+                    "pane_id": norm_pane,
+                    "message": f"No se pudo preparar la configuracion del panel: {exc}",
+                }
+        return aug, None
 
     def _prepare_mcp(
         self, launch_spec: Optional[CliSpec], session_id: str, hub_url: Optional[str], session_token: Optional[str],

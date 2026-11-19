@@ -344,6 +344,7 @@ class WinPtyHostConnector(PtyHostBase):
         node_uuid: Optional[str],
         use_trampoline: bool = False,
         launch_spec: Optional[CliSpec] = None,
+        launch_request: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         refused = self._admission_error(norm_pane, alive_others)
         if refused is not None:
@@ -360,7 +361,12 @@ class WinPtyHostConnector(PtyHostBase):
         injection, mcp_error = self._prepare_mcp(launch_spec, session_id, hub_url, session_token, norm_pane)
         if mcp_error is not None or injection is None:
             return mcp_error or {"success": False, "code": "MCP_CONFIG_FAILED", "pane_id": norm_pane}
-        full_cmd = [*resolved_cmd, *injection.argv]
+        aug, aug_error = self._prepare_launch_augmentation(
+            launch_spec, session_id, norm_pane, hub_url, launch_request
+        )
+        if aug_error is not None:
+            return aug_error
+        full_cmd = [*resolved_cmd, *injection.argv, *aug.argv]
 
         exe = self._which_executable(full_cmd[0], resolved_cwd)
         if exe is None:
@@ -394,7 +400,7 @@ class WinPtyHostConnector(PtyHostBase):
             hub_url=hub_url,
             session_token=session_token,
             node_uuid=node_uuid,
-            env_overrides={**(env_overrides or {}), **injection.env},
+            env_overrides={**(env_overrides or {}), **injection.env, **aug.env},
         )
 
         backend_enum = getattr(winpty, "Backend", None)
@@ -477,6 +483,8 @@ class WinPtyHostConnector(PtyHostBase):
             "cols": cols_int,
             "rows": rows_int,
             "mcp_injection": injection.public(),
+            "launch_meta": dict(aug.meta),
+            "launch_notes": list(aug.notes),
             "backend": "conpty",
             "tree_kill": tree_kill,
         }
