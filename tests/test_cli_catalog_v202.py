@@ -21,7 +21,7 @@ from src.app.api_bridge import ApiBridge
 def test_gemini_is_not_in_repo_catalog_nor_formats() -> None:
     cat = load_repo_catalog()
     assert "gemini" not in cat.profiles
-    assert set(cat.profiles) == {"claude", "codex", "opencode", "antigravity", "custom_shell"}
+    assert set(cat.profiles) == {"claude", "codex", "opencode", "antigravity", "cursor", "custom_shell"}
     assert "gemini_settings_json" not in MCP_CONFIG_FORMATS
     with pytest.raises(McpInjectionError):
         _render_config("gemini_settings_json", "http://127.0.0.1:8765/mcp", "tok")
@@ -159,3 +159,15 @@ def test_codex_resume_not_verified_until_measured() -> None:
     assert codex is not None
     assert codex.resume["verified"] is False
     assert "WP-5b" in codex.resume["note"]
+
+
+def test_cursor_is_cataloged_without_script_install_or_mcp_injection() -> None:
+    cat = load_repo_catalog()
+    spec = cat.profiles["cursor"]
+    assert spec.binary_names == ("cursor-agent",)
+    # Sin metodo de instalacion: anadir un host de descarga a la lista de confianza es una decision aparte.
+    assert all(not options for options in spec.install.values())
+    # No se inyecta MCP ni se habilita ninguna capacidad sin medirla.
+    assert spec.mcp.get("method") == "none"
+    for capability in ("activity", "delivery", "role_launch", "session"):
+        assert not spec.capability_verified(capability, "linux")

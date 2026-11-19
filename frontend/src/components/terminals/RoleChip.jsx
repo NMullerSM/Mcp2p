@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Lock, RotateCw } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronDown, Lock, RotateCw } from 'lucide-react';
 import { InfoHint } from '../common/InfoHint';
 import { MandateEditor } from './MandateEditor';
 import { paneNumber } from './terminalModel';
@@ -33,6 +34,16 @@ const chipStyle = {
   pointerEvents: 'auto'
 };
 
+// Variante grande para las filas del panel lateral (mismo aspecto que los interruptores de al lado).
+const chipRowStyle = {
+  ...chipStyle,
+  fontFamily: 'inherit',
+  fontSize: '11.5px',
+  padding: '5px 10px',
+  borderRadius: 'var(--radius-md)',
+  gap: '5px'
+};
+
 const btnBase = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -60,15 +71,15 @@ const btnPrimary = {
  * Chip de rol en la cabecera del panel + popover accesible para asignar rol,
  * redactar el mandato y reiniciar la terminal cuando el backend lo recomienda.
  */
-export function RoleChip({ api, pane, onOpenSettings }) {
+export function RoleChip({ api, pane, onOpenSettings, variant = 'chip' }) {
   if (!pane || pane.kind === 'install') {
     return null;
   }
 
-  return <RoleChipInner api={api} pane={pane} onOpenSettings={onOpenSettings} />;
+  return <RoleChipInner api={api} pane={pane} onOpenSettings={onOpenSettings} variant={variant} />;
 }
 
-function RoleChipInner({ api, pane, onOpenSettings }) {
+function RoleChipInner({ api, pane, onOpenSettings, variant }) {
   const paneId = pane.paneId;
   const num = paneNumber(paneId) ?? paneId ?? '1';
   const selectId = useId();
@@ -189,7 +200,9 @@ function RoleChipInner({ api, pane, onOpenSettings }) {
     selectRef.current?.focus();
 
     const onDocMouseDown = (e) => {
-      if (rootRef.current && !rootRef.current.contains(e.target)) {
+      const insideRoot = rootRef.current && rootRef.current.contains(e.target);
+      const insideDialog = dialogRef.current && dialogRef.current.contains(e.target);
+      if (!insideRoot && !insideDialog) {
         setOpen(false);
         setError(null);
         setSavedFeedback(false);
@@ -356,6 +369,8 @@ function RoleChipInner({ api, pane, onOpenSettings }) {
     }
   };
 
+  // La tarjeta y la fila del panel lateral muestran el mismo chip: cada una con su propio identificador.
+  const chipIdPrefix = variant === 'row' ? 'role-chip-row' : 'role-chip';
   const label = roleLabel(displayedRole);
   const ro = readonlyBadge(displayedReadonly);
   const canRelaunch = relaunchRecommended && typeof api?.pty_relaunch_pane === 'function';
@@ -375,26 +390,26 @@ function RoleChipInner({ api, pane, onOpenSettings }) {
       <button
         ref={chipRef}
         type="button"
-        data-testid={`role-chip-${paneId}`}
+        data-testid={`${chipIdPrefix}-${paneId}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Rol de Terminal ${num}: ${label}${ro.text ? ` (${ro.text})` : ''}`}
         title={ro.title || `Rol: ${label}. Pulsa para cambiar rol o mandato.`}
         onClick={handleOpen}
-        style={chipStyle}
+        style={variant === 'row' ? chipRowStyle : chipStyle}
       >
-        <span>{label}</span>
+        <span>{variant === 'row' ? `Rol: ${label}` : label}</span>
         {ro.mode === 'enforced' && (
           <Lock
             size={10}
             aria-hidden="true"
-            data-testid={`role-chip-lock-${paneId}`}
+            data-testid={`${chipIdPrefix}-lock-${paneId}`}
             style={{ color: 'var(--accent-primary)', flexShrink: 0 }}
           />
         )}
         {ro.mode === 'advisory' && (
           <span
-            data-testid={`role-chip-advisory-${paneId}`}
+            data-testid={`${chipIdPrefix}-advisory-${paneId}`}
             style={{
               fontSize: '9px',
               color: 'var(--accent-warning)',
@@ -404,9 +419,10 @@ function RoleChipInner({ api, pane, onOpenSettings }) {
             solo aviso
           </span>
         )}
+        <ChevronDown size={variant === 'row' ? 12 : 10} aria-hidden="true" style={{ flexShrink: 0, opacity: 0.7 }} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
           ref={dialogRef}
           role="dialog"
@@ -595,7 +611,8 @@ function RoleChipInner({ api, pane, onOpenSettings }) {
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );

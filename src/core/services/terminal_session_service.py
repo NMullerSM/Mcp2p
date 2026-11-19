@@ -252,11 +252,19 @@ class TerminalSessionService:
         *,
         max_panes: int,
         busy_slots: Sequence[str] = (),
+        include_handled: bool = False,
     ) -> RestorePlan:
-        """Calcula el plan de restauración ordenado de `project_uuid` sin efectos laterales."""
+        """Calcula el plan de restauración ordenado de `project_uuid` sin efectos laterales.
+
+        `include_handled=True` ignora las marcas «Ahora no» y «ya restaurada» para poder volver a restaurar a mano la
+        última sesión guardada."""
         proj = project_uuid or ""
         snapshot = self._repo.snapshot_get(proj)
-        if snapshot is not None and (snapshot.get("dismissed_at") or snapshot.get("restored_at")):
+        if (
+            snapshot is not None
+            and not include_handled
+            and (snapshot.get("dismissed_at") or snapshot.get("restored_at"))
+        ):
             return RestorePlan(
                 project_uuid=proj,
                 items=(),

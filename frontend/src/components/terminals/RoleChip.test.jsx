@@ -10,6 +10,27 @@ afterEach(() => {
 });
 
 describe('RoleChip', () => {
+  it('row_variant_is_labelled_and_its_popover_lives_outside_the_drawer', async () => {
+    const api = { pty_get_pane_role: vi.fn(async () => ({ success: true, role: 'peer', mandate: '' })) };
+    const { container } = render(
+      <div data-testid="drawer" style={{ transform: 'translateX(0)' }}>
+        <RoleChip api={api} variant="row" pane={{ paneId: 'pane_1', kind: 'cli', role: 'peer' }} />
+      </div>
+    );
+    const chip = screen.getByTestId('role-chip-row-pane_1');
+    expect(chip.textContent).toContain('Rol: Par');
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId('role-popover-pane_1');
+    // El popover se monta en <body>, no dentro del panel con transform (que rompería position: fixed).
+    expect(container.contains(popover)).toBe(false);
+    expect(document.body.contains(popover)).toBe(true);
+    // Un clic dentro del popover no lo cierra; uno fuera sí.
+    fireEvent.mouseDown(popover);
+    expect(screen.queryByTestId('role-popover-pane_1')).toBeTruthy();
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(screen.queryByTestId('role-popover-pane_1')).toBeNull());
+  });
+
   it('shows_role_label_from_matrix_status', () => {
     const { rerender } = render(
       <RoleChip api={{}} pane={{ paneId: 'pane_1', kind: 'cli', role: 'orchestrator' }} />

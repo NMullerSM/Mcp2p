@@ -215,7 +215,7 @@ def test_legacy_databases_upgrade_without_errors(tmp_path: Path, version: str) -
 
 def test_catalog_new_blocks_default_unverified_for_every_repo_entry() -> None:
     cat = load_repo_catalog()
-    assert len(cat.profiles) == 5
+    assert len(cat.profiles) == 6
     assert AgentState.IDLE.value == "idle"
     assert "turn_ended" in NORMALIZED_EVENTS
 

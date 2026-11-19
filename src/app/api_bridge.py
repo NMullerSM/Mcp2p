@@ -849,11 +849,19 @@ class ApiBridge:
     def pty_relaunch_pane(self, pane_id: Any) -> Dict[str, Any]:
         return self.sessions_ui.pty_relaunch_pane(pane_id=pane_id)
 
-    def pty_get_restorable_session(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        return self.sessions_ui.pty_get_restorable_session(project_uuid=project_uuid)
+    def pty_get_restorable_session(
+        self, project_uuid: Optional[str] = None, include_handled: bool = False
+    ) -> Dict[str, Any]:
+        return self.sessions_ui.pty_get_restorable_session(
+            project_uuid=project_uuid, include_handled=include_handled
+        )
 
-    def pty_restore_session(self, project_uuid: Any, pane_slots: Any = None) -> Dict[str, Any]:
-        return self.sessions_ui.pty_restore_session(project_uuid=project_uuid, pane_slots=pane_slots)
+    def pty_restore_session(
+        self, project_uuid: Any, pane_slots: Any = None, include_handled: bool = False
+    ) -> Dict[str, Any]:
+        return self.sessions_ui.pty_restore_session(
+            project_uuid=project_uuid, pane_slots=pane_slots, include_handled=include_handled
+        )
 
     def pty_dismiss_restore(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
         return self.sessions_ui.pty_dismiss_restore(project_uuid=project_uuid)

@@ -904,6 +904,31 @@ def test_dismiss_until_next_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyP
         bridge4.db.close()
 
 
+def test_include_handled_lists_the_last_session_even_after_dismiss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, _, proj = _build_bridge(tmp_path, monkeypatch)
+    db_path = str(bridge.db.db_path)
+    try:
+        assert bridge.pty_spawn_pane("pane_1", "custom_shell", start_hub=False, project_uuid=proj)["success"] is True
+        bridge.extensions_ui.close_terminal_matrix()
+    finally:
+        bridge.db.close()
+
+    db2 = DatabaseManager(db_path=db_path)
+    bridge2, _, _ = _build_bridge(tmp_path, monkeypatch, db_name="sessions.db")
+    try:
+        assert bridge2.pty_dismiss_restore(proj)["success"] is True
+        # Sin la bandera, "Ahora no" oculta la oferta; con ella la última sesión sigue disponible a mano.
+        assert bridge2.pty_get_restorable_session(proj)["plan"]["items"] == []
+        forced = bridge2.pty_get_restorable_session(proj, include_handled=True)
+        assert [it["pane_slot"] for it in forced["plan"]["items"]] == ["pane_1"]
+        # Un valor no booleano nunca activa el modo manual (el puente lo recibe de JavaScript).
+        assert bridge2.pty_get_restorable_session(proj, include_handled="true")["plan"]["items"] == []
+    finally:
+        bridge2._close_terminal_matrix()
+        bridge2.db.close()
+        db2.close()
+
+
 # ---------------------------------------------------------------------------
 # 11. La ranura restaurada recupera node_uuid, banderas, rol y mandato
 # ---------------------------------------------------------------------------
