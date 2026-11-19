@@ -416,6 +416,58 @@ def test_hooks_launch_installs_only_when_verified_for_platform(tmp_path: Path) -
     assert out_codex.meta == {"hooks": "installed"}
 
 
+def _build_fake_winpty_connector(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    svc: CliCatalogService,
+    store: PaneMcpConfigStore,
+    which_path: str,
+    captured_cmds: List[List[str]],
+    captured_envs: List[Dict[str, str]],
+):
+    from src.adapters.terminal import winpty_host
+    from src.adapters.terminal.winpty_host import WinPtyHostConnector
+
+    class _FakeWinPty:
+        def __init__(self, cols: int, rows: int, backend: Any = 0) -> None:
+            self.pid = 2002
+
+        def spawn(self, appname: str, cmdline: str = "", cwd: Any = None, env: Any = None) -> bool:
+            parsed_env: Dict[str, str] = {}
+            if isinstance(env, str):
+                for entry in env.split("\x00"):
+                    if "=" in entry:
+                        k, v = entry.split("=", 1)
+                        parsed_env[k] = v
+            captured_envs.append(parsed_env)
+            return True
+
+        def isalive(self) -> bool:
+            return False
+
+        def read(self, n: int = 4096) -> str:
+            return ""
+
+    win_host = WinPtyHostConnector(
+        catalog_service=svc,
+        mcp_config_store=store,
+        winpty_module=SimpleNamespace(Backend=SimpleNamespace(ConPTY=0), PTY=_FakeWinPty),
+    )
+    win_host.launch_services = LaunchServices(hook_argv=lambda ev: ["C:\\Mcp2p\\Mcp2p.exe", "--hook-post", ev])
+    monkeypatch.setattr(winpty_host, "is_windows_platform", lambda: True)
+    monkeypatch.setattr(win_host, "_which_executable", lambda b, cwd=None: which_path)
+    monkeypatch.setattr(
+        winpty_host,
+        "build_windows_launch",
+        lambda cmd, comspec=None: (
+            captured_cmds.append(list(cmd)),
+            SimpleNamespace(appname=cmd[0], cmdline=" ".join(cmd), display=list(cmd), kind="exe"),
+        )[1],
+    )
+    monkeypatch.setattr(win_host, "_reader_loop", lambda sess: None)
+    return win_host
+
+
 def test_claude_hooks_file_is_0600_and_argv_points_to_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -424,50 +476,74 @@ def test_claude_hooks_file_is_0600_and_argv_points_to_it(
         hook_install="claude_settings",
         events={"claude.Stop": "turn_ended"},
         status="verified",
-        platforms=("linux",),
+        platforms=("linux", "win32"),
     )
     fake_bin = tmp_path / "claude"
     fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_bin.chmod(0o755)
 
-    svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="linux")
-    monkeypatch.setattr(svc, "get_spec", lambda cid: spec_claude if cid == "claude" else None)
-    store = PaneMcpConfigStore(base_dir=tmp_path / "store")
-    host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-    host.launch_services = LaunchServices(hook_argv=lambda ev: ["/opt/mcp2p/Mcp2p", "--hook-post", ev])
+    if os.name == "posix":
+        svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="linux")
+        monkeypatch.setattr(svc, "get_spec", lambda cid: spec_claude if cid == "claude" else None)
+        store = PaneMcpConfigStore(base_dir=tmp_path / "store")
+        host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
+        host.launch_services = LaunchServices(hook_argv=lambda ev: ["/opt/mcp2p/Mcp2p", "--hook-post", ev])
 
-    captured: List[List[str]] = []
-    monkeypatch.setattr(
-        pty_host.pty,
-        "openpty",
-        lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
-    )
-    monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-    monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
-    monkeypatch.setattr(
-        pty_host.subprocess,
-        "Popen",
-        lambda cmd, **kw: (captured.append(list(cmd)), SimpleNamespace(pid=9999, poll=lambda: None))[1],
-    )
-    monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
+        captured: List[List[str]] = []
+        monkeypatch.setattr(
+            pty_host.pty,
+            "openpty",
+            lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
+        )
+        monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
+        monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+        monkeypatch.setattr(
+            pty_host.subprocess,
+            "Popen",
+            lambda cmd, **kw: (captured.append(list(cmd)), SimpleNamespace(pid=9999, poll=lambda: None))[1],
+        )
+        monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
 
-    try:
-        res = host.spawn_session(1, cli_profile="claude", use_trampoline=False)
-        assert res["success"] is True
-        assert res["launch_meta"].get("hooks") == "installed"
+        try:
+            res = host.spawn_session(1, cli_profile="claude", use_trampoline=False)
+            assert res["success"] is True
+            assert res["launch_meta"].get("hooks") == "installed"
 
-        hooks_files = list((tmp_path / "store").rglob("hooks.json"))
-        assert len(hooks_files) == 1
-        if sys.platform != "win32":
+            hooks_files = list((tmp_path / "store").rglob("hooks.json"))
+            assert len(hooks_files) == 1
             assert stat.S_IMODE(hooks_files[0].stat().st_mode) == 0o600
 
-        cmd = captured[0]
-        idx = cmd.index("--settings")
-        assert cmd[idx + 1] == str(hooks_files[0])
-        parsed = json.loads(hooks_files[0].read_text(encoding="utf-8"))
-        assert "Stop" in parsed["hooks"] and "Notification" in parsed["hooks"]
+            cmd = captured[0]
+            idx = cmd.index("--settings")
+            assert cmd[idx + 1] == str(hooks_files[0])
+            parsed = json.loads(hooks_files[0].read_text(encoding="utf-8"))
+            assert "Stop" in parsed["hooks"] and "Notification" in parsed["hooks"]
+        finally:
+            host.close()
+
+    # Variante portable win32 (corre en Linux y Windows sin skip)
+    win_svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="win32")
+    monkeypatch.setattr(win_svc, "get_spec", lambda cid: spec_claude if cid == "claude" else None)
+    win_store = PaneMcpConfigStore(base_dir=tmp_path / "store_win")
+    win_cmds: List[List[str]] = []
+    win_envs: List[Dict[str, str]] = []
+    win_host = _build_fake_winpty_connector(
+        monkeypatch, svc=win_svc, store=win_store, which_path=str(fake_bin), captured_cmds=win_cmds, captured_envs=win_envs
+    )
+    try:
+        win_res = win_host.spawn_session(1, cli_profile="claude", use_trampoline=False)
+        assert win_res["success"] is True
+        assert win_res["launch_meta"].get("hooks") == "installed"
+
+        win_hooks = list((tmp_path / "store_win").rglob("hooks.json"))
+        assert len(win_hooks) == 1
+        win_cmd = win_cmds[0]
+        w_idx = win_cmd.index("--settings")
+        assert win_cmd[w_idx + 1] == str(win_hooks[0])
+        win_parsed = json.loads(win_hooks[0].read_text(encoding="utf-8"))
+        assert "Stop" in win_parsed["hooks"] and "Notification" in win_parsed["hooks"]
     finally:
-        host.close()
+        win_host.close()
 
 
 def test_opencode_combined_config_keeps_mcp_server(
@@ -478,7 +554,7 @@ def test_opencode_combined_config_keeps_mcp_server(
         hook_install="opencode_plugin",
         events={"opencode.event.session.idle": "turn_ended"},
         status="verified",
-        platforms=("linux",),
+        platforms=("linux", "win32"),
         mcp={
             "method": "env",
             "format": "opencode_json",
@@ -490,46 +566,79 @@ def test_opencode_combined_config_keeps_mcp_server(
     fake_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     fake_bin.chmod(0o755)
 
-    svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="linux")
-    monkeypatch.setattr(svc, "get_spec", lambda cid: spec_oc if cid == "opencode" else None)
-    store = PaneMcpConfigStore(base_dir=tmp_path / "store_oc")
-    host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-    host.launch_services = LaunchServices(hook_argv=lambda ev: ["/opt/mcp2p/Mcp2p", "--hook-post", ev])
+    if os.name == "posix":
+        svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="linux")
+        monkeypatch.setattr(svc, "get_spec", lambda cid: spec_oc if cid == "opencode" else None)
+        store = PaneMcpConfigStore(base_dir=tmp_path / "store_oc")
+        host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
+        host.launch_services = LaunchServices(hook_argv=lambda ev: ["/opt/mcp2p/Mcp2p", "--hook-post", ev])
 
-    captured_env: List[Dict[str, str]] = []
-    monkeypatch.setattr(
-        pty_host.pty,
-        "openpty",
-        lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
-    )
-    monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-    monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
-    monkeypatch.setattr(
-        pty_host.subprocess,
-        "Popen",
-        lambda cmd, **kw: (captured_env.append(dict(kw.get("env") or {})), SimpleNamespace(pid=9998, poll=lambda: None))[1],
-    )
-    monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
+        captured_env: List[Dict[str, str]] = []
+        monkeypatch.setattr(
+            pty_host.pty,
+            "openpty",
+            lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY)),
+        )
+        monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
+        monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+        monkeypatch.setattr(
+            pty_host.subprocess,
+            "Popen",
+            lambda cmd, **kw: (captured_env.append(dict(kw.get("env") or {})), SimpleNamespace(pid=9998, poll=lambda: None))[1],
+        )
+        monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
 
+        try:
+            res = host.spawn_session(
+                1,
+                cli_profile="opencode",
+                hub_url="http://127.0.0.1:8765/mcp",
+                session_token="tok-oc-1",
+                use_trampoline=False,
+            )
+            assert res["success"] is True
+            assert res["launch_meta"].get("hooks") == "installed"
+
+            oc_configs = list((tmp_path / "store_oc").rglob("opencode.json"))
+            plugin_files = list((tmp_path / "store_oc").rglob("mcp2p_plugin.js"))
+            assert len(oc_configs) == 1 and len(plugin_files) == 1
+            assert captured_env[0]["OPENCODE_CONFIG"] == str(oc_configs[0])
+
+            combined = json.loads(oc_configs[0].read_text(encoding="utf-8"))
+            assert combined["mcp"]["mcp2p"]["url"] == "http://127.0.0.1:8765/mcp"
+            assert combined["mcp"]["mcp2p"]["headers"]["Authorization"] == "Bearer tok-oc-1"
+            assert combined["plugin"] == [str(plugin_files[0])]
+        finally:
+            host.close()
+
+    # Variante portable win32 (corre en Linux y Windows sin skip)
+    win_svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(fake_bin), platform="win32")
+    monkeypatch.setattr(win_svc, "get_spec", lambda cid: spec_oc if cid == "opencode" else None)
+    win_store = PaneMcpConfigStore(base_dir=tmp_path / "store_oc_win")
+    win_cmds: List[List[str]] = []
+    win_envs: List[Dict[str, str]] = []
+    win_host = _build_fake_winpty_connector(
+        monkeypatch, svc=win_svc, store=win_store, which_path=str(fake_bin), captured_cmds=win_cmds, captured_envs=win_envs
+    )
     try:
-        res = host.spawn_session(
+        win_res = win_host.spawn_session(
             1,
             cli_profile="opencode",
             hub_url="http://127.0.0.1:8765/mcp",
-            session_token="tok-oc-1",
+            session_token="tok-oc-win",
             use_trampoline=False,
         )
-        assert res["success"] is True
-        assert res["launch_meta"].get("hooks") == "installed"
+        assert win_res["success"] is True
+        assert win_res["launch_meta"].get("hooks") == "installed"
 
-        oc_configs = list((tmp_path / "store_oc").rglob("opencode.json"))
-        plugin_files = list((tmp_path / "store_oc").rglob("mcp2p_plugin.js"))
-        assert len(oc_configs) == 1 and len(plugin_files) == 1
-        assert captured_env[0]["OPENCODE_CONFIG"] == str(oc_configs[0])
+        win_oc_configs = list((tmp_path / "store_oc_win").rglob("opencode.json"))
+        win_plugin_files = list((tmp_path / "store_oc_win").rglob("mcp2p_plugin.js"))
+        assert len(win_oc_configs) == 1 and len(win_plugin_files) == 1
+        assert win_envs[0]["OPENCODE_CONFIG"] == str(win_oc_configs[0])
 
-        combined = json.loads(oc_configs[0].read_text(encoding="utf-8"))
-        assert combined["mcp"]["mcp2p"]["url"] == "http://127.0.0.1:8765/mcp"
-        assert combined["mcp"]["mcp2p"]["headers"]["Authorization"] == "Bearer tok-oc-1"
-        assert combined["plugin"] == [str(plugin_files[0])]
+        win_combined = json.loads(win_oc_configs[0].read_text(encoding="utf-8"))
+        assert win_combined["mcp"]["mcp2p"]["url"] == "http://127.0.0.1:8765/mcp"
+        assert win_combined["mcp"]["mcp2p"]["headers"]["Authorization"] == "Bearer tok-oc-win"
+        assert win_combined["plugin"] == [str(win_plugin_files[0])]
     finally:
-        host.close()
+        win_host.close()
