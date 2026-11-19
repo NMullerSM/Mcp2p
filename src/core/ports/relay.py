@@ -26,6 +26,10 @@ AUDIT_EVENTS = (
     "paused",
     "resumed",
     "role_changed",
+    "remote_received",
+    "quarantined",
+    "remote_blocked",
+    "node_policy_changed",
 )
 
 
