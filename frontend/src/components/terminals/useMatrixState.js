@@ -38,6 +38,7 @@ export function createInitialPaneState(paneId) {
     mcpInjection: null,
     activityState: null,
     activitySource: '',
+    agentState: null,
     // Ola 2: proyecto al que pertenece el panel ('' = sin proyecto, visible siempre) y su Auto-Relay (D2).
     projectUuid: '',
     autoRelayEnabled: false,
@@ -190,7 +191,7 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
               kind: remembered?.kind || base.kind,
               cwd: s.cwd || base.cwd || remembered?.cwd || null,
               cliProfile: s.cli_profile || r?.cli_profile || base.cliProfile,
-              role: s.role || r?.role || base.role,
+              role: (s.role === 'installer' ? s.role : (r?.role || s.role)) || base.role,
               cols: s.cols || base.cols,
               rows: s.rows || base.rows,
               alive: true,
@@ -203,6 +204,7 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
               mcpInjection: s.mcp_injection ?? r?.mcp_injection ?? base.mcpInjection ?? null,
               activityState: s.activity_state ?? r?.activity_state ?? base.activityState ?? null,
               activitySource: s.activity_source ?? r?.activity_source ?? base.activitySource ?? '',
+              agentState: r?.agent_state ?? s?.agent_state ?? base.agentState ?? null,
               projectUuid: r?.project_uuid ?? base.projectUuid ?? '',
               autoRelayEnabled: Boolean(r?.auto_relay_enabled ?? base.autoRelayEnabled),
               workerMode: Boolean(r?.worker_mode ?? base.workerMode)
@@ -212,12 +214,14 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
           } else if (cur.open && r) {
             next[paneId] = {
               ...cur,
+              role: r.role || cur.role,
               nodeUuid: r.node_uuid || cur.nodeUuid,
               pid: r.pid ?? cur.pid,
               registryStatus: r.status || cur.registryStatus,
               mcpInjection: r.mcp_injection ?? cur.mcpInjection ?? null,
               activityState: r.activity_state ?? cur.activityState ?? null,
               activitySource: r.activity_source ?? cur.activitySource ?? '',
+              agentState: r.agent_state ?? cur.agentState ?? null,
               projectUuid: r.project_uuid ?? cur.projectUuid ?? '',
               autoRelayEnabled: Boolean(r.auto_relay_enabled ?? cur.autoRelayEnabled),
               workerMode: Boolean(r.worker_mode ?? cur.workerMode)

@@ -123,6 +123,7 @@ def build():
         "--hidden-import=src.app",
         "--hidden-import=src.app.api_bridge",
         "--hidden-import=src.app.auto_updater",
+        "--hidden-import=src.app.hook_client",
         "--hidden-import=src.app.paths",
         "--hidden-import=src.runtime.paths",
         "--hidden-import=src.runtime.identity",
