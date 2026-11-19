@@ -84,7 +84,7 @@ jobs:
           pip install -e ".[dev,build]"
 
       - name: Pruebas reales de ConPTY (terminales de Windows, salida detallada para diagnostico)
-        run: pytest -m conpty -v -rA --tb=long -p no:cacheprovider tests/test_winpty_real_windows.py
+        run: pytest -m conpty -v -rA --tb=long -p no:cacheprovider tests/test_winpty_real_windows.py tests/test_winpty_osc_real_windows.py
 
       - name: Ejecutar Pruebas Automatizadas (pytest)
         run: pytest tests -m "not conpty"
