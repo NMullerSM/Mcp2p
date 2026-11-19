@@ -972,6 +972,20 @@ def create_mcp_server(
         return handler.relay_pause_self(reason=reason)
 
     # --- v2.0.2 WP-3a: herramientas whoami y team_roster ---
+    @server.tool()
+    def whoami() -> str:
+        """Devuelve la identidad autenticada por el Hub de tu panel, tu rol, mandato y capacidades."""
+        return handler.whoami()
+
+    @server.tool()
+    def team_roster(
+        project_uuid: Optional[str] = None,
+        projectUuid: Optional[str] = None,
+    ) -> str:
+        """Lista los paneles activos de tu proyecto con su rol, estado y modo de entrega."""
+        return handler.team_roster(
+            project_uuid=project_uuid if project_uuid is not None else projectUuid,
+        )
     # --- fin WP-3a ---
 
     setattr(server, "mcp2p_handler", handler)

@@ -1970,6 +1970,142 @@ class MCPToolsHandler:
         return self._relay_json(service.pause_self(rec, reason=reason if isinstance(reason, str) else ""))
 
     # --- v2.0.2 WP-3a: herramientas whoami y team_roster ---
+    @staticmethod
+    def _pane_label(pane_id: str) -> str:
+        raw = str(pane_id or "")
+        if raw.startswith("pane_") and raw[5:].isdigit():
+            return f"Terminal {raw[5:]}"
+        return raw
+
+    def _delivery_info(self, node_uuid: str) -> Dict[str, Any]:
+        delivery_svc = getattr(self.kernel, "direct_delivery_service", None)
+        eff_fn = getattr(delivery_svc, "effective_mode", None) if delivery_svc is not None else None
+        if callable(eff_fn):
+            try:
+                mode, reason = eff_fn(node_uuid)
+                return {"mode": str(mode or "inbox"), "reason": reason}
+            except Exception:
+                pass
+        return {"mode": "inbox", "reason": None}
+
+    def _member_state(self, node_uuid: str, service: MessageRelayService) -> str:
+        is_waiting_fn = getattr(service, "is_waiting", None)
+        if callable(is_waiting_fn):
+            try:
+                if is_waiting_fn(node_uuid):
+                    return "esperando_bandeja"
+            except Exception:
+                pass
+        activity = getattr(self.kernel, "agent_activity", None)
+        snap_fn = getattr(activity, "snapshot", None) if activity is not None else None
+        if callable(snap_fn):
+            try:
+                snap = snap_fn(node_uuid)
+                raw = getattr(snap, "state", None)
+                val = raw.value if hasattr(raw, "value") else str(raw or "").lower()
+                return {
+                    "idle": "libre",
+                    "working": "trabajando",
+                    "permission": "permiso",
+                }.get(val, "desconocido")
+            except Exception:
+                pass
+        return "desconocido"
+
+    def whoami(self, session_token: Optional[str] = None) -> str:
+        """Devuelve la identidad autenticada de este panel, su rol, mandato, capacidades y modo de entrega."""
+        from src.adapters.terminal.cli_catalog import current_platform, load_repo_catalog
+        from src.adapters.terminal.role_launch import readonly_mode_for_role
+        from src.core.domain.roles import ROLE_LABELS_ES, capabilities as role_capabilities, normalize_role
+
+        rec, error_response = self._require_hub_pane(None, session_token=session_token, project_uuid=None)
+        if rec is None:
+            return error_response or self._hub_required_response()
+
+        role_enum = normalize_role(rec.role)
+        caps = role_capabilities(role_enum)
+        try:
+            spec = load_repo_catalog().get_spec(rec.cli_profile)
+        except Exception:
+            spec = None
+        caps["readonly"] = readonly_mode_for_role(role_enum, spec, current_platform())
+
+        project_name: Optional[str] = None
+        if rec.project_uuid and self.db is not None:
+            try:
+                proj = self.db.get_project_by_uuid(rec.project_uuid)
+                if isinstance(proj, dict):
+                    project_name = proj.get("name")
+            except Exception:
+                project_name = None
+
+        return self._relay_json(
+            {
+                "success": True,
+                "pane_id": rec.pane_id,
+                "label": self._pane_label(rec.pane_id),
+                "node_uuid": rec.node_uuid,
+                "project_uuid": rec.project_uuid,
+                "project_name": project_name,
+                "role": role_enum.value,
+                "role_label": ROLE_LABELS_ES[role_enum],
+                "mandate": str(getattr(rec, "mandate", "") or ""),
+                "capabilities": caps,
+                "delivery": self._delivery_info(rec.node_uuid),
+                "worker_mode": bool(rec.worker_mode),
+            }
+        )
+
+    def team_roster(
+        self,
+        project_uuid: Optional[str] = None,
+        session_token: Optional[str] = None,
+    ) -> str:
+        """Lista los miembros activos del proyecto (sin pid, token, cwd ni mandatos ajenos)."""
+        from src.core.domain.roles import ROLE_LABELS_ES, normalize_role
+
+        rec, service, error = self._relay_context(project_uuid=project_uuid, session_token=session_token)
+        if error is not None:
+            return error
+        assert rec is not None and service is not None
+
+        panes = (
+            self.pane_registry.list_panes(include_closed=False, project_uuid=rec.project_uuid)
+            if self.pane_registry is not None
+            else []
+        )
+        members: List[Dict[str, Any]] = []
+        for pane in panes:
+            pane_id = str(pane.get("pane_id") or "")
+            node_uuid = str(pane.get("node_uuid") or "")
+            role_enum = normalize_role(pane.get("role"))
+            delivery_info = self._delivery_info(node_uuid)
+            try:
+                pending = int(service.store.count_pending(f"pane:{node_uuid}"))
+            except Exception:
+                pending = 0
+            members.append(
+                {
+                    "pane_id": pane_id,
+                    "label": self._pane_label(pane_id),
+                    "node_uuid": node_uuid,
+                    "role": role_enum.value,
+                    "role_label": ROLE_LABELS_ES[role_enum],
+                    "cli_profile": pane.get("cli_profile"),
+                    "state": self._member_state(node_uuid, service),
+                    "delivery": "directa" if delivery_info.get("mode") == "direct" else "bandeja",
+                    "worker_mode": bool(pane.get("worker_mode", False)),
+                    "inbox_pending": pending,
+                    "is_me": node_uuid == rec.node_uuid and pane_id == rec.pane_id,
+                }
+            )
+        return self._relay_json(
+            {
+                "success": True,
+                "project_uuid": rec.project_uuid,
+                "members": members,
+            }
+        )
     # --- fin WP-3a ---
 
     def get_server_version(
@@ -2064,9 +2200,10 @@ SELF_SCOPED_RELAY_TOOLS: tuple[str, ...] = (
     "inbox_wait",
     "inbox_ack",
     "inbox_reply",
+    "team_roster",
 )
 # Herramientas del relevo: sesion de panel del Hub + vinculo de proceso obligatorios (D13 `enforce`).
-RELAY_TOOLS: tuple[str, ...] = SELF_SCOPED_RELAY_TOOLS + ("relay_pause_self",)
+RELAY_TOOLS: tuple[str, ...] = SELF_SCOPED_RELAY_TOOLS + ("relay_pause_self", "whoami")
 
 _PROJECT_SCOPE_GUARD = ProjectScopeGuard()
 
