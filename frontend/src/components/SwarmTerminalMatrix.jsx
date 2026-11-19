@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { ViewSliderContent, useViewSlider } from './ViewSlider';
 import { EmptyTerminalSlot, TerminalPane } from './terminals/TerminalPane';
@@ -6,11 +6,15 @@ import { ExternalUrlConfirmDialog } from './terminals/ExternalUrlConfirmDialog';
 import { MatrixBanners } from './terminals/MatrixBanners';
 import { MatrixTopRegion } from './terminals/MatrixTopRegion';
 import { useInstallFlow } from './terminals/useInstallFlow';
+import { useDeliveryActions } from './terminals/useDeliveryActions';
 import { usePaneActions } from './terminals/usePaneActions';
 import { createInitialPaneState, useMatrixState } from './terminals/useMatrixState';
 import { TerminalSliderControls } from './terminals/TerminalSliderControls';
 import { RelayPanel } from './relay/RelayPanel';
 import { useRelayState } from './relay/useRelayState';
+
+// Estado de entrega directa por terminal: sondeo lento y solo con la vista de terminales a la vista.
+export const DELIVERY_POLL_MS = 5000;
 
 // Compatibilidad: estos nombres se exportaban desde este modulo antes de partirlo.
 export { MATRIX_PANE_IDS, ROLE_OPTIONS, stripAnsiSequences } from './terminals/terminalModel';
@@ -70,6 +74,50 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     activePanes,
     relayTargets
   } = useMatrixState({ api, project, searchQuery, active });
+
+  // Entrega directa (WP-6b): motivo efectivo por panel, sondeado mientras la vista esta a la vista.
+  const [deliveryByPane, setDeliveryByPane] = useState({});
+  const refreshDelivery = useCallback(async () => {
+    if (typeof api?.relay_get_delivery_status !== 'function') return;
+    try {
+      const res = await api.relay_get_delivery_status(project?.project_uuid || undefined);
+      if (!mountedRef.current || res?.success === false || !Array.isArray(res?.panes)) return;
+      const byPane = {};
+      res.panes.forEach((row) => {
+        if (row?.pane_id) byPane[row.pane_id] = row;
+      });
+      setDeliveryByPane(byPane);
+    } catch {
+      // Sin estado de entrega la linea de motivo simplemente no aparece.
+    }
+  }, [api, mountedRef, project?.project_uuid]);
+
+  useEffect(() => {
+    if (!active || typeof api?.relay_get_delivery_status !== 'function') return undefined;
+    void refreshDelivery();
+    const timer = setInterval(() => void refreshDelivery(), DELIVERY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [active, api, refreshDelivery]);
+
+  const handleDeliveryChanged = useCallback((change) => {
+    if (change?.kind === 'mode' && change.paneId) {
+      setPanes((prev) => (prev[change.paneId]
+        ? { ...prev, [change.paneId]: { ...prev[change.paneId], deliveryMode: change.mode } }
+        : prev));
+    }
+    void refreshDelivery();
+  }, [refreshDelivery, setPanes]);
+
+  const {
+    setMode: setDeliveryMode,
+    busy: deliveryBusy,
+    error: deliveryError,
+    dialog: deliveryDialog
+  } = useDeliveryActions({
+    api,
+    projectUuid: project?.project_uuid || '',
+    onChanged: handleDeliveryChanged
+  });
 
   const handleCopy = useCallback(async (key, text) => {
     try {
@@ -232,6 +280,10 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           onSetCliPath={handleSetCliPath}
           pathEditRequest={pathEditRequest}
           onOpenSettings={onOpenSettings}
+          deliveryStatusByPane={deliveryByPane}
+          onSetDeliveryMode={api?.pty_set_delivery_mode ? (paneId, mode) => void setDeliveryMode(paneId, mode) : undefined}
+          deliveryBusy={deliveryBusy}
+          deliveryError={deliveryError}
         />
       </ViewSliderContent>
       )}
@@ -371,6 +423,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
       />
       {confirmDialog}
       {installConfirmDialog}
+      {deliveryDialog}
     </div>
   );
 }

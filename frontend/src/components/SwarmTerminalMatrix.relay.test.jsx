@@ -245,3 +245,31 @@ describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
     }
   });
 });
+
+describe('SwarmTerminalMatrix: entrega directa (WP-6b)', () => {
+  it('el interruptor cicla el modo por terminal y el motivo sale del sondeo de relay_get_delivery_status', async () => {
+    const pty_set_delivery_mode = vi.fn(async (paneId, mode) => ({ success: true, pane_id: paneId, delivery_mode: mode }));
+    const relay_get_delivery_status = vi.fn(async () => ({
+      success: true,
+      panes: [{ pane_id: 'pane_1', effective_mode: 'inbox', mode_reason: 'CLI_NOT_VERIFIED', now_reason: null, in_flight: false, queued: 0 }]
+    }));
+    renderMatrix(makeMatrixApi({ pty_set_delivery_mode, relay_get_delivery_status }));
+    await openCli('claude', 'pane_1');
+
+    const toggle = await screen.findByTestId('pane-delivery-toggle-pane_1');
+    expect(toggle.textContent).toContain('Entrega directa: AUTO');
+    expect(await screen.findByTestId('pane-delivery-reason-pane_1')).toBeTruthy();
+    expect(screen.getByTestId('pane-delivery-reason-pane_1').textContent).toContain('solo bandeja');
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(pty_set_delivery_mode).toHaveBeenCalledWith('pane_1', 'direct'));
+    await waitFor(() => expect(screen.getByTestId('pane-delivery-toggle-pane_1').textContent).toContain('Entrega directa: ON'));
+    expect(relay_get_delivery_status).toHaveBeenCalledWith(PROJECT.project_uuid);
+  });
+
+  it('sin el metodo en el puente no hay interruptor de entrega ni sondeo', async () => {
+    renderMatrix(makeMatrixApi({}));
+    await openCli('claude', 'pane_1');
+    expect(screen.queryByTestId('pane-delivery-toggle-pane_1')).toBeNull();
+  });
+});

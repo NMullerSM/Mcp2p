@@ -16,6 +16,7 @@ import { CliLogo } from './CliLogo';
 import { RoleChip } from './RoleChip';
 import { InfoHint } from '../common/InfoHint';
 import { HINT_TEXTS } from '../settings/helpTexts';
+import { deliveryToggleLabel, describeDeliveryReason, nextDeliveryMode } from './deliveryModel';
 import {
   canOfferInstall,
   describeInstallBlock,
@@ -567,11 +568,20 @@ function ActiveTerminalRow({
   autoRelayAvailable,
   onToggleWorkerMode,
   workerModeAvailable,
-  onOpenSettings
+  onOpenSettings,
+  deliveryStatus,
+  onSetDeliveryMode,
+  deliveryBusy
 }) {
   const paneId = pane.paneId;
   const stateLabel = pane.alive ? (pane.paused ? 'Pausado' : 'Activo') : 'Finalizado';
   const stateColor = pane.alive ? (pane.paused ? 'var(--accent-warning)' : 'var(--accent-success)') : 'var(--text-muted)';
+  const deliveryMode = pane.deliveryMode || 'auto';
+  const effectiveDelivery = deliveryStatus?.effective_mode;
+  // Motivo solo cuando la entrega efectiva cae a bandeja: explica por que no llega en directo.
+  const deliveryReason = pane.alive && effectiveDelivery === 'inbox'
+    ? describeDeliveryReason(deliveryStatus?.mode_reason)
+    : '';
   return (
     <li
       data-testid={`active-row-${paneId}`}
@@ -702,6 +712,32 @@ function ActiveTerminalRow({
             />
           </span>
         )}
+        {/* Entrega directa: el mensaje se escribe en la terminal cuando el agente queda libre. */}
+        {pane.alive && pane.kind !== 'install' && onSetDeliveryMode && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              type="button"
+              data-testid={`pane-delivery-toggle-${paneId}`}
+              disabled={Boolean(deliveryBusy)}
+              onClick={() => onSetDeliveryMode(paneId, nextDeliveryMode(deliveryMode))}
+              style={{
+                ...btnBase,
+                color: deliveryMode === 'inbox' ? 'var(--text-secondary)' : 'var(--accent-primary)',
+                border: `1px solid ${deliveryMode === 'inbox' ? 'var(--border-subtle)' : 'rgba(16, 185, 129, 0.5)'}`,
+                cursor: deliveryBusy ? 'wait' : 'pointer'
+              }}
+            >
+              <span>{deliveryToggleLabel(deliveryMode, effectiveDelivery)}</span>
+            </button>
+            <InfoHint
+              topic="Entrega directa"
+              text={HINT_TEXTS.deliveryDirect}
+              anchor="ayuda-entrega-directa"
+              onOpenSettings={onOpenSettings}
+              testId={`pane-delivery-hint-${paneId}`}
+            />
+          </span>
+        )}
         <button
           type="button"
           data-testid={`pane-close-btn-${paneId}`}
@@ -712,6 +748,11 @@ function ActiveTerminalRow({
           <span>Cerrar</span>
         </button>
       </div>
+      {deliveryReason && (
+        <p data-testid={`pane-delivery-reason-${paneId}`} style={{ ...mutedText, margin: 0 }}>
+          {deliveryReason}
+        </p>
+      )}
     </li>
   );
 }
@@ -754,7 +795,11 @@ export function TerminalSliderControls({
   onSetCliPath,
   pathEditRequest,
   hiddenPaneCount = 0,
-  onOpenSettings
+  onOpenSettings,
+  deliveryStatusByPane = {},
+  onSetDeliveryMode,
+  deliveryBusy = false,
+  deliveryError = null
 }) {
   const [showManual, setShowManual] = useState(false);
 
@@ -934,6 +979,11 @@ export function TerminalSliderControls({
       {/* Terminales activas */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
         <h4 style={sectionTitle}>Terminales activas</h4>
+        {deliveryError && (
+          <p data-testid="delivery-error" role="alert" style={{ ...mutedText, color: 'var(--accent-danger)', margin: 0 }}>
+            {deliveryError}
+          </p>
+        )}
         {activePanes.length === 0 ? (
           <p data-testid="active-empty" style={{ ...mutedText, margin: 0 }}>No hay terminales abiertas.</p>
         ) : (
@@ -954,6 +1004,9 @@ export function TerminalSliderControls({
                 onToggleWorkerMode={onToggleWorkerMode}
                 workerModeAvailable={Boolean(workerMode?.available)}
                 onOpenSettings={onOpenSettings}
+                deliveryStatus={deliveryStatusByPane[pane.paneId]}
+                onSetDeliveryMode={onSetDeliveryMode}
+                deliveryBusy={deliveryBusy}
               />
             ))}
           </ul>
