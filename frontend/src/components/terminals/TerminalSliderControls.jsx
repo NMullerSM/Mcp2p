@@ -730,7 +730,8 @@ export function TerminalSliderControls({
   onCancelInstall,
   onSetCliPath,
   pathEditRequest,
-  hiddenPaneCount = 0
+  hiddenPaneCount = 0,
+  onOpenSettings
 }) {
   const [showManual, setShowManual] = useState(false);
 

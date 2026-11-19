@@ -20,7 +20,7 @@ export { MATRIX_PANE_IDS, ROLE_OPTIONS, stripAnsiSequences } from './terminals/t
  * al cambiar de pestana para que el sondeo y las instancias de xterm sigan vivas; mientras esta
  * oculta no registra su contenido en el slider y sondea despacio.
  */
-export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = true }) {
+export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = true, onOpenSettings }) {
   const { close: closeSlider, open: openSlider, isOpen: sliderOpen } = useViewSlider();
   const [cwdInput, setCwdInput] = useState('');
   const [roleInput, setRoleInput] = useState('implementer');
@@ -228,6 +228,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           onCancelInstall={discardInstallPlan}
           onSetCliPath={handleSetCliPath}
           pathEditRequest={pathEditRequest}
+          onOpenSettings={onOpenSettings}
         />
       </ViewSliderContent>
       )}
@@ -239,6 +240,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         panes={panes}
         catalogById={catalogById}
         relay={relay}
+        onOpenSettings={onOpenSettings}
       />
 
       <MatrixBanners
@@ -283,6 +285,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         {openPaneIds.map((paneId) => (
           <TerminalPane
             key={paneId}
+            api={api}
             hidden={!visiblePaneSet.has(paneId)}
             pane={panes[paneId]}
             label={paneLabels[paneId]}
@@ -299,6 +302,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
             registerTerminalRef={registerTerminalRef}
             relayPaused={relay.pausedPanes.includes(panes[paneId].nodeUuid)}
             globalPaused={relay.globalPaused}
+            onOpenSettings={onOpenSettings}
           />
         ))}
         {!searchHidesAll && Array.from({ length: emptySlots }, (_, i) => (

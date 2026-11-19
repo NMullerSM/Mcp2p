@@ -40,7 +40,7 @@ describe('MatrixTopRegion', () => {
     vi.doMock('./RestoreSessionBanner', () => ({
       RestoreSessionBanner: (props) => (
         <div
-          data-testid="mock-restore-banner"
+          data-slot="restore-banner"
           data-project={props.projectUuid}
           data-has-callback={String(props.onRestored === onRestored)}
         />
@@ -49,7 +49,7 @@ describe('MatrixTopRegion', () => {
     vi.doMock('../relay/HumanChatPanel', () => ({
       HumanChatPanel: (props) => (
         <div
-          data-testid="mock-human-chat"
+          data-slot="human-chat"
           data-project={props.projectUuid}
           data-has-settings={String(props.onOpenSettings === onOpenSettings)}
         />
@@ -71,8 +71,8 @@ describe('MatrixTopRegion', () => {
 
     const region = screen.getByTestId('matrix-top-region');
     expect(region.children.length).toBe(2);
-    expect(region.children[0].getAttribute('data-testid')).toBe('mock-restore-banner');
-    expect(region.children[1].getAttribute('data-testid')).toBe('mock-human-chat');
+    expect(region.children[0].getAttribute('data-slot')).toBe('restore-banner');
+    expect(region.children[1].getAttribute('data-slot')).toBe('human-chat');
     expect(region.children[0].getAttribute('data-has-callback')).toBe('true');
     expect(region.children[1].getAttribute('data-has-settings')).toBe('true');
   });

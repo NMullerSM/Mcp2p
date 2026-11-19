@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { Plus } from 'lucide-react';
 import { CliLogo } from './CliLogo';
 import { PaneProvenance } from './PaneProvenance';
+import { RoleChip } from './RoleChip';
+import { AgentStateBadge } from './AgentStateBadge';
 import { acquireTerminal, attachTerminal, detachTerminal } from './terminalRegistry';
 import './terminal.css';
 
@@ -213,6 +215,7 @@ const MCP_ACTION_BTN_STYLE = {
 };
 
 export function TerminalPane({
+  api,
   pane,
   label,
   cli,
@@ -228,7 +231,8 @@ export function TerminalPane({
   registerTerminalRef,
   hidden = false,
   relayPaused = false,
-  globalPaused = false
+  globalPaused = false,
+  onOpenSettings
 }) {
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -372,6 +376,8 @@ export function TerminalPane({
           relayPaused={relayPaused}
           globalPaused={globalPaused}
         />
+        <RoleChip api={api} pane={pane} onOpenSettings={onOpenSettings} />
+        <AgentStateBadge pane={pane} />
         {pane.cwd && (
           <span
             data-testid={`pane-cwd-${paneId}`}
