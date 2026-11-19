@@ -4,6 +4,7 @@ import { ViewSliderContent, useViewSlider } from './ViewSlider';
 import { EmptyTerminalSlot, TerminalPane } from './terminals/TerminalPane';
 import { ExternalUrlConfirmDialog } from './terminals/ExternalUrlConfirmDialog';
 import { MatrixBanners } from './terminals/MatrixBanners';
+import { MatrixTopRegion } from './terminals/MatrixTopRegion';
 import { useInstallFlow } from './terminals/useInstallFlow';
 import { usePaneActions } from './terminals/usePaneActions';
 import { createInitialPaneState, useMatrixState } from './terminals/useMatrixState';
@@ -230,6 +231,15 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         />
       </ViewSliderContent>
       )}
+
+      <MatrixTopRegion
+        api={api}
+        projectUuid={project?.project_uuid}
+        onRestored={refreshAll}
+        panes={panes}
+        catalogById={catalogById}
+        relay={relay}
+      />
 
       <MatrixBanners
         pendingNativeConfirmations={pendingNativeConfirmations}
