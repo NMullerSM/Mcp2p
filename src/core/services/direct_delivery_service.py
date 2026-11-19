@@ -72,6 +72,7 @@ class InFlight:
     stage: str  # reserved | written | submitted
     started_ms: int
     submitted_ms: int = 0
+    enter_sent: bool = False
     batch_id: Optional[str] = None
     confirm_event: str = ""
     pane_id: str = ""
@@ -536,17 +537,24 @@ class DirectDeliveryService:
             return False
         submit_at = int(self._clock_ms())
         self._last_injection_ms[node] = submit_at
+        with self._lock:
+            flight = self._inflight.get(node)
+            if flight is not None:
+                flight.enter_sent = True
+                flight.submitted_ms = submit_at
+        # El turno empieza con el Enter: se anota ANTES de escribirlo para que el hook de fin de turno (que puede
+        # llegar al instante) no quede pisado por este aviso.
+        self._activity.mark(node, "injection_submitted", submit_at, "injection")
         res2 = self._pane_input.write(pane_id, payload.submit, incarnation=incarnation)
         if not res2.ok:
+            self._activity.mark(node, "turn_ended", int(self._clock_ms()), "hub")
             return unverifiable(res2.code, f"No se pudo enviar el mensaje en {pane_id}: revisa la terminal.")
-        self._activity.mark(node, "injection_submitted", submit_at, "injection")
         if claim is not None:
             self._store.set_delivery_state(ids, "submitted", reason=None, now_ms=submit_at)
             with self._lock:
                 flight = self._inflight.get(node)
                 if flight is not None:
                     flight.stage = "submitted"
-                    flight.submitted_ms = submit_at
         return True
 
     # -- confirmación --------------------------------------------------------------------------------------------
@@ -554,7 +562,7 @@ class DirectDeliveryService:
     def _confirm_from_activity(self, node: str, snap: Any) -> None:
         with self._lock:
             flight = self._inflight.get(node)
-            if flight is None or flight.stage != "submitted" or not flight.confirm_event:
+            if flight is None or not flight.enter_sent or not flight.confirm_event:
                 return
             if getattr(snap, "last_event", "") != flight.confirm_event or getattr(snap, "source", "") != "hook":
                 return
@@ -570,7 +578,7 @@ class DirectDeliveryService:
         """Cierra una entrega `submitted` cuya confirmación venció o cuyo panel ya no es el mismo."""
         with self._lock:
             flight = self._inflight.get(node)
-        if flight is None or flight.stage != "submitted":
+        if flight is None or not flight.enter_sent:
             return
         now = int(self._clock_ms())
         rec = self._rec(node)

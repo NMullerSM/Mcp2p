@@ -429,6 +429,9 @@ class SqliteRelayStore:
                 delivery = conn.execute("SELECT * FROM relay_delivery WHERE msg_id = ?;", (msg_id,)).fetchone()
                 if delivery is None:
                     continue
+                # Una confirmación que llega antes que el aviso de «enviado» no se pisa con un estado anterior.
+                if state in ("written", "submitted") and delivery["state"] in ("injected", "unverifiable", "reverted"):
+                    continue
                 confirmed = int(now_ms) if state == "injected" else None
                 conn.execute(
                     "UPDATE relay_delivery SET state = ?, reason = ?, bytes_written = MAX(bytes_written, ?), "
