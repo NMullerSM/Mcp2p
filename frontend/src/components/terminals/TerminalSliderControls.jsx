@@ -13,6 +13,8 @@ import {
   X
 } from 'lucide-react';
 import { CliLogo } from './CliLogo';
+import { InfoHint } from '../common/InfoHint';
+import { HINT_TEXTS } from '../settings/helpTexts';
 import {
   canOfferInstall,
   describeInstallBlock,
@@ -563,7 +565,8 @@ function ActiveTerminalRow({
   onToggleAutoRelay,
   autoRelayAvailable,
   onToggleWorkerMode,
-  workerModeAvailable
+  workerModeAvailable,
+  onOpenSettings
 }) {
   const paneId = pane.paneId;
   const stateLabel = pane.alive ? (pane.paused ? 'Pausado' : 'Activo') : 'Finalizado';
@@ -642,41 +645,57 @@ function ActiveTerminalRow({
         )}
         {/* D2: Auto-Relay por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
         {pane.alive && pane.kind !== 'install' && onToggleAutoRelay && (
-          <button
-            type="button"
-            data-testid={`pane-auto-relay-toggle-${paneId}`}
-            aria-pressed={pane.autoRelayEnabled ? 'true' : 'false'}
-            disabled={!autoRelayAvailable || Boolean(pane.autoRelayBusy)}
-            title="Deja avisos de asignación en la bandeja de este agente; no escribe en su terminal."
-            onClick={() => onToggleAutoRelay(paneId)}
-            style={{
-              ...btnBase,
-              color: pane.autoRelayEnabled ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              border: `1px solid ${pane.autoRelayEnabled ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
-              cursor: !autoRelayAvailable || pane.autoRelayBusy ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <span>Auto-Relay: {pane.autoRelayEnabled ? 'ON' : 'OFF'}</span>
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              type="button"
+              data-testid={`pane-auto-relay-toggle-${paneId}`}
+              aria-pressed={pane.autoRelayEnabled ? 'true' : 'false'}
+              disabled={!autoRelayAvailable || Boolean(pane.autoRelayBusy)}
+              onClick={() => onToggleAutoRelay(paneId)}
+              style={{
+                ...btnBase,
+                color: pane.autoRelayEnabled ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                border: `1px solid ${pane.autoRelayEnabled ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
+                cursor: !autoRelayAvailable || pane.autoRelayBusy ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <span>Auto-Relay: {pane.autoRelayEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+            <InfoHint
+              topic="Auto-Relay"
+              text={HINT_TEXTS.autoRelay}
+              anchor="ayuda-auto-relay"
+              onOpenSettings={onOpenSettings}
+              testId={`pane-auto-relay-hint-${paneId}`}
+            />
+          </span>
         )}
         {/* F2.4: modo trabajador por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
         {pane.alive && pane.kind !== 'install' && onToggleWorkerMode && (
-          <button
-            type="button"
-            data-testid={`pane-worker-mode-toggle-${paneId}`}
-            aria-pressed={pane.workerMode ? 'true' : 'false'}
-            disabled={!workerModeAvailable || Boolean(pane.workerModeBusy)}
-            title="El agente espera mensajes de otros agentes en su bandeja (inbox_wait) y responde con inbox_reply; no escribe en su terminal."
-            onClick={() => onToggleWorkerMode(paneId)}
-            style={{
-              ...btnBase,
-              color: pane.workerMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
-              border: `1px solid ${pane.workerMode ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
-              cursor: !workerModeAvailable || pane.workerModeBusy ? 'not-allowed' : 'pointer'
-            }}
-          >
-            <span>Modo trabajador: {pane.workerMode ? 'ON' : 'OFF'}</span>
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <button
+              type="button"
+              data-testid={`pane-worker-mode-toggle-${paneId}`}
+              aria-pressed={pane.workerMode ? 'true' : 'false'}
+              disabled={!workerModeAvailable || Boolean(pane.workerModeBusy)}
+              onClick={() => onToggleWorkerMode(paneId)}
+              style={{
+                ...btnBase,
+                color: pane.workerMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                border: `1px solid ${pane.workerMode ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
+                cursor: !workerModeAvailable || pane.workerModeBusy ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <span>Modo trabajador: {pane.workerMode ? 'ON' : 'OFF'}</span>
+            </button>
+            <InfoHint
+              topic="Modo trabajador"
+              text={HINT_TEXTS.workerMode}
+              anchor="ayuda-modo-trabajador"
+              onOpenSettings={onOpenSettings}
+              testId={`pane-worker-mode-hint-${paneId}`}
+            />
+          </span>
         )}
         <button
           type="button"
@@ -751,34 +770,6 @@ export function TerminalSliderControls({
         copiedKey={copiedKey}
         onCopy={onCopy}
       />
-
-      {/* Auto-Relay (D2): por panel, apagado por defecto; el interruptor de cada terminal esta en «Terminales activas». */}
-      {autoRelay && (
-        <section data-testid="auto-relay-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <h4 style={sectionTitle}>Auto-Relay</h4>
-          <p data-testid="auto-relay-description" style={{ ...mutedText, margin: 0 }}>
-            Se activa en cada terminal, desde «Terminales activas», y se recuerda para esa terminal en este
-            proyecto. Deja un aviso en la bandeja de ese agente cuando le asignan una tarjeta. No escribe nada en
-            su terminal: el agente lo recoge con await_next_assignment. Los mensajes entre paneles del mismo
-            proyecto llegan siempre a la bandeja, con el interruptor activo o no. Respeta el Loop Breaker.
-          </p>
-        </section>
-      )}
-
-      {/* F2.4: modo trabajador por panel; el interruptor de cada terminal esta en «Terminales activas». */}
-      {workerMode?.available && (
-        <section data-testid="worker-mode-section" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <h4 style={sectionTitle}>Modo trabajador</h4>
-          <p data-testid="worker-mode-description" style={{ ...mutedText, margin: 0 }}>
-            Se activa en cada terminal, desde «Terminales activas». El agente se queda esperando mensajes de otros
-            agentes en su bandeja (inbox_wait) y responde con inbox_reply, sin que usted escriba nada. MCP2P no
-            escribe en ninguna terminal: el agente recibe las instrucciones al conectarse y en cada respuesta de su
-            bandeja. Mientras espera, el agente gasta un turno del modelo cada pocos minutos. Una conversación entre
-            dos agentes se detiene sola tras una respuesta automática y espera su confirmación en la bandeja del
-            humano.
-          </p>
-        </section>
-      )}
 
       {relaySection}
 
@@ -971,6 +962,7 @@ export function TerminalSliderControls({
                 autoRelayAvailable={Boolean(autoRelay?.available)}
                 onToggleWorkerMode={onToggleWorkerMode}
                 workerModeAvailable={Boolean(workerMode?.available)}
+                onOpenSettings={onOpenSettings}
               />
             ))}
           </ul>

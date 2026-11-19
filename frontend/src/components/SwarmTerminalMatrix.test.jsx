@@ -57,11 +57,12 @@ describe('SwarmTerminalMatrix: panel vacio clicable y Auto-Relay en el slider', 
   it('el toggle de Auto-Relay de cada terminal vive dentro del panel del slider y ya no hay barra de controles en la vista', async () => {
     const api = makeMatrixApi({ pty_set_auto_relay: vi.fn(async () => ({ success: true })) });
     renderMatrix(api);
-    expect(await screen.findByTestId('auto-relay-section')).toBeTruthy();
-    // D2: ya no hay interruptor global; hay uno por terminal abierta.
+    // D2: ya no hay interruptor global ni seccion larga; hay interruptor + InfoHint por terminal abierta.
+    expect(screen.queryByTestId('auto-relay-section')).toBeNull();
     expect(screen.queryByTestId('auto-relay-toggle')).toBeNull();
     await openCli('claude', 'pane_1');
     const toggle = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
+    expect(screen.getByTestId('pane-auto-relay-hint-pane_1')).toBeTruthy();
 
     expect(screen.queryByTestId('matrix-controls-bar')).toBeNull();
     expect(within(screen.getByTestId('view-slider-panel')).getByTestId('pane-auto-relay-toggle-pane_1')).toBe(toggle);
@@ -937,7 +938,7 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     expect(screen.getByTestId('pane-activity-badge-pane_2').textContent).toBe('Trabajando');
   });
 
-  it('el Auto-Relay es por terminal: pty_set_auto_relay(panel, true) cambia solo esa, la descripcion habla de la bandeja y ya no hay Gate 0c', async () => {
+  it('el Auto-Relay es por terminal: pty_set_auto_relay(panel, true) cambia solo esa, sin parrafo largo y sin Gate 0c', async () => {
     const pty_set_auto_relay = vi.fn(async (paneId, enabled) => ({
       success: true,
       pane_id: paneId,
@@ -952,11 +953,10 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     const toggle2 = screen.getByTestId('pane-auto-relay-toggle-pane_2');
     expect(toggle1.textContent).toContain('OFF');
     expect(toggle2.textContent).toContain('OFF');
-    const description = screen.getByTestId('auto-relay-description').textContent;
-    expect(description).toContain('bandeja');
-    expect(description).toContain('No escribe nada en');
-    expect(description).toContain('cada terminal');
-    expect(description).not.toMatch(/cooldown|est[aá] libre/i);
+    expect(screen.queryByTestId('auto-relay-section')).toBeNull();
+    expect(screen.queryByTestId('auto-relay-description')).toBeNull();
+    expect(screen.getByTestId('pane-auto-relay-hint-pane_1')).toBeTruthy();
+    expect(screen.getByTestId('pane-auto-relay-hint-pane_2')).toBeTruthy();
 
     fireEvent.click(toggle2);
     await waitFor(() => expect(pty_set_auto_relay).toHaveBeenCalledWith('pane_2', true));
