@@ -113,7 +113,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
 
     const p1 = screen.getByTestId('terminal-pane-pane_1');
     const p2 = screen.getByTestId('terminal-pane-pane_2');
@@ -327,9 +327,9 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     const api = makeMatrixApi();
     const { rerenderMatrix } = renderMatrix(api, { searchQuery: '' });
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
 
-    rerenderMatrix({ searchQuery: 'gemini' });
+    rerenderMatrix({ searchQuery: 'codex' });
     // Se oculta sin desmontarse (la terminal conserva su pantalla).
     expect(screen.getByTestId('terminal-pane-pane_1').getAttribute('data-hidden')).toBe('true');
     expect(screen.getByTestId('terminal-pane-pane_1').style.display).toBe('none');
@@ -367,7 +367,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
       pty_get_matrix_status: vi.fn(async () => ({
         success: true, degraded: false, hub_url: null, hub_running: false, panes: [],
         sessions: [{
-          pane_id: 'pane_1', session_id: 'pane_1-sess9', cli_profile: 'gemini', role: 'reviewer',
+          pane_id: 'pane_1', session_id: 'pane_1-sess9', cli_profile: 'codex', role: 'reviewer',
           node_uuid: 'n1', pid: 77, alive: true, paused: false, rss_mb: 12, cols: 90, rows: 30, cwd: '/desde/el/backend'
         }]
       }))
@@ -430,7 +430,7 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     await waitFor(() => expect(screen.queryByTestId('terminal-pane-pane_1')).toBeNull());
     expect(old.disposed).toBe(true);
 
-    await openCli('gemini', 'pane_1');
+    await openCli('codex', 'pane_1');
     expect(termOf('pane_1')).not.toBe(old);
     expect(termOf('pane_1').disposed).toBe(false);
   });
@@ -466,7 +466,7 @@ describe('SwarmTerminalMatrix: layout dinamico', () => {
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     expect(screen.getByTestId('matrix-grid').getAttribute('data-layout')).toBe('2x1');
 
     fireEvent.click(screen.getByTestId('pane-close-btn-pane_2'));
@@ -495,7 +495,7 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     const api = makeMatrixApi({
       pty_list_cli_catalog: vi.fn(async () => makeCatalogResponse([
         makeCli('claude', { version: '2.1.0', resolved_path: '/home/u/.local/bin/claude' }),
-        notInstalled('gemini'),
+        notInstalled('codex'),
         makeCli('custom_shell')
       ]))
     });
@@ -504,8 +504,8 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     expect((await screen.findByTestId('cli-status-claude')).textContent).toBe('Instalado');
     expect(screen.getByTestId('cli-version-claude').textContent).toBe('2.1.0');
     expect(screen.getByTestId('cli-path-claude').textContent).toBe('/home/u/.local/bin/claude');
-    expect(screen.getByTestId('cli-status-gemini').textContent).toBe('No instalado');
-    expect(screen.getByTestId('cli-open-gemini').disabled).toBe(true);
+    expect(screen.getByTestId('cli-status-codex').textContent).toBe('No instalado');
+    expect(screen.getByTestId('cli-open-codex').disabled).toBe(true);
     expect(screen.getByTestId('cli-open-claude').disabled).toBe(false);
   });
 
@@ -515,11 +515,11 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
 
     fireEvent.change(await screen.findByTestId('launch-cwd-input'), { target: { value: ' /tmp/proyecto ' } });
     fireEvent.change(screen.getByTestId('launch-role-select'), { target: { value: 'reviewer' } });
-    await openCli('gemini', 'pane_1');
+    await openCli('codex', 'pane_1');
 
     // Ola 2: el panel nace ligado al proyecto visible (ultimo argumento).
     expect(api.pty_spawn_pane).toHaveBeenCalledWith(
-      'pane_1', 'gemini', 'reviewer', null, 100, 28, true, '/tmp/proyecto', false, PROJECT.project_uuid
+      'pane_1', 'codex', 'reviewer', null, 100, 28, true, '/tmp/proyecto', false, PROJECT.project_uuid
     );
     expect(screen.getByTestId('hub-status-badge').textContent).toContain('Hub activo: http://127.0.0.1:51234/mcp');
     expect(screen.getByTestId('pane-cwd-pane_1').textContent).toBe('/tmp/proyecto');
@@ -566,7 +566,7 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     const api = makeMatrixApi();
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     expect(screen.getByTestId('terminal-pane-pane_2').getAttribute('data-focused')).toBe('true');
 
     fireEvent.click(screen.getByTestId('pane-focus-btn-pane_1'));
@@ -888,7 +888,7 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
         relay_status: { auto_relay_enabled: false, tripped_cases: [], deferred_count: 0 },
         panes: [
           { pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'claude', role: 'implementer', pid: 101 },
-          { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'gemini', role: 'reviewer', pid: 102 }
+          { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'codex', role: 'reviewer', pid: 102 }
         ],
         sessions: [
           {
@@ -909,7 +909,7 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
             session_id: 's2',
             alive: true,
             paused: false,
-            cli_profile: 'gemini',
+            cli_profile: 'codex',
             role: 'reviewer',
             cwd: '/tmp/p2',
             mcp_injection: { status: 'unsupported', verified: false, reason: 'manual' },
@@ -946,7 +946,7 @@ describe('SwarmTerminalMatrix: Auto-Relay, badges EGM-86 y Loop Breaker EGM-87',
     const api = makeMatrixApi({ pty_set_auto_relay });
     renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
 
     const toggle1 = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
     const toggle2 = screen.getByTestId('pane-auto-relay-toggle-pane_2');

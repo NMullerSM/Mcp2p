@@ -32,7 +32,7 @@ describe('SwarmTerminalMatrix: terminales por proyecto (D7)', () => {
     const api = makeMatrixApi();
     const { rerenderMatrix } = renderMatrix(api);
     await openCli('claude', 'pane_1');
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     const node1 = screen.getByTestId('terminal-pane-pane_1');
 
     rerenderMatrix({ project: OTHER });
@@ -61,7 +61,7 @@ describe('SwarmTerminalMatrix: terminales por proyecto (D7)', () => {
     await openCli('claude', 'pane_1');
 
     rerenderMatrix({ project: OTHER });
-    await openCli('gemini', 'pane_2');
+    await openCli('codex', 'pane_2');
     const call = api.pty_spawn_pane.mock.calls.at(-1);
     expect(call[0]).toBe('pane_2');
     expect(call[9]).toBe(OTHER.project_uuid);

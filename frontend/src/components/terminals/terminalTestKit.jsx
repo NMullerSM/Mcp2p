@@ -126,7 +126,7 @@ export function makeCatalogResponse(clis, over = {}) {
   };
 }
 
-export const DEFAULT_CLIS = [makeCli('claude', { version: '2.1.0' }), makeCli('gemini'), makeCli('custom_shell')];
+export const DEFAULT_CLIS = [makeCli('claude', { version: '2.1.0' }), makeCli('codex'), makeCli('custom_shell')];
 
 export function makeMatrixApi(overrides = {}) {
   return {
