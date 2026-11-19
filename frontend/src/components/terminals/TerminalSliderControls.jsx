@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { CliLogo } from './CliLogo';
+import { RoleChip } from './RoleChip';
 import { InfoHint } from '../common/InfoHint';
 import { HINT_TEXTS } from '../settings/helpTexts';
 import {
@@ -554,6 +555,7 @@ function CliRow({
 }
 
 function ActiveTerminalRow({
+  api,
   pane,
   cli,
   label,
@@ -642,6 +644,10 @@ function ActiveTerminalRow({
             <span>{pane.paused ? 'Reanudar' : 'Pausar'}</span>
           </button>
         )}
+        {/* Rol del agente (WP-3b): elegirlo aquí, junto a los demás controles de la terminal. */}
+        {pane.alive && pane.kind !== 'install' && (
+          <RoleChip api={api} pane={pane} onOpenSettings={onOpenSettings} variant="row" />
+        )}
         {/* D2: Auto-Relay por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
         {pane.alive && pane.kind !== 'install' && onToggleAutoRelay && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -711,6 +717,7 @@ function ActiveTerminalRow({
 }
 
 export function TerminalSliderControls({
+  api,
   status,
   autoRelay,
   onToggleAutoRelay,
@@ -934,6 +941,7 @@ export function TerminalSliderControls({
             {activePanes.map((pane) => (
               <ActiveTerminalRow
                 key={pane.paneId}
+                api={api}
                 pane={pane}
                 cli={catalogById[pane.cliProfile]}
                 label={paneLabels[pane.paneId]}

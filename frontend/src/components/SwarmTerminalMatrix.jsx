@@ -190,6 +190,7 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         data-testid="terminals-slider"
       >
         <TerminalSliderControls
+          api={api}
           status={matrixStatus}
           autoRelay={{ available: Boolean(api?.pty_set_auto_relay) }}
           onToggleAutoRelay={(paneId) => void handleTogglePaneAutoRelay(paneId)}

@@ -74,7 +74,7 @@ def test_list_cli_catalog_reports_installed_state_without_executing(bridge: ApiB
     assert res["max_panes"] == 4 and res["hard_max_panes"] == 6
     assert res["terminal_platform_supported"] is True
     by_id = {c["id"]: c for c in res["clis"]}
-    assert set(by_id) == {"claude", "codex", "opencode", "antigravity", "custom_shell"}
+    assert set(by_id) == {"claude", "codex", "opencode", "antigravity", "cursor", "custom_shell"}
     assert by_id["antigravity"]["installed"] is True
     assert by_id["antigravity"]["resolution_source"] == "local_bin"
     assert by_id["claude"]["installed"] is False and by_id["claude"]["resolved_path"] is None

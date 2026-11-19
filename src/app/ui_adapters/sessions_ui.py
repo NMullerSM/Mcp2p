@@ -233,8 +233,12 @@ class SessionsUIAdapter(_BaseUIAdapter):
             time.sleep(poll_s)
         _check_once()
 
-    def pty_get_restorable_session(self, project_uuid: Optional[str] = None) -> Dict[str, Any]:
-        """Devuelve `{policy, plan}` con las sesiones restaurables de `project_uuid`."""
+    def pty_get_restorable_session(
+        self, project_uuid: Optional[str] = None, include_handled: bool = False
+    ) -> Dict[str, Any]:
+        """Devuelve `{policy, plan}` con las sesiones restaurables de `project_uuid`.
+
+        `include_handled=True` incluye la última sesión guardada aunque se haya descartado o restaurado ya."""
         try:
             proj, err = self._resolve_target_project(project_uuid)
             if err is not None:
@@ -245,7 +249,9 @@ class SessionsUIAdapter(_BaseUIAdapter):
             terminal = self._bridge.extensions_ui._get_terminal_connector()
             max_panes = self._bridge.extensions_ui._terminal_max_panes(terminal)
             busy = self._busy_slots(terminal)
-            plan = service.restorable(proj, max_panes=max_panes, busy_slots=busy)
+            plan = service.restorable(
+                proj, max_panes=max_panes, busy_slots=busy, include_handled=include_handled is True
+            )
             return {
                 "success": True,
                 "code": "OK",
@@ -260,6 +266,7 @@ class SessionsUIAdapter(_BaseUIAdapter):
         self,
         project_uuid: Any,
         pane_slots: Any = None,
+        include_handled: bool = False,
     ) -> Dict[str, Any]:
         """Restaura en orden por posición las ranuras pedidas con escalonado de 750 ms."""
         try:
@@ -279,7 +286,9 @@ class SessionsUIAdapter(_BaseUIAdapter):
             terminal = extensions._get_terminal_connector()
             max_panes = extensions._terminal_max_panes(terminal)
             busy = self._busy_slots(terminal)
-            plan = service.restorable(proj, max_panes=max_panes, busy_slots=busy)
+            plan = service.restorable(
+                proj, max_panes=max_panes, busy_slots=busy, include_handled=include_handled is True
+            )
 
             results: List[Dict[str, Any]] = []
             resumed_entries: List[Tuple[str, Dict[str, Any]]] = []

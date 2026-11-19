@@ -6,7 +6,7 @@ import React from 'react';
  * oficial, solo distinguir un panel de otro de un vistazo.
  */
 
-export const CLI_ICON_IDS = ['claude', 'codex', 'opencode', 'antigravity', 'shell'];
+export const CLI_ICON_IDS = ['claude', 'codex', 'opencode', 'antigravity', 'cursor', 'shell'];
 
 const ICON_ALIASES = {
   custom_shell: 'shell',
@@ -28,6 +28,7 @@ const TINTS = {
   codex: '#8f9aa8',
   opencode: '#9aa3ad',
   antigravity: '#a58bd4',
+  cursor: '#6c9cf0',
   shell: '#7f8a96',
   generic: '#7f8a96'
 };
@@ -67,6 +68,13 @@ function Glyph({ iconId, letter }) {
         <g fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
           <path d="M4.5 18.5L12 4.5l7.5 14" />
           <line x1="8" y1="21" x2="16" y2="21" />
+        </g>
+      );
+    case 'cursor':
+      // Puntero de cursor.
+      return (
+        <g fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 4l14 7-6 2-2 6z" />
         </g>
       );
     case 'shell':
