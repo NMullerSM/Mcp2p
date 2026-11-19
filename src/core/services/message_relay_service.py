@@ -99,6 +99,8 @@ class MessageRelayService:
         self.max_inbox_depth = int(max_inbox_depth)
         self.tracker = tracker or ChainTracker(max_depth=max_chain_depth, clock_ms=self._clock_ms)
         self._cond = threading.Condition()
+        self._waiting_lock = threading.Lock()
+        self._waiting: Dict[str, int] = {}
         self._wake_listeners: List[Callable[[str], None]] = []
         self._release_listeners: List[Callable[[Dict[str, Any]], None]] = []
         self._last_purge_ms = 0
@@ -740,17 +742,97 @@ class MessageRelayService:
         applied = _clamp_wait(timeout_ms)
         rec_p = self.principal_of(recipient_rec)
         deadline = time.monotonic() + applied / 1000.0
-        with self._cond:
-            while True:
-                deliverable = not (self._paused(GLOBAL_PAUSE_SCOPE) or self._paused(f"pane:{rec_p.id}")) and \
-                    self.store.has_deliverable(rec_p.uri, rec_p.project_uuid, int(self._clock_ms()))
-                remaining = deadline - time.monotonic()
-                if deliverable or remaining <= 0:
-                    break
-                self._cond.wait(timeout=min(remaining, 5.0))
+        self._waiting_delta(rec_p.id, +1)
+        try:
+            with self._cond:
+                while True:
+                    deliverable = not (self._paused(GLOBAL_PAUSE_SCOPE) or self._paused(f"pane:{rec_p.id}")) and \
+                        self.store.has_deliverable(rec_p.uri, rec_p.project_uuid, int(self._clock_ms()))
+                    remaining = deadline - time.monotonic()
+                    if deliverable or remaining <= 0:
+                        break
+                    self._cond.wait(timeout=min(remaining, 5.0))
+        finally:
+            self._waiting_delta(rec_p.id, -1)
         out = self.next_for(recipient_rec, limit=limit)
         out["timed_out"] = not out["messages"]
         out["timeout_ms_applied"] = applied
+        return out
+
+    # -- entrega directa (WP-6b) ---------------------------------------------------------------------------------
+
+    def label_of(self, principal_uri: str) -> Dict[str, Any]:
+        """Procedencia legible de un principal (público para la entrega directa y el chat)."""
+        return self._label(principal_uri)
+
+    def _waiting_delta(self, node_uuid: str, delta: int) -> None:
+        with self._waiting_lock:
+            count = self._waiting.get(node_uuid, 0) + delta
+            if count <= 0:
+                self._waiting.pop(node_uuid, None)
+            else:
+                self._waiting[node_uuid] = count
+
+    def is_waiting(self, node_uuid: str) -> bool:
+        """True si ese nodo está dentro de un `inbox_wait` ahora mismo (recibe por la bandeja al instante)."""
+        with self._waiting_lock:
+            return self._waiting.get(str(node_uuid), 0) > 0
+
+    def delivery_paused(self, node_uuid: str) -> Optional[str]:
+        """`GLOBAL_PAUSED` / `PANE_PAUSED` si la parada del relevo afecta a ese nodo; None si no."""
+        if self._paused(GLOBAL_PAUSE_SCOPE):
+            return "GLOBAL_PAUSED"
+        if self._paused(f"pane:{node_uuid}"):
+            return "PANE_PAUSED"
+        return None
+
+    def thread_view(self, project_uuid: str, *, since_ms: int = 0, limit: int = 200) -> List[Dict[str, Any]]:
+        """Mensajes del proyecto para el chat del humano, con procedencia, estado legible y datos del nodo remoto."""
+        rows = self.store.thread_rows(
+            str(project_uuid or ""), since_ms=max(0, int(since_ms or 0)), limit=max(1, min(int(limit or 200), 500))
+        )
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if row.get("state") == "parked" and row.get("state_reason") == "UNTRUSTED_NODE_QUEUED":
+                continue
+            replies = int(row.get("reply_count") or 0)
+            delivery = row.get("delivery_state")
+            state = row["state"]
+            if state in ("queued", "parked", "expired", "discarded"):
+                status = {"queued": "En cola", "parked": "Retenido (ver Permisos)", "expired": "Caducado",
+                          "discarded": "Descartado"}[state]
+            elif replies > 0:
+                status = "Respondido"
+            elif delivery == "unverifiable":
+                status = "Entrega dudosa: revisa la terminal"
+            elif delivery == "injected":
+                status = "Entregado en su terminal"
+            elif delivery in ("reserved", "written", "submitted"):
+                status = "Entregando en su terminal"
+            elif state == "acked":
+                status = "Confirmado"
+            else:
+                status = "Leído desde la bandeja"
+            out.append(
+                {
+                    "msg_id": row["msg_id"],
+                    "chain_id": row["chain_id"],
+                    "hop": int(row["hop"]),
+                    "parent_msg_id": row.get("parent_msg_id"),
+                    "from": self._label(row["from_principal"]),
+                    "to": self._label(row["to_principal"]),
+                    "kind": row["kind"],
+                    "trust": row["trust"],
+                    "state": state,
+                    "state_reason": row.get("state_reason"),
+                    "status_label": status,
+                    "delivery_state": delivery,
+                    "text": row.get("content"),
+                    "created_at": int(row["created_at_ms"]),
+                    "reply_count": replies,
+                    "remote": self.remote_info(row["msg_id"]) if callable(self.remote_info) else None,
+                }
+            )
         return out
 
     def ack(self, recipient_rec: Any, msg_ids: Iterable[Any]) -> Dict[str, Any]:

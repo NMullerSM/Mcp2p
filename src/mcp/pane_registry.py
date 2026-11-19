@@ -512,6 +512,35 @@ class PaneRegistry:
             rec.worker_mode = bool(enabled)
             return rec
 
+    def set_delivery(
+        self, pane_id: int | str, mode: Optional[str] = None, batch: Optional[bool] = None
+    ) -> Optional[PaneSessionRecord]:
+        """Cambia el modo de entrega (`auto|direct|inbox`) y/o el lote de un panel ACTIVO y lo persiste."""
+        if mode is not None and mode not in ("auto", "direct", "inbox"):
+            raise ValueError("mode debe ser auto, direct o inbox")
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+            proj = rec.project_uuid
+        if self._identity_repo is not None:
+            self._identity_repo.set_pane_delivery(proj, norm_pane_id, mode, batch)
+        else:
+            with self._lock:
+                ident = self._memory_identities.get((proj, norm_pane_id))
+                if ident is not None:
+                    if mode is not None:
+                        ident["delivery_mode"] = mode
+                    if batch is not None:
+                        ident["delivery_batch"] = bool(batch)
+        with self._lock:
+            if mode is not None:
+                rec.delivery_mode = mode
+            if batch is not None:
+                rec.delivery_batch = bool(batch)
+            return rec
+
     def set_role(
         self,
         pane_id: int | str,

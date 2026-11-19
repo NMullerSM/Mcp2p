@@ -458,7 +458,8 @@ def test_whoami_reports_only_the_caller(gui) -> None:
     assert set(me["capabilities"]["can_send_kinds"]) == set(ROLE_SEND_KINDS[PaneRole.IMPLEMENTER])
     assert me["capabilities"]["chain_budget"] == {"max_hops": 1, "max_messages": 2, "max_minutes": 30}
     assert me["capabilities"]["readonly"] == "none"
-    assert me["delivery"] == {"mode": "inbox", "reason": None}
+    assert me["delivery"]["mode"] == "inbox"  # catálogo sin medir: solo bandeja (con motivo si ya hay motor de entrega)
+    assert me["delivery"]["reason"] in (None, "CLI_NOT_VERIFIED", "TARGET_ELEVATED")
     assert me["worker_mode"] is False
     assert "Secreto ajeno" not in json.dumps(me)
     assert "pid" not in me and "session_token" not in me and "cwd" not in me

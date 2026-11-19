@@ -2616,6 +2616,28 @@ class DatabaseManager:
         return identity
     # --- fin WP-3a ---
     # --- v2.0.2 WP-6b: modo de entrega por panel ---
+    def set_pane_delivery(
+        self, project_uuid: str, pane_slot: str, mode: Optional[str] = None, batch: Optional[bool] = None
+    ) -> Dict[str, Any]:
+        """Persiste el modo de entrega (`auto|direct|inbox`) y/o el lote del panel (proyecto, ranura)."""
+        if mode is not None and mode not in ("auto", "direct", "inbox"):
+            raise ValueError("mode debe ser auto, direct o inbox")
+        self.get_or_create_pane_identity(project_uuid, pane_slot)
+        with self._write_lock, self.get_connection() as conn:
+            with conn:
+                if mode is not None:
+                    conn.execute(
+                        "UPDATE pane_identities SET delivery_mode = ? WHERE project_uuid = ? AND pane_slot = ?;",
+                        (mode, project_uuid or "", pane_slot),
+                    )
+                if batch is not None:
+                    conn.execute(
+                        "UPDATE pane_identities SET delivery_batch = ? WHERE project_uuid = ? AND pane_slot = ?;",
+                        (1 if batch else 0, project_uuid or "", pane_slot),
+                    )
+        identity = self.get_pane_identity(project_uuid, pane_slot)
+        assert identity is not None
+        return identity
     # --- fin WP-6b ---
 
     # ==========================

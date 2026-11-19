@@ -103,7 +103,7 @@ class RelayUIAdapter(_BaseUIAdapter):
                     "Enviar un mensaje a un agente con permisos saltados",
                     f"Destino: {rec.pane_id} ({rec.cli_profile}) en el proyecto {rec.project_uuid or '(sin proyecto)'}\n\n"
                     "Este agente se lanzo con los permisos saltados: puede ejecutar acciones sin pedir confirmacion.\n\n"
-                    f"Texto exacto:\n{preview}\n\nSe entrega a su bandeja; no se escribe nada en su terminal.",
+                    f"Texto exacto:\n{preview}\n\nSe entrega a su bandeja y, si esa terminal tiene la entrega directa, tambien se escribe en ella.",
                 )
                 if declined is not None:
                     return {**declined, "target_pane_id": rec.pane_id}
@@ -148,8 +148,8 @@ class RelayUIAdapter(_BaseUIAdapter):
                     f"De: {self._who(card['from'])}\nPara: {self._who(card['to'])}\n"
                     f"Motivo de la retencion: {card.get('reason')}\nCadena: salto {card['chain']['hop']} "
                     f"(maximo automatico {card['chain']['max_depth']})\n\nTexto exacto:\n{preview}\n\n"
-                    "Si lo entrega, el agente destino podra leerlo en su bandeja. No se escribe nada en ninguna "
-                    "terminal.",
+                    "Si lo entrega, el agente destino podra leerlo en su bandeja y, si esa terminal tiene la entrega "
+                    "directa, tambien se escribe en ella.",
                 )
                 if declined is not None:
                     return {**declined, "msg_id": msg_id}
@@ -208,7 +208,7 @@ class RelayUIAdapter(_BaseUIAdapter):
                 declined = self._confirm_native(
                     "Reanudar el relevo entre agentes",
                     "Se desactiva la parada global: los agentes volveran a recibir en su bandeja los mensajes "
-                    "retenidos y los nuevos. No se escribe nada en ninguna terminal.",
+                    "retenidos y los nuevos. Las terminales con entrega directa activa tambien reciben el texto.",
                 )
                 if declined is not None:
                     return declined

@@ -147,7 +147,7 @@ def test_gui_worker_mode_toggle_asks_app_confirmation_to_enable_and_persists(gui
     assert req1["success"] is False and req1["code"] == "CONFIRMATION_REQUIRED"
     assert req1["confirmation"]["action_id"] == "worker_mode.enable"
     assert req1["confirmation"]["rememberable"] is True
-    assert "pane_2" in req1["confirmation"]["message"] and "ninguna terminal" in req1["confirmation"]["message"]
+    assert "pane_2" in req1["confirmation"]["message"] and "Sin la entrega directa activada" in req1["confirmation"]["message"]
     assert asked == []
     refused = bridge.ui_confirm_action(req1["confirmation"]["token"], False, False)
     assert refused["success"] is False and refused["code"] == "CONFIRMATION_DECLINED"

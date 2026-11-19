@@ -155,6 +155,10 @@ class ApiBridge:
         wire_activity(self)
         # --- fin WP-6a ---
         # --- v2.0.2 WP-6b: entrega directa ---
+        from src.app.ui_adapters.delivery_ui import DeliveryUIAdapter, wire_delivery
+
+        self.delivery_ui = DeliveryUIAdapter(self)
+        wire_delivery(self)
         # --- fin WP-6b ---
         # --- v2.0.2 WP-7: politica de nodos ---
         from src.app.ui_adapters.nodes_ui import NodesUIAdapter, wire_nodes
@@ -873,6 +877,26 @@ class ApiBridge:
         return self.sessions_ui.pty_set_restore_policy(policy=policy)
     # --- fin WP-4a ---
     # --- v2.0.2 WP-6b: entrega directa ---
+    def pty_set_delivery_mode(self, pane_id: Any, mode: Any) -> Dict[str, Any]:
+        return self.delivery_ui.pty_set_delivery_mode(pane_id=pane_id, mode=mode)
+
+    def pty_set_delivery_batch(self, pane_id: Any, enabled: Any) -> Dict[str, Any]:
+        return self.delivery_ui.pty_set_delivery_batch(pane_id=pane_id, enabled=enabled)
+
+    def relay_get_delivery_status(self, project_uuid: Any) -> Dict[str, Any]:
+        return self.delivery_ui.relay_get_delivery_status(project_uuid=project_uuid)
+
+    def relay_set_delivery_default(self, mode: Any) -> Dict[str, Any]:
+        return self.delivery_ui.relay_set_delivery_default(mode=mode)
+
+    def relay_get_delivery_overview(self) -> Dict[str, Any]:
+        return self.delivery_ui.relay_get_delivery_overview()
+
+    def relay_type_to_panes(self, project_uuid: Any, pane_ids: Any, text: Any) -> Dict[str, Any]:
+        return self.delivery_ui.relay_type_to_panes(project_uuid=project_uuid, pane_ids=pane_ids, text=text)
+
+    def relay_list_threads(self, project_uuid: Any, since_ms: Any = 0, limit: Any = 200) -> Dict[str, Any]:
+        return self.delivery_ui.relay_list_threads(project_uuid=project_uuid, since_ms=since_ms, limit=limit)
     # --- fin WP-6b ---
     # --- v2.0.2 WP-7: politica de nodos ---
     def relay_list_nodes(self) -> Dict[str, Any]:

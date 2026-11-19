@@ -45,7 +45,9 @@ export function createInitialPaneState(paneId) {
     autoRelayBusy: false,
     // F2.4: modo trabajador por panel (persistido en el backend junto al Auto-Relay).
     workerMode: false,
-    workerModeBusy: false
+    workerModeBusy: false,
+    // Entrega directa por terminal ('auto' | 'direct' | 'inbox'); el backend lo devuelve en cada panel.
+    deliveryMode: 'auto'
   };
 }
 
@@ -207,7 +209,8 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
               agentState: r?.agent_state ?? s?.agent_state ?? base.agentState ?? null,
               projectUuid: r?.project_uuid ?? base.projectUuid ?? '',
               autoRelayEnabled: Boolean(r?.auto_relay_enabled ?? base.autoRelayEnabled),
-              workerMode: Boolean(r?.worker_mode ?? base.workerMode)
+              workerMode: Boolean(r?.worker_mode ?? base.workerMode),
+              deliveryMode: r?.delivery_mode ?? base.deliveryMode
             };
           } else if (cur.open && cur.alive) {
             next[paneId] = { ...cur, alive: false, paused: false, rssMb: 0 };
@@ -224,7 +227,8 @@ export function useMatrixState({ api, project, searchQuery = '', active = true }
               agentState: r.agent_state ?? cur.agentState ?? null,
               projectUuid: r.project_uuid ?? cur.projectUuid ?? '',
               autoRelayEnabled: Boolean(r.auto_relay_enabled ?? cur.autoRelayEnabled),
-              workerMode: Boolean(r.worker_mode ?? cur.workerMode)
+              workerMode: Boolean(r.worker_mode ?? cur.workerMode),
+              deliveryMode: r.delivery_mode ?? cur.deliveryMode
             };
           }
         });

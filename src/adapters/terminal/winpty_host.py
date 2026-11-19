@@ -516,7 +516,13 @@ class WinPtyHostConnector(PtyHostBase):
             "message": f"Fallo de ConPTY al {action} en {norm_pane}: {exc}",
         }
 
-    def send_input(self, pane_id: Any, data: Union[str, bytes]) -> Dict[str, Any]:
+    def send_input(
+        self,
+        pane_id: Any,
+        data: Union[str, bytes],
+        *,
+        expected_session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if isinstance(data, str):
             text = data
         elif isinstance(data, (bytes, bytearray, memoryview)):
@@ -530,6 +536,14 @@ class WinPtyHostConnector(PtyHostBase):
             pty = session.pty
             if pty is None:
                 return self._session_not_alive(norm_pane, session, f"Descriptor ConPTY cerrado en {norm_pane}.")
+            if expected_session_id is not None and session.session_id != expected_session_id:
+                return {
+                    "success": False,
+                    "code": "INCARNATION_CHANGED",
+                    "pane_id": norm_pane,
+                    "session_id": session.session_id,
+                    "message": "La sesión del panel cambió; no se escribió nada.",
+                }
             try:
                 pty.write(text)
             except Exception as exc:

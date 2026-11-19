@@ -30,6 +30,11 @@ AUDIT_EVENTS = (
     "quarantined",
     "remote_blocked",
     "node_policy_changed",
+    "delivery_reserved",
+    "injected",
+    "delivery_reverted",
+    "delivery_unverifiable",
+    "pointer_sent",
 )
 
 

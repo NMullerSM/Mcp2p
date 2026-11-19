@@ -1763,7 +1763,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
                 "Con Auto-Relay activo, MCP2P dejara avisos de asignacion en la bandeja del agente de este "
                 "panel, ademas de los mensajes directos que ya recibe.\n\n"
-                "No escribe nada en ninguna terminal: el agente decide cuando recoger los avisos. "
+                "El Auto-Relay no escribe en ninguna terminal: el agente decide cuando recoger los avisos. "
                 "Acepte solo si quiere ese comportamiento.",
                 _apply,
                 args_digest=f"auto_relay:{rec.project_uuid}:{rec.pane_id}:1",
@@ -1823,7 +1823,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
                 "Con el modo trabajador, el agente de este panel se quedara esperando mensajes de otros agentes "
                 "(inbox_wait) y respondera con inbox_reply, sin que usted escriba en su terminal.\n\n"
-                "MCP2P no escribe nada en ninguna terminal. Mientras espera, el agente consume turnos del modelo "
+                "Sin la entrega directa activada, MCP2P no escribe en ninguna terminal. Mientras espera, el agente consume turnos del modelo "
                 "cada pocos minutos. Acepte solo si quiere ese comportamiento.",
                 _apply,
                 args_digest=f"worker_mode:{rec.project_uuid}:{rec.pane_id}:1",
