@@ -388,6 +388,15 @@ class ApplicationFactory:
                 service.pane_directory = pane_directory
             return service
 
+    # --- v2.0.2 WP-4a: sesiones de terminal ---
+    # --- fin WP-4a ---
+    # --- v2.0.2 WP-6a: registro de actividad ---
+    # --- fin WP-6a ---
+    # --- v2.0.2 WP-6b: entrega directa ---
+    # --- fin WP-6b ---
+    # --- v2.0.2 WP-7: politica de nodos e ingestion remota ---
+    # --- fin WP-7 ---
+
     @staticmethod
     def create_peer_network(
         *,

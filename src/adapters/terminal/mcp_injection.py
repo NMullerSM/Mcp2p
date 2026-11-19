@@ -40,6 +40,8 @@ logger = logging.getLogger("mcp2p.adapters.terminal.mcp_injection")
 MCP_SERVER_NAME = "mcp2p"
 CONFIG_FILENAME = "mcp-config.json"
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+_SESSION_FILE_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+MAX_SESSION_FILE_BYTES = 256 * 1024
 _ORPHAN_DIR_RE = re.compile(r"(\d+)-[A-Za-z0-9_.-]+")
 _SAFE_URL_RE = re.compile(r"https?://[A-Za-z0-9.\[\]:-]+(?::\d+)?(?:/[A-Za-z0-9._~/-]*)?")
 
@@ -428,6 +430,53 @@ class PaneMcpConfigStore:
         if _SESSION_ID_RE.fullmatch(session_id) is None:
             raise McpInjectionError("session_id invalido para el directorio de configuracion MCP.")
         return self.base_dir / f"{self._pid}-{session_id}"
+
+    @staticmethod
+    def _validate_session_filename(name: Any) -> str:
+        if not isinstance(name, str) or name in (".", "..") or _SESSION_FILE_NAME_RE.fullmatch(name) is None:
+            raise McpInjectionError(f"nombre de archivo de sesion invalido: {name!r}")
+        return name
+
+    def session_file_path(self, session_id: str, name: str) -> Path:
+        """Ruta esperada (aun no escrita) dentro del directorio privado `0700` de `session_id`."""
+        clean = self._validate_session_filename(name)
+        return self._session_path(session_id) / clean
+
+    def ensure_session_dir(self, session_id: str) -> Path:
+        """Crea (si falta) y verifica el directorio privado `0700` del panel."""
+        self._ensure_base()
+        session_dir = self._session_path(session_id)
+        try:
+            session_dir.mkdir(mode=0o700, exist_ok=True)
+        except OSError as exc:
+            raise McpInjectionError(f"no se pudo crear el directorio de sesion del panel: {exc}") from exc
+        if not self._owned_private_dir(session_dir):
+            raise McpInjectionError("el directorio de sesion del panel no es un directorio propio.")
+        try:
+            os.chmod(session_dir, 0o700)
+        except OSError as exc:
+            raise McpInjectionError(f"no se pudo restringir {session_dir}: {exc}") from exc
+        return session_dir
+
+    def write_session_file(self, session_id: str, name: str, data: bytes) -> Path:
+        """Escribe un archivo de sesion (`0600`, `O_EXCL|O_NOFOLLOW`, <= 256 KiB)."""
+        clean = self._validate_session_filename(name)
+        if not isinstance(data, (bytes, bytearray)):
+            raise McpInjectionError("el contenido del archivo de sesion debe ser bytes.")
+        raw = bytes(data)
+        if len(raw) > MAX_SESSION_FILE_BYTES:
+            raise McpInjectionError(f"el archivo de sesion {clean!r} excede {MAX_SESSION_FILE_BYTES} bytes.")
+        session_dir = self.ensure_session_dir(session_id)
+        target = session_dir / clean
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(target, flags, 0o600)
+            _restrict_to_owner(fd, target)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(raw)
+        except (OSError, FileExistsError) as exc:
+            raise McpInjectionError(f"no se pudo escribir el archivo de sesion {clean!r}: {exc}") from exc
+        return target
 
     # -- API ---------------------------------------------------------------
 

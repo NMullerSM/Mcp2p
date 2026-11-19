@@ -726,6 +726,9 @@ class DatabaseManager:
                 from src.storage.operator_schema import migrate_operator_tables
 
                 migrate_operator_tables(conn)  # Ola 4: sesiones del operador ligadas al proceso del harness
+                from src.storage.schema_v202 import migrate_v202
+
+                migrate_v202(conn)  # 2.0.2: roles, entrega, sesiones y nodos (cada parte en su módulo)
 
     @staticmethod
     def _migrate_pane_identities(conn: sqlite3.Connection) -> None:
@@ -2582,6 +2585,11 @@ class DatabaseManager:
                     "SELECT * FROM pane_identities WHERE project_uuid = ? ORDER BY pane_slot;", (project_uuid,)
                 ).fetchall()
         return [self._pane_identity_row(r) for r in rows]
+
+    # --- v2.0.2 WP-3a: rol y mandato por panel ---
+    # --- fin WP-3a ---
+    # --- v2.0.2 WP-6b: modo de entrega por panel ---
+    # --- fin WP-6b ---
 
     # ==========================
     # Extensiones, Tablas Dinámicas y Seeds P2P

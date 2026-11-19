@@ -22,7 +22,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 import psutil
 
@@ -427,6 +427,7 @@ class PosixPtyHostConnector(PtyHostBase):
         node_uuid: Optional[str],
         use_trampoline: bool,
         launch_spec: Optional[CliSpec] = None,
+        launch_request: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Resto del spawn con el panel ya reservado en `_spawning` (lo libera `spawn_session`)."""
         if alive_others >= self.max_panes:
@@ -456,14 +457,19 @@ class PosixPtyHostConnector(PtyHostBase):
                 "pane_id": norm_pane,
                 "message": f"No se pudo preparar la conexion MCP del panel: {exc}",
             }
-        resolved_cmd = [*resolved_cmd, *injection.argv]
+        aug, aug_error = self._prepare_launch_augmentation(
+            launch_spec, session_id, norm_pane, hub_url, launch_request
+        )
+        if aug_error is not None:
+            return aug_error
+        resolved_cmd = [*resolved_cmd, *injection.argv, *aug.argv]
         launch_cmd = self._build_launch_command(resolved_cmd, use_trampoline=use_trampoline)
         child_env = self._build_child_env(
             norm_pane=norm_pane,
             hub_url=hub_url,
             session_token=session_token,
             node_uuid=node_uuid,
-            env_overrides={**(env_overrides or {}), **injection.env},
+            env_overrides={**(env_overrides or {}), **injection.env, **aug.env},
             use_trampoline=use_trampoline,
         )
 
@@ -575,6 +581,8 @@ class PosixPtyHostConnector(PtyHostBase):
             "cols": cols_int,
             "rows": rows_int,
             "mcp_injection": injection.public(),
+            "launch_meta": dict(aug.meta),
+            "launch_notes": list(aug.notes),
         }
 
     def send_input(self, pane_id: Any, data: Union[str, bytes]) -> Dict[str, Any]:

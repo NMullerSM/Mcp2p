@@ -1969,6 +1969,9 @@ class MCPToolsHandler:
             return error
         return self._relay_json(service.pause_self(rec, reason=reason if isinstance(reason, str) else ""))
 
+    # --- v2.0.2 WP-3a: herramientas whoami y team_roster ---
+    # --- fin WP-3a ---
+
     def get_server_version(
         self,
         transport: Optional[str] = None,

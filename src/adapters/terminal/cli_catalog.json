@@ -34,6 +34,45 @@
         "verified_on": "2026-11-18",
         "note": "Medido en binario local claude 2.1.325 (Rki/HE): espera ESC ] 7501 ; ?1 BEL (data.startsWith('?')). Emite state=idle|working|blocked|clear[:kind=permission]."
       },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
       "install": {
         "linux": [
           {
@@ -128,6 +167,45 @@
         "status": "unverified",
         "note": "No verificado con binario local; no se responde a sondas OSC 7501."
       },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
       "install": {
         "linux": [
           {
@@ -200,6 +278,45 @@
       "osc7501": {
         "status": "unverified",
         "note": "No verificado con binario local; no se responde a sondas OSC 7501."
+      },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
       },
       "install": {
         "linux": [
@@ -288,6 +405,45 @@
         "status": "unverified",
         "note": "No verificado con binario local; no se responde a sondas OSC 7501."
       },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
       "install": {
         "linux": [
           {
@@ -368,6 +524,45 @@
         "status": "unverified",
         "note": "No verificado con binario local; no se responde a sondas OSC 7501."
       },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
       "install": {
         "linux": [
           {
@@ -426,6 +621,45 @@
       "osc7501": {
         "status": "unverified",
         "note": "No verificado con binario local; no se responde a sondas OSC 7501."
+      },
+      "activity": {
+        "status": "unverified",
+        "platforms": [],
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "delivery": {
+        "status": "unverified",
+        "platforms": [],
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "role_launch": {
+        "status": "unverified",
+        "platforms": [],
+        "system_prompt_file_argv": [],
+        "readonly_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
+      },
+      "session": {
+        "status": "unverified",
+        "platforms": [],
+        "assign_argv": [],
+        "resume_by_id_argv": [],
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "Pendiente de medir (WP-5b)."
       },
       "install": {
         "linux": [],
