@@ -990,6 +990,7 @@ def create_mcp_server(
 
     setattr(server, "mcp2p_handler", handler)
     setattr(server, "mcp2p_pane_registry", pane_registry)
+    setattr(server, "mcp2p_activity", getattr(kernel, "agent_activity", None) if kernel is not None else None)
     return server
 
 
@@ -1103,7 +1104,15 @@ def build_streamable_http_server(server: MCPServer, host: str, port: int) -> tup
         sock.close()
         raise
     bound_port = sock.getsockname()[1]
-    app = server.streamable_http_app(host=bind_host)
+    from src.adapters.terminal.cli_catalog import CliCatalogService
+    from src.mcp.hook_endpoint import HookEndpoint, HooksRouter
+
+    catalog_svc = CliCatalogService(include_user_catalog=False)
+    hook_endpoint = HookEndpoint(
+        activity_getter=lambda: getattr(server, "mcp2p_activity", None),
+        catalog_lookup=catalog_svc.get_spec,
+    )
+    app = HooksRouter(server.streamable_http_app(host=bind_host), hook_endpoint)
     pane_registry = getattr(server, "mcp2p_pane_registry", None)
     if pane_registry is not None and callable(getattr(pane_registry, "authenticate_token", None)):
         resolver = getattr(pane_registry, "process_resolver", None)

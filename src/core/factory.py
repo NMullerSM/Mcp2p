@@ -416,6 +416,17 @@ class ApplicationFactory:
             return service
     # --- fin WP-4a ---
     # --- v2.0.2 WP-6a: registro de actividad ---
+    @staticmethod
+    def agent_activity_registry(kernel: CoreKernel) -> Any:
+        """`AgentActivityRegistry` del Hub, uno por kernel (lo comparten el endpoint HTTP y la UI)."""
+        with kernel._lock:
+            service = getattr(kernel, "agent_activity", None)
+            if service is None:
+                from src.core.services.agent_activity_registry import AgentActivityRegistry
+
+                service = AgentActivityRegistry()
+                kernel.agent_activity = service
+            return service
     # --- fin WP-6a ---
     # --- v2.0.2 WP-6b: entrega directa ---
     # --- fin WP-6b ---

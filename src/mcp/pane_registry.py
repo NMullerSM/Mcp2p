@@ -149,6 +149,7 @@ class PaneRegistry:
         # si no, en memoria (estable mientras viva el proceso).
         self._identity_repo = identity_repo
         self._memory_identities: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._human_submit_listeners: List[Callable[[str], None]] = []
 
     @property
     def process_resolver(self) -> Any:
@@ -362,6 +363,11 @@ class PaneRegistry:
             node_uuid=fallback_node_uuid or "unknown",
         )
 
+    def add_human_submit_listener(self, fn: Callable[[str], None]) -> None:
+        """Registra un oyente llamado con `node_uuid` (fuera del cerrojo) cuando el humano envía una entrada."""
+        with self._lock:
+            self._human_submit_listeners.append(fn)
+
     def record_human_keystroke(
         self,
         pane_id: int | str,
@@ -373,6 +379,8 @@ class PaneRegistry:
 
         `submitted=True` (el humano pulso Enter) marca ademas un TURNO humano: cierra la cadena causal del panel."""
         norm_pane_id, _ = _normalize_pane_id(pane_id)
+        notify_node_uuid: Optional[str] = None
+        listeners: List[Callable[[str], None]] = []
         with self._lock:
             ts = float(timestamp) if timestamp is not None else float(self._clock())
             self._human_keystrokes[norm_pane_id] = ts
@@ -381,7 +389,15 @@ class PaneRegistry:
                 rec.last_human_keystroke_at = ts
                 if submitted:
                     rec.last_human_submit_at = ts
-            return True
+                    notify_node_uuid = rec.node_uuid
+                    listeners = list(self._human_submit_listeners)
+        if notify_node_uuid and listeners:
+            for fn in listeners:
+                try:
+                    fn(notify_node_uuid)
+                except Exception:
+                    logger.warning("Fallo en oyente de human_submit; se continua.", exc_info=True)
+        return True
 
     def last_human_submit_at(self, node_uuid: str) -> float:
         """Ultimo turno humano enviado en el panel ACTIVO de esa identidad (0.0 si ninguno)."""

@@ -703,6 +703,10 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                 if pid_key is not None:
                     session_by_pane[str(pid_key)] = s
 
+            kernel = self.core_kernel
+            agent_activity = getattr(kernel, "agent_activity", None) if kernel is not None else None
+            snapshot_fn = getattr(agent_activity, "snapshot", None) if agent_activity is not None else None
+
             panes: List[Dict[str, Any]] = []
             for raw_pane in registry.list_panes():
                 p = dict(raw_pane)
@@ -711,6 +715,20 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
                     for key in ("activity_state", "activity_source", "idle", "mcp_injection"):
                         if key in match and key not in p:
                             p[key] = match[key]
+                node_uuid = str(p.get("node_uuid") or "")
+                if callable(snapshot_fn) and node_uuid:
+                    try:
+                        snap = snapshot_fn(node_uuid)
+                        if snap is not None:
+                            raw_state = getattr(snap, "state", None)
+                            state_val = raw_state.value if hasattr(raw_state, "value") else str(raw_state or "unknown")
+                            p["agent_state"] = {
+                                "state": state_val,
+                                "source": str(getattr(snap, "source", "initial") or "initial"),
+                                "since_ms": int(getattr(snap, "since_ms", 0) or 0),
+                            }
+                    except Exception:
+                        pass
                 panes.append(p)
 
             hub = self._embedded_hub

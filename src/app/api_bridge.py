@@ -150,6 +150,9 @@ class ApiBridge:
         wire_sessions(self)
         # --- fin WP-4a ---
         # --- v2.0.2 WP-6a: actividad por hooks ---
+        from src.app.ui_adapters.activity_ui import wire_activity
+
+        wire_activity(self)
         # --- fin WP-6a ---
         # --- v2.0.2 WP-6b: entrega directa ---
         # --- fin WP-6b ---
