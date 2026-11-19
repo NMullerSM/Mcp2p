@@ -178,7 +178,8 @@ export function usePaneActions({
         activitySource: sess.activity_source ?? paneMeta.activity_source ?? '',
         projectUuid: res.project_uuid ?? paneMeta.project_uuid ?? project?.project_uuid ?? '',
         autoRelayEnabled: Boolean(paneMeta.auto_relay_enabled),
-        workerMode: Boolean(paneMeta.worker_mode)
+        workerMode: Boolean(paneMeta.worker_mode),
+        deliveryMode: paneMeta.delivery_mode || sess.delivery_mode || 'auto'
       });
       setNotice(null);
       requestTerminalFocus(openedId);

@@ -5,7 +5,8 @@
 
 export const HINT_TEXTS = {
   autoRelay: 'Deja avisos de tareas asignadas en la bandeja de este agente.',
-  workerMode: 'El agente espera mensajes en su bandeja y responde solo. Gasta turnos mientras espera.'
+  workerMode: 'El agente espera mensajes en su bandeja y responde solo. Gasta turnos mientras espera.',
+  deliveryDirect: 'Los mensajes llegan escritos en la terminal cuando el agente queda libre.'
 };
 
 export const HELP_SECTIONS = [
