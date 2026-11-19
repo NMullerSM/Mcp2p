@@ -52,6 +52,7 @@ export function ProjectWorkspace({
   onTabChange,
   onBack,
   onNewTask,
+  onOpenSettings,
   api,
   taskTrigger = 0
 }) {
@@ -489,6 +490,7 @@ export function ProjectWorkspace({
               project={project}
               searchQuery={tabSearches.terminals || ''}
               active={terminalsActive}
+              onOpenSettings={onOpenSettings}
             />
           </div>
         )}

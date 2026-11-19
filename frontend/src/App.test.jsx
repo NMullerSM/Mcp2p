@@ -420,3 +420,68 @@ describe('App - atajos globales y terminales', () => {
     }
   });
 });
+
+describe('App - apertura de Ajustes con pestaña y ancla', () => {
+  it('opens_settings_with_tab_and_anchor', async () => {
+    vi.resetModules();
+    vi.doMock('./components/SettingsDrawer', () => ({
+      SettingsDrawer: (props) => (
+        <div
+          role="region"
+          aria-label="mock-settings-drawer"
+          data-open={String(props.isOpen)}
+          data-tab={props.initialTab || ''}
+          data-anchor={props.initialAnchor ?? ''}
+        />
+      )
+    }));
+    vi.doMock('./components/ProjectWorkspace', () => ({
+      ProjectWorkspace: (props) => (
+        <div>
+          <button
+            type="button"
+            onClick={() => props.onOpenSettings?.('terminals_relay', 'auto-relay')}
+          >
+            Abrir ajustes con ancla
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onOpenSettings?.('manual')}
+          >
+            Abrir ajustes sin ancla
+          </button>
+        </div>
+      )
+    }));
+
+    try {
+      const { default: MockedApp } = await import('./App');
+      const api = makeApi({
+        list_projects: vi.fn(async () => ({
+          success: true,
+          projects: [{ project_uuid: 'proj_1', name: 'Proyecto 1', join_status: 'active' }]
+        }))
+      });
+      window.pywebview = { api };
+      render(<MockedApp />);
+
+      fireEvent.click(await screen.findByText('Abrir Espacio'));
+      const openWithAnchor = await screen.findByText('Abrir ajustes con ancla');
+      fireEvent.click(openWithAnchor);
+
+      const drawer = screen.getByRole('region', { name: 'mock-settings-drawer' });
+      expect(drawer.getAttribute('data-open')).toBe('true');
+      expect(drawer.getAttribute('data-tab')).toBe('terminals_relay');
+      expect(drawer.getAttribute('data-anchor')).toBe('auto-relay');
+
+      fireEvent.click(screen.getByText('Abrir ajustes sin ancla'));
+      expect(drawer.getAttribute('data-open')).toBe('true');
+      expect(drawer.getAttribute('data-tab')).toBe('manual');
+      expect(drawer.getAttribute('data-anchor')).toBe('');
+    } finally {
+      vi.doUnmock('./components/SettingsDrawer');
+      vi.doUnmock('./components/ProjectWorkspace');
+      vi.resetModules();
+    }
+  });
+});

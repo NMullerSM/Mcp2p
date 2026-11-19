@@ -47,6 +47,7 @@ export default function App() {
   // Modals & Drawers state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState('github');
+  const [settingsAnchor, setSettingsAnchor] = useState(null);
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [isNewTaskOpen, setIsNewTaskOpen] = useState(false);
   const [isJoinP2POpen, setIsJoinP2POpen] = useState(false);
@@ -383,8 +384,9 @@ export default function App() {
     }
   };
 
-  const handleOpenSettings = (tab = 'github') => {
+  const handleOpenSettings = (tab = 'github', anchor = null) => {
     setSettingsTab(tab);
+    setSettingsAnchor(anchor);
     setIsSettingsOpen(true);
   };
 
@@ -432,6 +434,7 @@ export default function App() {
               loadProjects();
             }}
             onNewTask={() => setIsNewTaskOpen(true)}
+            onOpenSettings={handleOpenSettings}
             api={api}
             taskTrigger={taskTrigger}
           />
@@ -457,6 +460,7 @@ export default function App() {
         activeProject={activeProject}
         projectsList={projects}
         initialTab={settingsTab}
+        initialAnchor={settingsAnchor}
         onGithubStatusChange={setGithubStatus}
         onNavigateWorkspaceTab={(tabId) => setActiveTab(tabId)}
       />
