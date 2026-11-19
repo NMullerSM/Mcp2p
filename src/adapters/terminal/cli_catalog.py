@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlparse
 
+from src.core.domain.agent_activity import NORMALIZED_EVENTS
+
 logger = logging.getLogger("mcp2p.adapters.terminal.cli_catalog")
 
 CATALOG_SCHEMA_VERSION = 1
@@ -258,6 +260,57 @@ def _default_osc7501() -> Dict[str, str]:
     }
 
 
+def _default_activity() -> Dict[str, Any]:
+    return {
+        "status": "unverified",
+        "platforms": (),
+        "hook_install": "none",
+        "events": {},
+        "session_id_field": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "",
+    }
+
+
+def _default_delivery() -> Dict[str, Any]:
+    return {
+        "status": "unverified",
+        "platforms": (),
+        "paste_mode": "bracketed",
+        "submit_delay_ms": 300,
+        "max_inject_bytes": 2048,
+        "confirm_event": "",
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "",
+    }
+
+
+def _default_role_launch() -> Dict[str, Any]:
+    return {
+        "status": "unverified",
+        "platforms": (),
+        "system_prompt_file_argv": (),
+        "readonly_argv": (),
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "",
+    }
+
+
+def _default_session() -> Dict[str, Any]:
+    return {
+        "status": "unverified",
+        "platforms": (),
+        "assign_argv": (),
+        "resume_by_id_argv": (),
+        "verified_with_cli_version": "",
+        "verified_on": "",
+        "note": "",
+    }
+
+
 @dataclass(frozen=True)
 class CliSpec:
     id: str
@@ -275,6 +328,25 @@ class CliSpec:
     verified: bool = True
     shell_env: Optional[str] = None
     osc7501: Mapping[str, str] = field(default_factory=_default_osc7501)
+    activity: Mapping[str, Any] = field(default_factory=_default_activity)
+    delivery: Mapping[str, Any] = field(default_factory=_default_delivery)
+    role_launch: Mapping[str, Any] = field(default_factory=_default_role_launch)
+    session: Mapping[str, Any] = field(default_factory=_default_session)
+
+    def capability_verified(self, block: str, platform: str) -> bool:
+        """True si la capacidad `block` esta verificada en el catalogo del repo para `platform`."""
+        if self.source != "repo":
+            return False
+        blocks: Dict[str, Mapping[str, Any]] = {
+            "activity": self.activity,
+            "delivery": self.delivery,
+            "role_launch": self.role_launch,
+            "session": self.session,
+        }
+        data = blocks.get(block)
+        if data is None:
+            return False
+        return data.get("status") == "verified" and platform in (data.get("platforms") or ())
 
     def mcp_verified(self, frozen: Optional[bool] = None) -> bool:
         """True si la integracion MCP de este CLI esta verificada para el modo de ejecucion pedido.
@@ -328,6 +400,7 @@ class CliCatalog:
 _ENTRY_KEYS = (
     "id", "display_name", "icon", "kind", "binary", "binary_aliases", "candidate_paths",
     "launch_flags", "mcp", "resume", "install", "shell_env", "osc7501",
+    "activity", "delivery", "role_launch", "session",
 )
 _INSTALL_KEYS = ("method", "command", "verified", "source_url", "note")
 _MCP_KEYS = (
@@ -335,9 +408,29 @@ _MCP_KEYS = (
     "verified_dev", "verified_frozen", "verified_with_cli_version", "verified_on",
 )
 _OSC7501_KEYS = ("status", "probe_reply_payload", "verified_with_cli_version", "verified_on", "note")
+_ACTIVITY_KEYS = (
+    "status", "platforms", "hook_install", "events", "session_id_field",
+    "verified_with_cli_version", "verified_on", "note",
+)
+_DELIVERY_KEYS = (
+    "status", "platforms", "paste_mode", "submit_delay_ms", "max_inject_bytes", "confirm_event",
+    "verified_with_cli_version", "verified_on", "note",
+)
+_ROLE_LAUNCH_KEYS = (
+    "status", "platforms", "system_prompt_file_argv", "readonly_argv",
+    "verified_with_cli_version", "verified_on", "note",
+)
+_SESSION_KEYS = (
+    "status", "platforms", "assign_argv", "resume_by_id_argv",
+    "verified_with_cli_version", "verified_on", "note",
+)
 _OSC7501_PROBE_PAYLOAD_RE = re.compile(r"\?[0-9A-Za-z:;_=-]{0,31}")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _CLI_VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,31}")
+_EVENT_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+_HOOK_INSTALL_MODES = frozenset({"none", "claude_settings", "agy_settings", "codex_notify", "opencode_plugin"})
+_PASTE_MODES = frozenset({"bracketed", "single_line"})
+_NORMALIZED_EVENTS_SET = frozenset(NORMALIZED_EVENTS)
 _RESUME_KEYS = ("argv", "verified", "note")
 
 
@@ -345,6 +438,213 @@ def _argv_list(value: Any, field_name: str, *, max_items: int = 16) -> Tuple[str
     if not isinstance(value, list) or len(value) > max_items:
         raise CatalogValidationError(f"{field_name}: se esperaba una lista corta.")
     return tuple(_text(item, f"{field_name}[]", max_len=200) for item in value)
+
+
+def _validate_argv_placeholders(argv: Tuple[str, ...], *, allowed: Sequence[str], where: str) -> Tuple[str, ...]:
+    allowed_set = set(allowed)
+    for item in argv:
+        for marker in _PLACEHOLDER_RE.findall(item):
+            if marker not in allowed_set:
+                raise CatalogValidationError(f"{where}: marcador no permitido {marker!r}.")
+    return argv
+
+
+def _parse_capability_meta(
+    raw_block: Any,
+    *,
+    where: str,
+    allowed_keys: Sequence[str],
+    source: str,
+    kind: str,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    block = {} if raw_block is None else raw_block
+    if not isinstance(block, dict):
+        raise CatalogValidationError(f"{where}: se esperaba un objeto.")
+    _only_keys(block, allowed_keys, where)
+
+    status = _text(block.get("status", "unverified"), f"{where}.status", max_len=16)
+    if status not in ("verified", "unverified"):
+        raise CatalogValidationError(f"{where}.status: debe ser 'verified' o 'unverified'.")
+
+    plats_raw = block.get("platforms", [])
+    if not isinstance(plats_raw, list) or len(plats_raw) > len(SUPPORTED_PLATFORMS):
+        raise CatalogValidationError(f"{where}.platforms: lista invalida.")
+    plats: List[str] = []
+    for plat in plats_raw:
+        if not isinstance(plat, str) or plat not in SUPPORTED_PLATFORMS:
+            raise CatalogValidationError(f"{where}.platforms: plataforma invalida {plat!r}.")
+        if plat not in plats:
+            plats.append(plat)
+    platforms = tuple(plats)
+
+    cli_version = _text(
+        block.get("verified_with_cli_version", ""),
+        f"{where}.verified_with_cli_version",
+        max_len=32,
+        allow_empty=True,
+    )
+    if cli_version and _CLI_VERSION_RE.fullmatch(cli_version) is None:
+        raise CatalogValidationError(f"{where}.verified_with_cli_version invalido.")
+
+    verified_on = _text(
+        block.get("verified_on", ""),
+        f"{where}.verified_on",
+        max_len=10,
+        allow_empty=True,
+    )
+    if verified_on and _DATE_RE.fullmatch(verified_on) is None:
+        raise CatalogValidationError(f"{where}.verified_on: se esperaba AAAA-MM-DD.")
+
+    note = _text(block.get("note", ""), f"{where}.note", max_len=300, allow_empty=True)
+
+    if source == "user" or kind == "shell":
+        status = "unverified"
+        platforms = ()
+
+    if status == "verified":
+        if not platforms:
+            raise CatalogValidationError(f"{where}: status='verified' exige platforms no vacio.")
+        if not cli_version:
+            raise CatalogValidationError(f"{where}.verified_with_cli_version invalido.")
+        if not verified_on:
+            raise CatalogValidationError(f"{where}.verified_on: se esperaba AAAA-MM-DD.")
+
+    meta: Dict[str, Any] = {
+        "status": status,
+        "platforms": platforms,
+        "verified_with_cli_version": cli_version,
+        "verified_on": verified_on,
+        "note": note,
+    }
+    return block, meta
+
+
+def _parse_activity_block(raw_block: Any, *, where: str, source: str, kind: str) -> Dict[str, Any]:
+    block, meta = _parse_capability_meta(
+        raw_block, where=f"{where}.activity", allowed_keys=_ACTIVITY_KEYS, source=source, kind=kind
+    )
+    hook_install = _text(block.get("hook_install", "none"), f"{where}.activity.hook_install", max_len=32)
+    if hook_install not in _HOOK_INSTALL_MODES:
+        raise CatalogValidationError(f"{where}.activity.hook_install invalido: {hook_install!r}.")
+
+    events_raw = block.get("events", {})
+    if not isinstance(events_raw, dict) or len(events_raw) > 64:
+        raise CatalogValidationError(f"{where}.activity.events: se esperaba un objeto.")
+    events: Dict[str, str] = {}
+    for raw_key, norm_val in events_raw.items():
+        if not isinstance(raw_key, str) or _EVENT_KEY_RE.fullmatch(raw_key) is None:
+            raise CatalogValidationError(f"{where}.activity.events: clave invalida {raw_key!r}.")
+        if not isinstance(norm_val, str) or norm_val not in _NORMALIZED_EVENTS_SET:
+            raise CatalogValidationError(f"{where}.activity.events: evento no normalizado {norm_val!r}.")
+        events[raw_key] = norm_val
+
+    session_id_field = _text(
+        block.get("session_id_field", ""),
+        f"{where}.activity.session_id_field",
+        max_len=64,
+        allow_empty=True,
+    )
+    if session_id_field and _EVENT_KEY_RE.fullmatch(session_id_field) is None:
+        raise CatalogValidationError(f"{where}.activity.session_id_field invalido.")
+
+    return {
+        "status": meta["status"],
+        "platforms": meta["platforms"],
+        "hook_install": hook_install,
+        "events": events,
+        "session_id_field": session_id_field,
+        "verified_with_cli_version": meta["verified_with_cli_version"],
+        "verified_on": meta["verified_on"],
+        "note": meta["note"],
+    }
+
+
+def _parse_delivery_block(raw_block: Any, *, where: str, source: str, kind: str) -> Dict[str, Any]:
+    block, meta = _parse_capability_meta(
+        raw_block, where=f"{where}.delivery", allowed_keys=_DELIVERY_KEYS, source=source, kind=kind
+    )
+    paste_mode = _text(block.get("paste_mode", "bracketed"), f"{where}.delivery.paste_mode", max_len=16)
+    if paste_mode not in _PASTE_MODES:
+        raise CatalogValidationError(f"{where}.delivery.paste_mode invalido: {paste_mode!r}.")
+
+    submit_delay_ms = block.get("submit_delay_ms", 300)
+    if isinstance(submit_delay_ms, bool) or not isinstance(submit_delay_ms, int) or not (50 <= submit_delay_ms <= 2000):
+        raise CatalogValidationError(f"{where}.delivery.submit_delay_ms debe estar en [50, 2000].")
+
+    max_inject_bytes = block.get("max_inject_bytes", 2048)
+    if isinstance(max_inject_bytes, bool) or not isinstance(max_inject_bytes, int) or not (256 <= max_inject_bytes <= 8192):
+        raise CatalogValidationError(f"{where}.delivery.max_inject_bytes debe estar en [256, 8192].")
+
+    confirm_event = _text(
+        block.get("confirm_event", ""),
+        f"{where}.delivery.confirm_event",
+        max_len=64,
+        allow_empty=True,
+    )
+    if confirm_event and confirm_event not in _NORMALIZED_EVENTS_SET:
+        raise CatalogValidationError(f"{where}.delivery.confirm_event invalido: {confirm_event!r}.")
+
+    return {
+        "status": meta["status"],
+        "platforms": meta["platforms"],
+        "paste_mode": paste_mode,
+        "submit_delay_ms": submit_delay_ms,
+        "max_inject_bytes": max_inject_bytes,
+        "confirm_event": confirm_event,
+        "verified_with_cli_version": meta["verified_with_cli_version"],
+        "verified_on": meta["verified_on"],
+        "note": meta["note"],
+    }
+
+
+def _parse_role_launch_block(raw_block: Any, *, where: str, source: str, kind: str) -> Dict[str, Any]:
+    block, meta = _parse_capability_meta(
+        raw_block, where=f"{where}.role_launch", allowed_keys=_ROLE_LAUNCH_KEYS, source=source, kind=kind
+    )
+    sys_argv = _validate_argv_placeholders(
+        _argv_list(block.get("system_prompt_file_argv", []), f"{where}.role_launch.system_prompt_file_argv"),
+        allowed=("{role_file}",),
+        where=f"{where}.role_launch.system_prompt_file_argv",
+    )
+    ro_argv = _validate_argv_placeholders(
+        _argv_list(block.get("readonly_argv", []), f"{where}.role_launch.readonly_argv"),
+        allowed=(),
+        where=f"{where}.role_launch.readonly_argv",
+    )
+    return {
+        "status": meta["status"],
+        "platforms": meta["platforms"],
+        "system_prompt_file_argv": sys_argv,
+        "readonly_argv": ro_argv,
+        "verified_with_cli_version": meta["verified_with_cli_version"],
+        "verified_on": meta["verified_on"],
+        "note": meta["note"],
+    }
+
+
+def _parse_session_block(raw_block: Any, *, where: str, source: str, kind: str) -> Dict[str, Any]:
+    block, meta = _parse_capability_meta(
+        raw_block, where=f"{where}.session", allowed_keys=_SESSION_KEYS, source=source, kind=kind
+    )
+    assign_argv = _validate_argv_placeholders(
+        _argv_list(block.get("assign_argv", []), f"{where}.session.assign_argv"),
+        allowed=("{cli_session_id}",),
+        where=f"{where}.session.assign_argv",
+    )
+    resume_by_id_argv = _validate_argv_placeholders(
+        _argv_list(block.get("resume_by_id_argv", []), f"{where}.session.resume_by_id_argv"),
+        allowed=("{cli_session_id}",),
+        where=f"{where}.session.resume_by_id_argv",
+    )
+    return {
+        "status": meta["status"],
+        "platforms": meta["platforms"],
+        "assign_argv": assign_argv,
+        "resume_by_id_argv": resume_by_id_argv,
+        "verified_with_cli_version": meta["verified_with_cli_version"],
+        "verified_on": meta["verified_on"],
+        "note": meta["note"],
+    }
 
 
 def _parse_entry(raw: Any, *, source: str) -> CliSpec:
@@ -554,6 +854,11 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
         "note": osc_note,
     }
 
+    activity = _parse_activity_block(raw.get("activity"), where=where, source=source, kind=kind)
+    delivery = _parse_delivery_block(raw.get("delivery"), where=where, source=source, kind=kind)
+    role_launch = _parse_role_launch_block(raw.get("role_launch"), where=where, source=source, kind=kind)
+    session = _parse_session_block(raw.get("session"), where=where, source=source, kind=kind)
+
     return CliSpec(
         id=cli_id,
         display_name=_text(raw.get("display_name"), f"{where}.display_name", max_len=60),
@@ -570,6 +875,10 @@ def _parse_entry(raw: Any, *, source: str) -> CliSpec:
         verified=(source == "repo"),
         shell_env=shell_env,
         osc7501=osc7501,
+        activity=activity,
+        delivery=delivery,
+        role_launch=role_launch,
+        session=session,
     )
 
 
