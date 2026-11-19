@@ -281,7 +281,7 @@ class OperatorChannelService:
             f"Programa: {info.get('name') or '?'}\nEjecutable: {info.get('exe') or '?'}\n"
             f"PID: {info.get('pid')}   Usuario: {info.get('username') or '?'}\n"
             f"Carpeta de trabajo: {info.get('cwd') or '?'}\nLanzado por: {chain}\nConexion: {transport}{declared}\n\n"
-            f"Proyectos: {names}\nAutonomia: {AUTONOMY_LEVEL} (solo mensajes en la bandeja; nunca escribe en las terminales)\n"
+            f"Proyectos: {names}\nAutonomia: {AUTONOMY_LEVEL} (solo mensajes: llegan a la bandeja y, con entrega directa activa en el destino, tambien a su terminal)\n"
             f"Caduca: al cerrar ese programa, si la revocas o tras {hours} h sin uso.\n"
             "Los destinos con permisos amplios o shells te pediran confirmacion mensaje a mensaje.\n\n"
             "Si no reconoces este programa, rechazalo."

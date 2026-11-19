@@ -1781,7 +1781,7 @@ class MCPToolsHandler:
         """ALIAS OBSOLETO de `send_message` (D20, una version): mismo servicio y misma bandeja persistente.
 
         Mantiene el contrato de F0/Ola 2 (codigos, `message_uuid`, `queued`) y añade `deprecated: true`. El texto va
-        limitado a 8 KiB, nunca se escribe en una terminal y no sale a pares P2P. `session_id` ya no interviene en
+        limitado a 8 KiB, solo se escribe en una terminal si esta tiene la entrega directa activa, y no sale a pares P2P. `session_id` ya no interviene en
         ningun freno: el antibucle es la cadena causal sellada por el Hub (EGM-93).
         """
         rec, error_response = self._require_hub_pane(

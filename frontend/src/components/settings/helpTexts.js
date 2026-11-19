@@ -12,7 +12,7 @@ export const HELP_SECTIONS = [
   {
     id: 'ayuda-auto-relay',
     title: 'Auto-Relay',
-    body: 'Se activa por terminal y se recuerda en este proyecto. Deja un aviso en la bandeja del agente cuando le asignan una tarjeta del tablero. No escribe en su terminal: el agente lo recoge desde MCP.'
+    body: 'Se activa por terminal y se recuerda en este proyecto. Deja un aviso en la bandeja del agente cuando le asignan una tarjeta del tablero. El Auto-Relay no escribe en su terminal: el agente lo recoge desde MCP.'
   },
   {
     id: 'ayuda-modo-trabajador',
