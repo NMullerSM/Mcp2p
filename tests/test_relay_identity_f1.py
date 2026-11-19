@@ -253,7 +253,7 @@ def hub(tmp_path: Path, _no_system_pty_writes):
 
 
 def test_send_and_inbox_roundtrip_with_hub_computed_provenance(hub: Hub) -> None:
-    sent = hub.call("send_message", "tok-1", target_pane_id="pane_2", text=HOSTILE, kind="task.request", card_id="K-1")
+    sent = hub.call("send_message", "tok-1", target_pane_id="pane_2", text=HOSTILE, kind="question", card_id="K-1")
     assert sent["success"] is True and sent["delivered"] is True and sent["state"] == "queued"
     assert sent["chain"]["hop"] == 0 and sent["trust"] == "pane_authenticated"
 
@@ -261,7 +261,7 @@ def test_send_and_inbox_roundtrip_with_hub_computed_provenance(hub: Hub) -> None
     (item,) = got["messages"]
     env = item["mcp2p_envelope"]
     assert item["payload_untrusted_text"] == HOSTILE  # integro: ni filtrado ni prefijado
-    assert env["verified"] is True and env["msg_id"] == sent["msg_id"] and env["kind"] == "task.request"
+    assert env["verified"] is True and env["msg_id"] == sent["msg_id"] and env["kind"] == "question"
     assert env["from"]["node_uuid"] == hub.node("pane_1") and env["from"]["pane_id"] == "pane_1"
     assert env["from"]["trust"] == env["trust"] == "pane_authenticated"
     assert env["to"]["node_uuid"] == hub.node("pane_2") and env["project_uuid"] == hub.proj
@@ -337,9 +337,13 @@ def test_replayed_envelope_is_rejected_and_audited(hub: Hub) -> None:
 
 # Campos del sobre que calcula el Hub: ninguna herramienta MCP (ni antigua ni nueva) los acepta.
 FORBIDDEN_PARAMS = {"from", "from_", "from_principal", "trust", "trust_level", "chain", "chain_id", "hop",
-                    "origin_trust", "fromPrincipal", "trustLevel", "chainId", "originTrust"}
+                    "origin_trust", "fromPrincipal", "trustLevel", "chainId", "originTrust",
+                    "role", "rol", "mandate", "mandato"}
 # Las herramientas NUEVAS de la bandeja tampoco aceptan ninguna identidad declarada (ni siquiera validada).
-NEW_RELAY_TOOLS = ("send_message", "inbox_next", "inbox_wait", "inbox_ack", "inbox_reply", "relay_pause_self")
+NEW_RELAY_TOOLS = (
+    "send_message", "inbox_next", "inbox_wait", "inbox_ack", "inbox_reply", "relay_pause_self",
+    "whoami", "team_roster",
+)
 DECLARED_IDENTITY = {"sender", "sender_node_uuid", "senderNodeUuid", "node_uuid", "nodeUuid"}
 
 
@@ -357,7 +361,7 @@ def test_ast_no_mcp_tool_accepts_from_trust_chain_or_hop() -> None:
             assert not (names & FORBIDDEN_PARAMS) and not any(n.startswith("**") for n in names), (node.name, names)
             if node.name in NEW_RELAY_TOOLS:
                 assert not names & DECLARED_IDENTITY, (node.name, names)
-    assert set(RELAY_TOOLS) <= set(tools) and len(tools) == 36
+    assert set(RELAY_TOOLS) <= set(tools) and len(tools) == 38
     import inspect
 
     for name in RELAY_TOOLS:

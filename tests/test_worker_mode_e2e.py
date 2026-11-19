@@ -70,7 +70,7 @@ def test_two_worker_agents_converse_through_the_inbox_without_touching_any_termi
     assert b_wait.is_alive(), "inbox_wait debe seguir abierta mientras no haya mensajes"
 
     sent = lab.root(1).session_call(
-        "send_message", {"target_pane_id": "pane_2", "text": "Suma 2 + 2 y respondeme.", "kind": "task.request"}
+        "send_message", {"target_pane_id": "pane_2", "text": "Suma 2 + 2 y respondeme.", "kind": "question"}
     )
     assert sent["result"]["success"] is True and sent["result"]["state"] == "queued"
     got_b = _join(b_wait)
@@ -82,7 +82,7 @@ def test_two_worker_agents_converse_through_the_inbox_without_touching_any_termi
     (message,) = result_b["messages"]
     env = message["mcp2p_envelope"]
     assert env["verified"] is True and env["from"]["node_uuid"] == lab.node(1)
-    assert env["kind"] == "task.request" and env["chain"]["hop"] == 0
+    assert env["kind"] == "question" and env["chain"]["hop"] == 0
     assert message["payload_untrusted_text"] == "Suma 2 + 2 y respondeme."
 
     # A se queda esperando la respuesta y B responde con inbox_reply.
