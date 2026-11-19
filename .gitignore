@@ -50,7 +50,7 @@ workspace/
 .orphan_memory/
 
 # Node & Frontend
-frontend/node_modules/
+frontend/node_modules
 frontend/dist/
 
 # Artefactos de compilación de escritorio (PyInstaller / Inno Setup / .deb)
