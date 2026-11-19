@@ -79,8 +79,7 @@ export function usePaneActions({
   closeSlider,
   refreshCatalog,
   refreshMatrixStatus,
-  cwdInput,
-  roleInput
+  cwdInput
 }) {
   const [launchingCliId, setLaunchingCliId] = useState(null);
   const [unregisterAgyBusy, setUnregisterAgyBusy] = useState(false);
@@ -137,7 +136,7 @@ export function usePaneActions({
         api.pty_spawn_pane(
           paneId,
           cliId,
-          roleInput,
+          'peer',
           command,
           DEFAULT_PTY_SIZE.cols,
           DEFAULT_PTY_SIZE.rows,
@@ -164,7 +163,7 @@ export function usePaneActions({
       markPaneOpened(openedId, {
         kind: 'cli',
         cliProfile: cliId,
-        role: roleInput,
+        role: res.pane?.role || res.session?.role || 'peer',
         cwd: res.cwd ?? cwd,
         cols: sess.cols || DEFAULT_PTY_SIZE.cols,
         rows: sess.rows || DEFAULT_PTY_SIZE.rows,
@@ -197,7 +196,6 @@ export function usePaneActions({
     catalogRef,
     panesRef,
     cwdInput,
-    roleInput,
     project?.project_uuid,
     mountedRef,
     setMatrixStatus,

@@ -12,10 +12,11 @@ export const DEFAULT_MAX_PANES = 4;
 export const MATRIX_PANE_IDS = Array.from({ length: HARD_MAX_PANES }, (_, i) => `pane_${i + 1}`);
 
 export const ROLE_OPTIONS = [
-  { value: 'implementer', label: 'Implementer' },
-  { value: 'reviewer', label: 'Reviewer' },
+  { value: 'orchestrator', label: 'Orquestador' },
+  { value: 'implementer', label: 'Implementador' },
   { value: 'auditor', label: 'Auditor' },
-  { value: 'coordinator', label: 'Coordinator' }
+  { value: 'mediator', label: 'Mediador' },
+  { value: 'peer', label: 'Par' }
 ];
 
 // Tamano con el que se lanza el PTY. Despues manda el panel: xterm lo ajusta con fit() y se

@@ -101,8 +101,8 @@ describe('SwarmTerminalMatrix: paneles = solo terminal', () => {
     expect(logo.querySelector('svg')).toBeTruthy();
     expect(within(pane).getByTestId('pane-cwd-pane_1').textContent).toBe('/home/u/mi-proyecto');
 
-    // Sin rama, PID, RSS, estado, botones ni campos de entrada dentro del panel.
-    expect(pane.querySelector('button')).toBeNull();
+    // Sin rama, PID, RSS, estado, botones ni campos de entrada dentro del panel (salvo el chip de rol en cabecera).
+    expect(pane.querySelector('button:not([data-testid^="role-chip-"])')).toBeNull();
     expect(pane.querySelector('input, select, textarea:not(.xterm-helper-textarea)')).toBeNull();
     expect(within(pane).queryByTestId('pane-status-pane_1')).toBeNull();
     expect(within(pane).queryByTestId('pane-pid-pane_1')).toBeNull();
@@ -510,20 +510,21 @@ describe('SwarmTerminalMatrix: controles en el slider', () => {
     expect(screen.getByTestId('cli-open-claude').disabled).toBe(false);
   });
 
-  it('Abrir lanza pty_spawn_pane con el perfil, el rol y la carpeta de trabajo escrita, y muestra el hub', async () => {
+  it('launcher_has_no_role_select: Abrir lanza pty_spawn_pane con el perfil, rol peer y carpeta de trabajo escrita, y muestra el hub', async () => {
     const api = makeMatrixApi();
     renderMatrix(api);
 
     fireEvent.change(await screen.findByTestId('launch-cwd-input'), { target: { value: ' /tmp/proyecto ' } });
-    fireEvent.change(screen.getByTestId('launch-role-select'), { target: { value: 'reviewer' } });
+    expect(screen.queryByTestId('launch-role-select')).toBeNull();
     await openCli('codex', 'pane_1');
 
-    // Ola 2: el panel nace ligado al proyecto visible (ultimo argumento).
+    // Ola 2: el panel nace ligado al proyecto visible (ultimo argumento) y con rol peer por defecto.
     expect(api.pty_spawn_pane).toHaveBeenCalledWith(
-      'pane_1', 'codex', 'reviewer', null, 100, 28, true, '/tmp/proyecto', false, PROJECT.project_uuid
+      'pane_1', 'codex', 'peer', null, 100, 28, true, '/tmp/proyecto', false, PROJECT.project_uuid
     );
     expect(screen.getByTestId('hub-status-badge').textContent).toContain('Hub activo: http://127.0.0.1:51234/mcp');
     expect(screen.getByTestId('pane-cwd-pane_1').textContent).toBe('/tmp/proyecto');
+    expect(screen.getByTestId('role-chip-pane_1').textContent).toContain('Par');
   });
 
   it('sin carpeta escrita envia cwd null para que el backend use la del proyecto', async () => {

@@ -20,8 +20,7 @@ import {
   describeInstallBlock,
   DEFAULT_MANUAL_COMMAND,
   DEFAULT_MCP_CONFIG,
-  HARD_MAX_PANES,
-  ROLE_OPTIONS
+  HARD_MAX_PANES
 } from './terminalModel';
 
 /**
@@ -731,8 +730,6 @@ export function TerminalSliderControls({
   onNoticeAction,
   cwdValue,
   onCwdChange,
-  roleValue,
-  onRoleChange,
   launchingCliId,
   copiedKey,
   onCopy,
@@ -890,20 +887,6 @@ export function TerminalSliderControls({
             placeholder="Vacío: carpeta del proyecto activo"
             style={fieldStyle}
           />
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
-          <span>Rol</span>
-          <select
-            data-testid="launch-role-select"
-            className="mcp-combobox"
-            value={roleValue}
-            onChange={(e) => onRoleChange(e.target.value)}
-            style={{ height: '27px', fontSize: '11px', flex: 1 }}
-          >
-            {ROLE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
         </label>
 
         {catalog.error && (
