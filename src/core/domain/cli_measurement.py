@@ -133,7 +133,7 @@ def evaluate_attempt(attempt: Attempt) -> AttemptResult:
         return AttemptResult(False, "SPAWN_FAILED")
     events = sorted(attempt.events, key=lambda e: e.t_ms)
     if not events:
-        return AttemptResult(False, "TIMEOUT" if attempt.timed_out else "NO_HOOK_EVENTS")
+        return AttemptResult(False, "NO_HOOK_EVENTS")
     normalized = [(ev, normalize_event(ev)) for ev in events]
     mapped = infer_normalized_events(events)
     session_fields = sorted({name for ev in events for name in ev.session_fields})

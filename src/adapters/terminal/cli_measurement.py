@@ -342,10 +342,13 @@ class HeadlessCliProbe:
             pump_for(max(0.0, t.submit_delay_s - t.after_paste_s))
             enter_at = int(self._clock_ms())
             self._send(conn, "\r")
-            deadline = time.monotonic() + t.turn_end_cap_s
+            sent_at = time.monotonic()
+            deadline = sent_at + t.turn_end_cap_s
             timed_out = True
             while time.monotonic() < deadline and not cancel.is_set():
                 alive = pump()
+                if not attempt_events() and time.monotonic() - sent_at > t.turn_start_grace_s:
+                    break  # un CLI que no manda ningún aviso no merece esperar el tope entero
                 evs = [e for e in attempt_events() if e.t_ms >= enter_at]
                 if any(normalize_event(e) == "turn_ended" for e in evs):
                     timed_out = False
