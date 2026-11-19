@@ -364,7 +364,7 @@ def test_pty_real_osc7501_probe_replies_without_calling_send_input(
     [
         ("custom_shell", False),
         ("claude", True),
-        ("gemini", False),
+        ("codex", False),
     ],
 )
 def test_pty_real_osc7501_probe_ignored_for_custom_shell_manual_and_unverified_cli(

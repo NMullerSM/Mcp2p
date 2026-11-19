@@ -46,7 +46,7 @@ def _hermetic_home(tmp_path_factory):
 
     `NodeCryptoManager()` resuelve `~/.mcp2p/node_identity.key` con `Path.home()`: si el dueño cifra su
     clave real (Gate 0c) o ya hay una, 18 pruebas de firma fallaban con KEY_LOCKED. Un HOME temporal
-    de sesion aisla tambien `~/.gemini`, `~/.local/bin` y demas rutas de usuario.
+    de sesion aisla tambien `~/.gemini` (configuracion global de Antigravity), `~/.local/bin` y demas rutas de usuario.
     """
     home = tmp_path_factory.mktemp("home")
     # Sin un ~/.gitconfig propio, git no puede deducir una identidad en un runner de CI y los

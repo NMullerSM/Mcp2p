@@ -73,7 +73,7 @@ def _service(tmp_path: Path, *, settings: Any = None, which: Any = None, user_ca
 
 def test_repo_catalog_loads_profiles_and_derives_cli_profiles() -> None:
     cat = load_repo_catalog()
-    assert set(cat.profiles) == {"claude", "gemini", "codex", "opencode", "antigravity", "custom_shell"}
+    assert set(cat.profiles) == {"claude", "codex", "opencode", "antigravity", "custom_shell"}
     assert set(CLI_PROFILES) == set(cat.profiles)
     assert CLI_PROFILES["claude"] == ["claude"]
     assert CLI_PROFILES["antigravity"] == ["agy"]

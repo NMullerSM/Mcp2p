@@ -204,7 +204,7 @@ def test_ring_buffer_thread_safety() -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="valida el conector POSIX y sus codigos; Windows se cubre en test_terminal_windows_degradation")
 def test_pane_id_normalization_and_validation() -> None:
-    assert set(CLI_PROFILES.keys()) == {"claude", "gemini", "codex", "opencode", "antigravity", "custom_shell"}
+    assert set(CLI_PROFILES.keys()) == {"claude", "codex", "opencode", "antigravity", "custom_shell"}
     assert CLI_PROFILES["antigravity"] == ["agy"]
 
     for raw, expected in [
