@@ -431,6 +431,49 @@ class ApplicationFactory:
     # --- v2.0.2 WP-6b: entrega directa ---
     # --- fin WP-6b ---
     # --- v2.0.2 WP-7: politica de nodos e ingestion remota ---
+    @staticmethod
+    def remote_intake_service(kernel: CoreKernel, pane_directory: Any = None) -> Any:
+        """`RemoteIntakeService` del Hub, uno por kernel (WP-7)."""
+        with kernel._lock:
+            service = getattr(kernel, "remote_intake_service", None)
+            if service is None:
+                from src.adapters.identity.peer_verifier import PeerEnvelopeVerifier
+                from src.adapters.persistence.node_policy_sqlite import SqliteNodePolicyStore
+                from src.core.services.remote_intake_service import RemoteIntakeService
+
+                relay = ApplicationFactory.message_relay_service(kernel, pane_directory=pane_directory)
+                node_store = SqliteNodePolicyStore(kernel.db)
+                verifier = PeerEnvelopeVerifier(node_store=node_store)
+
+                def _local_human_pub() -> Optional[str]:
+                    crypto = getattr(kernel, "crypto", None)
+                    if crypto is None:
+                        return None
+                    pub = getattr(crypto, "public_key_base64", None)
+                    return str(pub) if pub else None
+
+                def _local_fp() -> Optional[str]:
+                    try:
+                        return str(relay.identity.fingerprint())
+                    except Exception:
+                        return None
+
+                service = RemoteIntakeService(
+                    relay=relay,
+                    node_store=node_store,
+                    verifier=verifier,
+                    local_human_pub=_local_human_pub,
+                    local_device_fingerprint=_local_fp,
+                )
+                relay.add_release_listener(service.on_release)
+                if relay.remote_info is None:
+                    relay.remote_info = service.remote_info
+                if getattr(relay, "quarantine_expirer", None) is None:
+                    relay.quarantine_expirer = service.expire_quarantine
+                kernel.remote_intake_service = service
+            elif pane_directory is not None:
+                ApplicationFactory.message_relay_service(kernel, pane_directory=pane_directory)
+            return service
     # --- fin WP-7 ---
 
     @staticmethod

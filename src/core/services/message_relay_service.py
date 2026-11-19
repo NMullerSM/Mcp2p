@@ -100,9 +100,13 @@ class MessageRelayService:
         self.tracker = tracker or ChainTracker(max_depth=max_chain_depth, clock_ms=self._clock_ms)
         self._cond = threading.Condition()
         self._wake_listeners: List[Callable[[str], None]] = []
+        self._release_listeners: List[Callable[[Dict[str, Any]], None]] = []
         self._last_purge_ms = 0
         # Canal del operador (Ola 4): `accepts_reply(session_id, project_uuid) -> bool` y `label(session_id) -> dict`.
         self.operator_directory: Any = None
+        # Ingestión remota (WP-7): lo fija `wire_nodes` / `remote_intake_service`.
+        self.remote_info: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+        self.quarantine_expirer: Optional[Callable[[int], Any]] = None
 
     # -- composicion ---------------------------------------------------------------------------------------------
 
@@ -135,6 +139,15 @@ class MessageRelayService:
                 fn(node_uuid)
             except Exception:
                 logger.debug("Oyente de bandeja con error", exc_info=True)
+
+    def notify_recipient(self, node_uuid: str) -> None:
+        """Despierta al destinatario cuando llega un sobre nuevo (p. ej. desde RemoteIntakeService)."""
+        self._notify(node_uuid)
+
+    def add_release_listener(self, fn: Callable[[Dict[str, Any]], None]) -> None:
+        """`fn(row)` se llama cuando un mensaje aparcado se libera con `resolve_parked(release)`."""
+        if fn not in self._release_listeners:
+            self._release_listeners.append(fn)
 
     # -- utilidades ----------------------------------------------------------------------------------------------
 
@@ -420,6 +433,11 @@ class MessageRelayService:
             or original["state"] not in ("delivered", "acked")
         ):
             return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje recibido con ese msg_id.")
+        if callable(self.remote_info) and self.remote_info(original["msg_id"]) is not None:
+            return _err(
+                "REMOTE_REPLY_UNAVAILABLE",
+                "La respuesta a otros equipos llegará con el transporte en 2.0.3.",
+            )
         if str(original["from_principal"]).startswith("operator:"):
             return self._reply_to_operator(sender, original, text)
         if not str(original["from_principal"]).startswith("pane:"):
@@ -801,8 +819,16 @@ class MessageRelayService:
     # -- humano (GUI) -------------------------------------------------------------------------------------------
 
     def list_human_inbox(self, project_uuid: Optional[str]) -> List[Dict[str, Any]]:
+        if callable(self.quarantine_expirer):
+            try:
+                self.quarantine_expirer(int(self._clock_ms()))
+            except Exception:
+                logger.debug("Fallo en expiracion perezosa de cuarentena", exc_info=True)
         out = []
         for row in self.store.list_parked(project_uuid):
+            if row.get("state_reason") == "UNTRUSTED_NODE_QUEUED":
+                continue
+            remote = self.remote_info(row["msg_id"]) if callable(self.remote_info) else None
             out.append(
                 {
                     "msg_id": row["msg_id"],
@@ -818,6 +844,7 @@ class MessageRelayService:
                     "content_hash": row["content_hash"],
                     "created_at": int(row["created_at_ms"]),
                     "expires_at": int(row["expires_at_ms"]),
+                    "remote": remote,
                 }
             )
         return out
@@ -829,6 +856,11 @@ class MessageRelayService:
         if row is None:
             return _err("MESSAGE_NOT_FOUND", "No hay ningun mensaje aparcado con ese msg_id.")
         if decision == "release":
+            for fn in list(self._release_listeners):
+                try:
+                    fn(row)
+                except Exception:
+                    logger.debug("Oyente de liberacion con error", exc_info=True)
             self._notify(str(row["to_principal"]).partition(":")[2])
         return {"success": True, "msg_id": row["msg_id"], "state": row["state"], "decision": decision}
 

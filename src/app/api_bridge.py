@@ -157,6 +157,10 @@ class ApiBridge:
         # --- v2.0.2 WP-6b: entrega directa ---
         # --- fin WP-6b ---
         # --- v2.0.2 WP-7: politica de nodos ---
+        from src.app.ui_adapters.nodes_ui import NodesUIAdapter, wire_nodes
+
+        self.nodes_ui = NodesUIAdapter(self)
+        wire_nodes(self)
         # --- fin WP-7 ---
         # --- v2.0.2 WP-8: chat del humano ---
         # --- fin WP-8 ---
@@ -863,6 +867,17 @@ class ApiBridge:
     # --- v2.0.2 WP-6b: entrega directa ---
     # --- fin WP-6b ---
     # --- v2.0.2 WP-7: politica de nodos ---
+    def relay_list_nodes(self) -> Dict[str, Any]:
+        return self.nodes_ui.relay_list_nodes()
+
+    def relay_set_node_policy(self, device_fingerprint: Any, policy: Any) -> Dict[str, Any]:
+        return self.nodes_ui.relay_set_node_policy(device_fingerprint=device_fingerprint, policy=policy)
+
+    def relay_get_local_node(self) -> Dict[str, Any]:
+        return self.nodes_ui.relay_get_local_node()
+
+    def relay_set_local_node_name(self, name: Any) -> Dict[str, Any]:
+        return self.nodes_ui.relay_set_local_node_name(name=name)
     # --- fin WP-7 ---
     # --- v2.0.2 WP-8: chat del humano ---
     # --- fin WP-8 ---
