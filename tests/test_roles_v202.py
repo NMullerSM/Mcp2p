@@ -549,7 +549,7 @@ def test_whoami_and_team_roster_require_peer_process_and_hub(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def _verified_role_spec():
+def _verified_role_spec(platforms: tuple[str, ...] = ("linux",)):
     return _parse_entry(
         {
             "id": "demo_cli",
@@ -557,14 +557,14 @@ def _verified_role_spec():
             "icon": "demo",
             "kind": "agent_cli",
             "binary": "demo",
-            "candidate_paths": {"linux": ["/usr/bin/demo"]},
+            "candidate_paths": {"linux": ["/usr/bin/demo"], "win32": [r"C:\bin\demo.cmd"]},
             "launch_flags": [],
             "mcp": {"method": "none", "format": "none", "verified": False},
             "resume": {"argv": [], "verified": False},
             "install": {},
             "role_launch": {
                 "status": "verified",
-                "platforms": ["linux"],
+                "platforms": list(platforms),
                 "system_prompt_file_argv": ["--append-system-prompt-file", "{role_file}"],
                 "readonly_argv": ["--permission-mode", "plan"],
                 "verified_with_cli_version": "1.0.0",
@@ -623,35 +623,63 @@ def test_role_launch_adds_argv_only_when_verified_for_platform(tmp_path: Path, m
         assert "Mandato del humano (texto literal):\n<<<\nSolo toca tests\n>>>" in body
         assert add_ver.meta == {"role": "implementer", "readonly": "none"}
 
-        # Con PosixPtyHostConnector real (Popen mockeado) escribe role.md con modo 0o600
-        sh_bin = tmp_path / "demo"
-        sh_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        sh_bin.chmod(0o755)
-        svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(sh_bin), platform="linux")
-        monkeypatch.setattr(svc, "get_spec", lambda cid: verified_spec if cid == "custom_shell" else None)
-        store = PaneMcpConfigStore(base_dir=tmp_path / "mcp_store")
-        host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
-        host.launch_services = services
-        captured: List[List[str]] = []
-        monkeypatch.setattr(
-            pty_host.pty, "openpty", lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY))
-        )
-        monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
-        monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
-        monkeypatch.setattr(
-            pty_host.subprocess,
-            "Popen",
-            lambda cmd, **kw: (captured.append(list(cmd)), SimpleNamespace(pid=9999, poll=lambda: None))[1],
-        )
-        monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
-        res = host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False, launch_request={"project_uuid": proj})
-        assert res["success"] is True
-        role_files = list((tmp_path / "mcp_store").rglob("role.md"))
-        assert len(role_files) == 1
-        if sys.platform != "win32":
+        # Con PosixPtyHostConnector real (Popen mockeado, solo POSIX donde existe `pty`) escribe role.md con modo 0o600
+        if os.name == "posix":
+            sh_bin = tmp_path / "demo"
+            sh_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            sh_bin.chmod(0o755)
+            svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(sh_bin), platform="linux")
+            monkeypatch.setattr(svc, "get_spec", lambda cid: verified_spec if cid == "custom_shell" else None)
+            store = PaneMcpConfigStore(base_dir=tmp_path / "mcp_store")
+            host = PosixPtyHostConnector(catalog_service=svc, mcp_config_store=store)
+            host.launch_services = services
+            captured: List[List[str]] = []
+            assert pty_host.pty is not None
+            monkeypatch.setattr(
+                pty_host.pty, "openpty", lambda: (os.open(os.devnull, os.O_RDONLY), os.open(os.devnull, os.O_RDONLY))
+            )
+            monkeypatch.setattr(host, "_set_winsize", lambda fd, c, r: None)
+            monkeypatch.setattr(host, "_set_nonblocking", lambda fd: None)
+            monkeypatch.setattr(
+                pty_host.subprocess,
+                "Popen",
+                lambda cmd, **kw: (captured.append(list(cmd)), SimpleNamespace(pid=9999, poll=lambda: None))[1],
+            )
+            monkeypatch.setattr(host, "_reader_loop", lambda sess: None)
+            res = host.spawn_session(1, cli_profile="custom_shell", use_trampoline=False, launch_request={"project_uuid": proj})
+            assert res["success"] is True
+            role_files = list((tmp_path / "mcp_store").rglob("role.md"))
+            assert len(role_files) == 1
             assert stat.S_IMODE(role_files[0].stat().st_mode) == 0o600
-        assert "--append-system-prompt-file" in captured[0]
-        host.close()
+            assert "--append-system-prompt-file" in captured[0]
+            host.close()
+
+        # Variante portable (Linux y Windows): WinPtyHostConnector escribe role.md y pasa --append-system-prompt-file
+        from tests.test_v202_scaffolding import _build_fake_winpty_host
+
+        cmd_bin = tmp_path / "demo.cmd"
+        cmd_bin.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        cmd_bin.chmod(0o755)
+        win_spec = _verified_role_spec(platforms=("linux", "win32"))
+        win_svc = CliCatalogService(include_user_catalog=False, which=lambda n: str(cmd_bin), platform="win32")
+        monkeypatch.setattr(win_svc, "get_spec", lambda cid: win_spec if cid == "custom_shell" else None)
+        win_store = PaneMcpConfigStore(base_dir=tmp_path / "win_mcp_store")
+        win_captured: List[List[str]] = []
+        win_host = _build_fake_winpty_host(
+            tmp_path,
+            monkeypatch,
+            store=win_store,
+            svc=win_svc,
+            which_fn=lambda n: str(cmd_bin),
+            captured_cmds=win_captured,
+        )
+        win_host.launch_services = services
+        res_win = win_host.spawn_session(1, cli_profile="custom_shell", launch_request={"project_uuid": proj})
+        assert res_win["success"] is True
+        win_role_files = list((tmp_path / "win_mcp_store").rglob("role.md"))
+        assert len(win_role_files) == 1
+        assert "--append-system-prompt-file" in win_captured[0]
+        win_host.close()
     finally:
         db.close()
 
