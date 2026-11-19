@@ -4,6 +4,7 @@ import { render, screen, cleanup } from '@testing-library/react';
 import React from 'react';
 import { TerminalsRelaySettings } from './TerminalsRelaySettings';
 import { HINT_TEXTS } from './helpTexts';
+import { SettingsDrawer } from '../SettingsDrawer';
 
 const EXPECTED_ANCHORS = [
   'ayuda-auto-relay',
@@ -74,6 +75,52 @@ describe('TerminalsRelaySettings', () => {
       const heading = section.querySelector('h5');
       expect(heading.getAttribute('tabindex')).toBe('-1');
       expect(document.activeElement).toBe(heading);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
+
+  it('settings_drawer_opens_terminals_relay_tab_and_scrolls_to_anchor', async () => {
+    const scrollIntoViewMock = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    const api = {
+      get_system_info: vi.fn(async () => ({ success: true, active_node: 'node_owner' })),
+      get_github_status: vi.fn(async () => ({ success: true, github: { authenticated: false } })),
+      get_signaling_server_url: vi.fn(async () => '')
+    };
+
+    try {
+      const { container, rerender } = render(
+        <SettingsDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          api={api}
+          activeProject={{ project_uuid: 'proj_1', name: 'Demo' }}
+          projectsList={[{ project_uuid: 'proj_1', name: 'Demo' }]}
+          initialTab="terminals_relay"
+          initialAnchor="ayuda-modo-trabajador"
+        />
+      );
+
+      expect(await screen.findByTestId('terminals-relay-settings')).toBeTruthy();
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' });
+      const heading = container.querySelector('#ayuda-modo-trabajador h5');
+      expect(document.activeElement).toBe(heading);
+
+      rerender(
+        <SettingsDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          api={api}
+          activeProject={{ project_uuid: 'proj_1', name: 'Demo' }}
+          projectsList={[{ project_uuid: 'proj_1', name: 'Demo' }]}
+          initialTab="manual"
+          initialAnchor={null}
+        />
+      );
+      expect(await screen.findByText(/agentes de Claude, Codex, OpenCode, Antigravity o Cursor/)).toBeTruthy();
     } finally {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }

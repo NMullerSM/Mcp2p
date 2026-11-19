@@ -30,7 +30,8 @@ import {
   ArrowUp,
   ArrowDown,
   SlidersHorizontal,
-  ArrowRight
+  ArrowRight,
+  Network
 } from 'lucide-react';
 import {
   DEFAULT_WORKSPACE_TABS,
@@ -39,6 +40,7 @@ import {
   NAVBAR_CONFIG_EVENT
 } from './AppHeader';
 import { SigningKeySection } from './SigningKeySection';
+import { TerminalsRelaySettings } from './settings/TerminalsRelaySettings';
 
 export function SettingsDrawer({
   isOpen,
@@ -47,6 +49,7 @@ export function SettingsDrawer({
   activeProject,
   projectsList,
   initialTab = 'github',
+  initialAnchor = null,
   onGithubStatusChange,
   onNavigateWorkspaceTab
 }) {
@@ -56,7 +59,7 @@ export function SettingsDrawer({
   // Resetear el scroll del contenedor de contenido cada vez que cambia la pestaña activa
   // (Ajuste UI: evita que una pestaña nueva herede la posición de scroll de la anterior)
   useEffect(() => {
-    if (contentBodyRef.current) {
+    if (contentBodyRef.current && !(isOpen && initialAnchor && activeTab === initialTab)) {
       contentBodyRef.current.scrollTop = 0;
     }
   }, [activeTab]);
@@ -700,6 +703,7 @@ export function SettingsDrawer({
             { id: 'okf_viewer', label: 'Visor OKF', icon: FolderTree },
             { id: 'okf_lab', label: 'Lab OKF & Puertos', icon: FlaskConical },
             { id: 'mcp', label: 'Terminales & MCP', icon: Terminal },
+            { id: 'terminals_relay', label: 'Terminales y relevo', icon: Network },
             { id: 'manual', label: 'Atajos', icon: BookOpen }
           ].map(tab => {
             const Icon = tab.icon;
@@ -1331,6 +1335,11 @@ export function SettingsDrawer({
             </div>
           )}
 
+          {/* TAB 2b: Terminales y relevo (ayuda y preferencias 2.0.2) */}
+          {activeTab === 'terminals_relay' && (
+            <TerminalsRelaySettings api={api} initialAnchor={initialAnchor} />
+          )}
+
           {/* TAB 3: GitHub (Dual Auth: PAT y gh CLI + Git Identity) */}
           {activeTab === 'github' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1883,7 +1892,7 @@ export function SettingsDrawer({
                     5. Colaboradores P2P & Pasarela MCP
                   </div>
                   <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                    Permite enlazar nodos de otros desarrolladores sin intermediarios mediante links criptográficos P2P. Además, expone las 10 herramientas del servidor local <code>mcp2p-server</code> sobre transporte stdio/SSE para que agentes de Gemini, Claude o Cursor interactúen en tiempo real con el proyecto.
+                    Permite enlazar nodos de otros desarrolladores sin intermediarios mediante links criptográficos P2P. Además, expone las 10 herramientas del servidor local <code>mcp2p-server</code> sobre transporte stdio/SSE para que agentes de Claude, Codex, OpenCode, Antigravity o Cursor interactúen en tiempo real con el proyecto.
                   </div>
                 </div>
 
