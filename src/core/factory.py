@@ -13,6 +13,7 @@ Construye instancias independientes de `CoreKernel` para cada perfil de ejecuci√
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -429,6 +430,43 @@ class ApplicationFactory:
             return service
     # --- fin WP-6a ---
     # --- v2.0.2 WP-6b: entrega directa ---
+    @staticmethod
+    def direct_delivery_service(
+        kernel: CoreKernel,
+        *,
+        pane_directory: Any,
+        pane_input: Any,
+        privilege_of: Any,
+        capabilities: Any,
+        settings_reader: Any,
+        remote_policy: Any,
+    ) -> Any:
+        """`DirectDeliveryService` del Hub, uno por kernel (toma del kernel el relevo, su almac√©n y la actividad)."""
+        with kernel._lock:
+            service = getattr(kernel, "direct_delivery_service", None)
+        if service is not None:
+            return service
+        relay = ApplicationFactory.message_relay_service(kernel, pane_directory=pane_directory)
+        activity = ApplicationFactory.agent_activity_registry(kernel)
+        with kernel._lock:
+            service = getattr(kernel, "direct_delivery_service", None)
+            if service is None:
+                from src.core.services.direct_delivery_service import DirectDeliveryService
+
+                service = DirectDeliveryService(
+                    relay=relay,
+                    store=relay.store,
+                    panes=pane_directory,
+                    pane_input=pane_input,
+                    activity=activity,
+                    capabilities=capabilities,
+                    privilege_of=privilege_of,
+                    remote_policy=remote_policy,
+                    settings_reader=settings_reader,
+                    clock_ms=lambda: int(time.time() * 1000),
+                )
+                kernel.direct_delivery_service = service
+            return service
     # --- fin WP-6b ---
     # --- v2.0.2 WP-7: politica de nodos e ingestion remota ---
     @staticmethod
