@@ -22,7 +22,21 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from src.core.domain.envelope import EnvelopeError, build_header, content_hash, header_of
 from src.core.domain.identity import Principal, PrincipalKind, TrustLevel, cap_agent_trust
-from src.core.domain.relay_chain import CHAIN_DEPTH_EXCEEDED, DEFAULT_MAX_CHAIN_DEPTH, ChainTracker
+from src.core.domain.relay_chain import (
+    CHAIN_BUDGET_EXHAUSTED,
+    CHAIN_BUDGET_EXPIRED,
+    CHAIN_DEPTH_EXCEEDED,
+    DEFAULT_MAX_CHAIN_DEPTH,
+    ChainTracker,
+)
+from src.core.domain.roles import (
+    AGENT_KINDS_V202,
+    ROLE_CHAIN_BUDGET,
+    ROLE_LABELS_ES,
+    PaneRole,
+    check_send,
+    normalize_role,
+)
 
 logger = logging.getLogger("mcp2p.core.services.message_relay")
 
@@ -33,7 +47,7 @@ CONTENT_RETENTION_DAYS = 30  # D19: el texto se borra a los 30 dias; los hashes 
 CONTENT_RETENTION_MS = CONTENT_RETENTION_DAYS * 24 * 60 * 60 * 1000
 MAX_WAIT_MS = 300_000
 TOOL_TIMEOUT_MS = MAX_WAIT_MS + 30_000  # limite por llamada MCP que se escribe en la configuracion de cada CLI
-AGENT_KINDS = frozenset({"note", "task.request", "task.reply"})
+AGENT_KINDS = AGENT_KINDS_V202
 OPERATOR_KINDS = frozenset({"note", "task.request"})  # el operador abre cadenas; no responde a nadie
 GLOBAL_PAUSE_SCOPE = "global"
 HUMAN_UI_ACTOR = "human_ui"
@@ -194,9 +208,19 @@ class MessageRelayService:
             if pane is not None:
                 out["pane_id"] = getattr(pane, "pane_id", None)
                 out["agent_name"] = getattr(pane, "agent_name", None)
+                raw_role = str(getattr(pane, "role", "") or "").strip().lower()
+                if raw_role == "installer":
+                    out["role"] = "installer"
+                    out["role_label"] = "Instalador"
+                else:
+                    role_enum = normalize_role(raw_role)
+                    out["role"] = role_enum.value
+                    out["role_label"] = ROLE_LABELS_ES[role_enum]
             else:
                 out["pane_id"] = None
                 out["agent_name"] = None
+                out["role"] = None
+                out["role_label"] = None
         elif kind == "operator":
             out["session_id"] = ident
             label_fn = getattr(self.operator_directory, "label", None)
@@ -242,6 +266,52 @@ class MessageRelayService:
         if target is None:
             return _err("TARGET_NOT_FOUND", "No hay ningun panel activo con ese destino en este proyecto.")
         to_p = Principal.pane(str(target.node_uuid), project_uuid=project)
+
+        if sender is None or sender_principal is not None:
+            sender_role: Optional[PaneRole] = None
+        else:
+            raw_sender_role = str(getattr(sender, "role", "") or "").strip().lower()
+            if raw_sender_role == "installer":
+                self.store.append_audit(
+                    {
+                        "event": "rejected",
+                        "from_principal": from_p.uri,
+                        "to_principal": to_p.uri,
+                        "project_uuid": project,
+                        "reason_code": "ROLE_KIND_FORBIDDEN",
+                        "actor": from_p.uri,
+                        "ts_ms": now,
+                    }
+                )
+                return _err("ROLE_KIND_FORBIDDEN", "Un panel de instalacion no puede enviar mensajes.")
+            sender_role = normalize_role(raw_sender_role)
+
+        raw_target_role = str(getattr(target, "role", "") or "").strip().lower()
+        target_role: Optional[PaneRole] = None if raw_target_role == "installer" else normalize_role(raw_target_role)
+        role_err = check_send(sender_role=sender_role, kind=kind, target_role=target_role)
+        if role_err is not None:
+            self.store.append_audit(
+                {
+                    "event": "rejected",
+                    "from_principal": from_p.uri,
+                    "to_principal": to_p.uri,
+                    "project_uuid": project,
+                    "reason_code": role_err,
+                    "actor": from_p.uri,
+                    "ts_ms": now,
+                }
+            )
+            if role_err == "ROLE_TARGET_FORBIDDEN":
+                return _err(
+                    role_err,
+                    "Un orquestador no puede asignar tareas (task.request) a otro orquestador.",
+                )
+            sender_label = ROLE_LABELS_ES.get(sender_role, str(sender_role)) if sender_role is not None else "desconocido"
+            return _err(
+                role_err,
+                f"El rol '{sender_label}' no tiene permiso para enviar mensajes de tipo '{kind}'.",
+            )
+
         if self.store.count_pending(to_p.uri) >= self.max_inbox_depth:
             self.store.append_audit(
                 {"event": "rejected", "from_principal": from_p.uri, "to_principal": to_p.uri, "project_uuid": project,
@@ -249,15 +319,18 @@ class MessageRelayService:
             )
             return _err("INBOX_FULL", f"Bandeja del destino llena (maximo {self.max_inbox_depth}).", blocked=True)
 
+        budget_role = sender_role if sender_role is not None else PaneRole.PEER
         link = self.tracker.next_link(
             from_p.uri,
             human_turn_at_ms=self._human_turn_ms(from_p.id),
             parent_chain_id=(parent or {}).get("chain_id"),
             parent_hop=(parent or {}).get("hop"),
+            sender_budget=ROLE_CHAIN_BUDGET[budget_role],
+            sender_can_extend=(sender_role == PaneRole.ORCHESTRATOR),
         )
         trust = trust_override or cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
         if link.exceeded:
-            park_reason: Optional[str] = CHAIN_DEPTH_EXCEEDED
+            park_reason: Optional[str] = link.exceeded_reason or CHAIN_DEPTH_EXCEEDED
         elif confirm_with_human:
             park_reason = "HUMAN_CONFIRMATION_REQUESTED"
         else:
@@ -287,10 +360,20 @@ class MessageRelayService:
             "chain": sealed["chain"],
             "trust": sealed["trust"],
         }
-        if park_reason == CHAIN_DEPTH_EXCEEDED:
+        if link.exceeded:
+            code = park_reason or CHAIN_DEPTH_EXCEEDED
+            park_errors = {
+                CHAIN_DEPTH_EXCEEDED: "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano.",
+                CHAIN_BUDGET_EXHAUSTED: "Presupuesto de mensajes de la cadena agotado: el mensaje queda en la bandeja del humano.",
+                CHAIN_BUDGET_EXPIRED: "Tiempo maximo de la cadena agotado: el mensaje queda en la bandeja del humano.",
+            }
             return {
-                "success": False, "code": CHAIN_DEPTH_EXCEEDED, "delivered": False, "parked": True, **common,
-                "error": "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano.",
+                "success": False,
+                "code": code,
+                "delivered": False,
+                "parked": True,
+                **common,
+                "error": park_errors.get(code, park_errors[CHAIN_DEPTH_EXCEEDED]),
             }
         if park_reason == "HUMAN_CONFIRMATION_REQUESTED":
             return {"success": True, "code": "PARKED_FOR_HUMAN", "delivered": False, "parked": True, **common}
@@ -453,7 +536,11 @@ class MessageRelayService:
                  "project_uuid": project_uuid, "reason_code": "INBOX_FULL", "actor": operator_uri, "ts_ms": now}
             )
             return _err("INBOX_FULL", f"Bandeja del destino llena (maximo {self.max_inbox_depth}).", blocked=True)
-        link = self.tracker.next_link(operator_uri)
+        link = self.tracker.next_link(
+            operator_uri,
+            sender_budget=ROLE_CHAIN_BUDGET[PaneRole.PEER],
+            sender_can_extend=False,
+        )
         sealed = self._seal_and_store(
             from_uri=operator_uri, to_uri=to_p.uri, project=project_uuid, text=text, kind=kind, card_id=card_id,
             link=link, trust=TrustLevel.OPERATOR_DELEGATED, park_reason=park_reason, submit_event="operator_submitted",
@@ -485,14 +572,20 @@ class MessageRelayService:
             return bad
         if self._paused(f"pane:{from_p.id}"):
             return _err("RELAY_PAUSED", "El relevo de este panel esta en pausa; solo el humano puede reanudarlo.")
+        raw_sender_role = str(getattr(sender, "role", "") or "").strip().lower()
+        if raw_sender_role == "installer":
+            return _err("ROLE_KIND_FORBIDDEN", "Un panel de instalacion no puede enviar mensajes.")
+        sender_role = normalize_role(raw_sender_role)
         link = self.tracker.next_link(
             from_p.uri,
             human_turn_at_ms=self._human_turn_ms(from_p.id),
             parent_chain_id=original["chain_id"],
             parent_hop=int(original["hop"]),
+            sender_budget=ROLE_CHAIN_BUDGET[sender_role],
+            sender_can_extend=(sender_role == PaneRole.ORCHESTRATOR),
         )
         trust = cap_agent_trust(TrustLevel.PANE_AUTHENTICATED, chain_trust=link.origin_trust)
-        park = CHAIN_DEPTH_EXCEEDED if link.exceeded else None
+        park = (link.exceeded_reason or CHAIN_DEPTH_EXCEEDED) if link.exceeded else None
         sealed = self._seal_and_store(
             from_uri=from_p.uri, to_uri=to_uri, project=from_p.project_uuid, text=text, kind="task.reply",
             card_id=original.get("card_id"), link=link, trust=trust, park_reason=park, submit_event="submitted",
@@ -501,7 +594,7 @@ class MessageRelayService:
         if not sealed.get("success"):
             return sealed
         if park:
-            return {**sealed, "success": False, "code": CHAIN_DEPTH_EXCEEDED, "delivered": False, "parked": True,
+            return {**sealed, "success": False, "code": park, "delivered": False, "parked": True,
                     "error": "Cadena de respuestas automaticas agotada: el mensaje queda en la bandeja del humano."}
         self._notify(session_id)
         return {**sealed, "queued": True, "inbox": True, "delivered": True, "to": to_uri, "message_uuid": sealed["msg_id"]}

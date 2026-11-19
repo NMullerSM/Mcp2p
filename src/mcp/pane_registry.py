@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from src.core.domain.context import ACTOR_AGENT_MCP, ActorContext
 from src.core.domain.pane_identity import new_pane_node_uuid, normalize_project_uuid
+from src.core.domain.roles import DEFAULT_ROLE, PaneRole, normalize_role, sanitize_mandate
 from src.mcp.transport_options import resolve_http_bind
 
 logger = logging.getLogger("mcp2p.mcp.pane_registry")
@@ -51,9 +52,13 @@ class PaneSessionRecord:
     pid_create_time: Optional[float] = None
     # Ultimo turno humano ENVIADO (tecleo con Enter en la GUI): cierra el contexto de cadena del panel (37 §3.5).
     last_human_submit_at: float = 0.0
+    # Campos v2.0.2 (WP-3a): mandato y preferencias de entrega persistidos por (proyecto, ranura).
+    mandate: str = ""
+    delivery_mode: str = "auto"
+    delivery_batch: bool = False
 
-    def to_dict(self, include_token: bool = False) -> Dict[str, Any]:
-        """Serializa la ficha del panel sin exponer `session_token` por defecto."""
+    def to_dict(self, include_token: bool = False, include_mandate: bool = False) -> Dict[str, Any]:
+        """Serializa la ficha del panel sin exponer `session_token` ni `mandate` por defecto."""
         data: Dict[str, Any] = {
             "pane_id": self.pane_id,
             "node_uuid": self.node_uuid,
@@ -69,7 +74,11 @@ class PaneSessionRecord:
             "cwd": self.cwd,
             "auto_relay_enabled": self.auto_relay_enabled,
             "worker_mode": self.worker_mode,
+            "delivery_mode": self.delivery_mode,
+            "delivery_batch": self.delivery_batch,
         }
+        if include_mandate:
+            data["mandate"] = self.mandate
         if include_token:
             data["session_token"] = self.session_token
         return data
@@ -192,6 +201,11 @@ class PaneRegistry:
                     "node_uuid": new_pane_node_uuid(proj, norm_pane_id),
                     "auto_relay_enabled": False,
                     "worker_mode": False,
+                    "role": DEFAULT_ROLE.value,
+                    "mandate": "",
+                    "role_updated_at": None,
+                    "delivery_mode": "auto",
+                    "delivery_batch": False,
                 }
                 self._memory_identities[key] = ident
             return dict(ident)
@@ -216,10 +230,15 @@ class PaneRegistry:
         proj = normalize_project_uuid(project_uuid)
         now = float(self._clock())
         token = session_token or secrets.token_urlsafe(24)
+        is_installer = str(role or "").strip().lower() == "installer"
         if node_uuid:
             resolved_node = node_uuid
             relay_flag = bool(auto_relay_enabled)
             worker_flag = False
+            resolved_role = "installer" if is_installer else normalize_role(role).value
+            resolved_mandate = ""
+            resolved_delivery_mode = "auto"
+            resolved_delivery_batch = False
         else:
             identity = self.resolve_pane_identity(norm_pane_id, proj, touch=True)
             resolved_node = str(identity["node_uuid"])
@@ -227,6 +246,10 @@ class PaneRegistry:
                 bool(identity.get("auto_relay_enabled")) if auto_relay_enabled is None else bool(auto_relay_enabled)
             )
             worker_flag = bool(identity.get("worker_mode"))
+            resolved_role = "installer" if is_installer else normalize_role(identity.get("role")).value
+            resolved_mandate = sanitize_mandate(identity.get("mandate"))
+            resolved_delivery_mode = str(identity.get("delivery_mode") or "auto")
+            resolved_delivery_batch = bool(identity.get("delivery_batch", False))
         resolved_agent = agent_name or f"{cli_profile}-{norm_pane_id}"
         pid_ctime = self._process_create_time(pid)
 
@@ -244,7 +267,7 @@ class PaneRegistry:
                 node_uuid=resolved_node,
                 agent_name=resolved_agent,
                 cli_profile=cli_profile,
-                role=role,
+                role=resolved_role,
                 pid=pid,
                 pid_create_time=pid_ctime,
                 status="active",
@@ -255,6 +278,9 @@ class PaneRegistry:
                 cwd=cwd,
                 auto_relay_enabled=relay_flag,
                 worker_mode=worker_flag,
+                mandate=resolved_mandate,
+                delivery_mode=resolved_delivery_mode,
+                delivery_batch=resolved_delivery_batch,
             )
             self._panes[norm_pane_id] = record
             payload = record.to_dict(include_token=True)
@@ -468,6 +494,41 @@ class PaneRegistry:
                     ident["worker_mode"] = bool(enabled)
         with self._lock:
             rec.worker_mode = bool(enabled)
+            return rec
+
+    def set_role(
+        self,
+        pane_id: int | str,
+        role: PaneRole | str,
+        mandate: Optional[str] = None,
+    ) -> Optional[PaneSessionRecord]:
+        """Cambia el rol y mandato de un panel ACTIVO y los persiste por (proyecto, ranura); None si no hay panel."""
+        norm_pane_id, _ = _normalize_pane_id(pane_id)
+        norm_role = normalize_role(role)
+        with self._lock:
+            rec = self._panes.get(norm_pane_id)
+            if rec is None or rec.status == "closed":
+                return None
+            proj = rec.project_uuid
+            clean_mandate = rec.mandate if mandate is None else sanitize_mandate(mandate)
+        if self._identity_repo is not None:
+            set_fn = getattr(self._identity_repo, "set_pane_role", None)
+            if callable(set_fn):
+                set_fn(proj, norm_pane_id, norm_role.value, clean_mandate)
+            else:
+                db_obj = getattr(self._identity_repo, "db", None)
+                db_set = getattr(db_obj, "set_pane_role", None) if db_obj is not None else None
+                if callable(db_set):
+                    db_set(proj, norm_pane_id, norm_role.value, clean_mandate)
+        else:
+            with self._lock:
+                ident = self._memory_identities.get((proj, norm_pane_id))
+                if ident is not None:
+                    ident["role"] = norm_role.value
+                    ident["mandate"] = clean_mandate
+        with self._lock:
+            rec.role = norm_role.value
+            rec.mandate = clean_mandate
             return rec
 
 
