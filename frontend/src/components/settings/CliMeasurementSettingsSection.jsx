@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppConfirmation } from '../common/useAppConfirmation';
+import { MeasurementDot } from '../common/MeasurementDot';
 import { describeRelayError } from '../relay/relayModel';
 import { btnBase, mutedText, toneBox } from '../relay/relayStyles';
 
@@ -106,10 +107,12 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
     && typeof api?.pty_cancel_cli_measurement === 'function'
     && typeof api?.pty_forget_cli_measurement === 'function';
   const { dialog, run } = useAppConfirmation(api);
-  const [snapshot, setSnapshot] = useState({ running: null, items: [] });
+  const [snapshot, setSnapshot] = useState({ running: null, items: [], autoEnabled: false });
   const [loaded, setLoaded] = useState(false);
   const [busyKey, setBusyKey] = useState(null);
   const [feedback, setFeedback] = useState(null);
+  const [autoBusy, setAutoBusy] = useState(false);
+  const autoHelpId = useId();
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -129,7 +132,8 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
       } else {
         setSnapshot({
           running: res?.running || null,
-          items: Array.isArray(res?.items) ? res.items : []
+          items: Array.isArray(res?.items) ? res.items : [],
+          autoEnabled: Boolean(res?.auto_enabled)
         });
       }
     } catch (err) {
@@ -150,15 +154,19 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
 
   const running = snapshot.running;
   const isRunning = running !== null;
+  // Con la medición automática puede haber trabajo pendiente sin medición en curso: también hay que seguir leyendo.
+  const autoPending = snapshot.items.some((item) => item.auto_pending);
+  const polling = isRunning || autoPending;
   useEffect(() => {
-    if (!available || !isRunning) return undefined;
+    if (!available || !polling) return undefined;
     const timer = setInterval(() => void refresh(), MEASUREMENT_POLL_MS);
     return () => clearInterval(timer);
-  }, [available, isRunning, refresh]);
+  }, [available, polling, refresh]);
 
   if (!available) return null;
 
-  const { items } = snapshot;
+  const { items, autoEnabled } = snapshot;
+  const autoAvailable = typeof api?.pty_set_cli_measure_auto === 'function';
   const labelOf = (cliId) => items.find((item) => item.cli_id === cliId)?.display_name || cliId;
   const runningInList = isRunning && items.some((item) => item.cli_id === running.cli_id);
   const restartNeeded = items.some((item) => item.restart_needed);
@@ -236,6 +244,33 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
     await refresh();
   };
 
+  const toggleAuto = async (enabled) => {
+    if (autoBusy) return;
+    setAutoBusy(true);
+    setFeedback(null);
+    try {
+      const res = await api.pty_set_cli_measure_auto(enabled);
+      if (!mountedRef.current) return;
+      if (res?.success === false) {
+        setFeedback({ tone: 'error', text: measureError(res, 'cambiar la medición automática') });
+      } else if (enabled && typeof api.pty_auto_measure_tick === 'function') {
+        // Al activarlo, los CLIs que ya cambiaron se miden ahora. Un fallo aquí no invalida el ajuste guardado.
+        try {
+          await api.pty_auto_measure_tick(null);
+        } catch {
+          // La siguiente lectura del snapshot muestra lo que quedó pendiente.
+        }
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setFeedback({ tone: 'error', text: measureError(err, 'cambiar la medición automática') });
+      }
+    } finally {
+      if (mountedRef.current) setAutoBusy(false);
+    }
+    await refresh();
+  };
+
   const cancelBusy = busyKey === 'cancel';
   const cancelBlock = (
     <ProgressBlock running={running || {}} onCancel={cancel} cancelBusy={cancelBusy} />
@@ -243,6 +278,34 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
 
   return (
     <div data-testid="cli-measurement-settings" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {loaded && autoAvailable && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              cursor: autoBusy ? 'wait' : 'pointer'
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="measure-auto-toggle"
+              checked={autoEnabled}
+              disabled={autoBusy}
+              aria-describedby={autoHelpId}
+              onChange={(event) => void toggleAuto(event.target.checked)}
+            />
+            <span>Medir automáticamente al detectar cambios</span>
+          </label>
+          <span id={autoHelpId} style={mutedText}>
+            Cuando un CLI cambia (se actualiza o se reinstala), MCP2P lo vuelve a medir solo en segundo plano. Cada medición gasta unos pocos tokens.
+          </span>
+        </div>
+      )}
       {!loaded && <span style={mutedText}>Cargando…</span>}
       {loaded && items.length === 0 && (
         <span data-testid="measure-empty" style={mutedText}>No hay CLIs que medir.</span>
@@ -256,9 +319,12 @@ export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
         return (
           <div key={item.cli_id} data-testid={`measure-row-${item.cli_id}`} style={rowStyle}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: '1 1 200px' }}>
-              <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                {item.display_name || item.cli_id}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                {item.dot && <MeasurementDot color={item.dot} label={item.dot_label || statusOf(item)} />}
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {item.display_name || item.cli_id}
+                </span>
+              </div>
               <span data-testid={`measure-status-${item.cli_id}`} style={mutedText}>{statusOf(item)}</span>
               {item.state === 'failed' && item.reason_text && (
                 <span data-testid={`measure-reason-${item.cli_id}`} style={{ ...mutedText, color: 'var(--accent-danger)' }}>
