@@ -566,8 +566,6 @@ function ActiveTerminalRow({
   onClosePane,
   onToggleAutoRelay,
   autoRelayAvailable,
-  onToggleWorkerMode,
-  workerModeAvailable,
   onOpenSettings,
   deliveryStatus,
   onSetDeliveryMode,
@@ -685,33 +683,6 @@ function ActiveTerminalRow({
             />
           </span>
         )}
-        {/* F2.4: modo trabajador por panel, apagado por defecto; activarlo pide confirmacion nativa. */}
-        {pane.alive && pane.kind !== 'install' && onToggleWorkerMode && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-            <button
-              type="button"
-              data-testid={`pane-worker-mode-toggle-${paneId}`}
-              aria-pressed={pane.workerMode ? 'true' : 'false'}
-              disabled={!workerModeAvailable || Boolean(pane.workerModeBusy)}
-              onClick={() => onToggleWorkerMode(paneId)}
-              style={{
-                ...btnBase,
-                color: pane.workerMode ? 'var(--accent-primary)' : 'var(--text-secondary)',
-                border: `1px solid ${pane.workerMode ? 'rgba(16, 185, 129, 0.5)' : 'var(--border-subtle)'}`,
-                cursor: !workerModeAvailable || pane.workerModeBusy ? 'not-allowed' : 'pointer'
-              }}
-            >
-              <span>Modo trabajador: {pane.workerMode ? 'ON' : 'OFF'}</span>
-            </button>
-            <InfoHint
-              topic="Modo trabajador"
-              text={HINT_TEXTS.workerMode}
-              anchor="ayuda-modo-trabajador"
-              onOpenSettings={onOpenSettings}
-              testId={`pane-worker-mode-hint-${paneId}`}
-            />
-          </span>
-        )}
         {/* Entrega directa: el mensaje se escribe en la terminal cuando el agente queda libre. */}
         {pane.alive && pane.kind !== 'install' && onSetDeliveryMode && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
@@ -762,8 +733,6 @@ export function TerminalSliderControls({
   status,
   autoRelay,
   onToggleAutoRelay,
-  workerMode,
-  onToggleWorkerMode,
   relaySection = null,
   catalog,
   maxPanes,
@@ -1001,8 +970,6 @@ export function TerminalSliderControls({
                 onClosePane={onClosePane}
                 onToggleAutoRelay={onToggleAutoRelay}
                 autoRelayAvailable={Boolean(autoRelay?.available)}
-                onToggleWorkerMode={onToggleWorkerMode}
-                workerModeAvailable={Boolean(workerMode?.available)}
                 onOpenSettings={onOpenSettings}
                 deliveryStatus={deliveryStatusByPane[pane.paneId]}
                 onSetDeliveryMode={onSetDeliveryMode}

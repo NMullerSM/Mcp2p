@@ -25,8 +25,8 @@ describe('ConfirmationPrefsSection', () => {
         set_at: '2026-11-19T03:00:00Z'
       },
       {
-        action_id: 'worker_mode.enable',
-        label_es: 'Activar modo trabajador en un panel',
+        action_id: 'delivery.enable_pane',
+        label_es: 'Activar entrega directa en un panel',
         risk: 'low',
         remember: true,
         set_at: '2026-11-19T03:05:00Z'
@@ -47,12 +47,12 @@ describe('ConfirmationPrefsSection', () => {
 
     render(<ConfirmationPrefsSection api={api} />);
     expect(await screen.findByTestId('confirmation-pref-item-auto_relay.enable')).toBeTruthy();
-    expect(screen.getByTestId('confirmation-pref-item-worker_mode.enable')).toBeTruthy();
+    expect(screen.getByTestId('confirmation-pref-item-delivery.enable_pane')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('forget-confirmation-auto_relay.enable'));
     await waitFor(() => expect(api.ui_forget_confirmation).toHaveBeenCalledWith('auto_relay.enable'));
     await waitFor(() => expect(screen.queryByTestId('confirmation-pref-item-auto_relay.enable')).toBeNull());
-    expect(screen.getByTestId('confirmation-pref-item-worker_mode.enable')).toBeTruthy();
+    expect(screen.getByTestId('confirmation-pref-item-delivery.enable_pane')).toBeTruthy();
 
     fireEvent.click(screen.getByTestId('forget-all-confirmations'));
     await waitFor(() => expect(api.ui_forget_all_confirmations).toHaveBeenCalledTimes(1));

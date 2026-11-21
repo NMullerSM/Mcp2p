@@ -372,7 +372,6 @@ export function TerminalPane({
         <PaneProvenance
           paneId={paneId}
           nodeUuid={pane.nodeUuid}
-          workerMode={Boolean(pane.workerMode)}
           relayPaused={relayPaused}
           globalPaused={globalPaused}
         />
