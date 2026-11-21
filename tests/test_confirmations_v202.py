@@ -56,6 +56,7 @@ def test_table_invariants_no_native_rememberable_and_high_risk_is_native() -> No
         "auto_relay.enable",
         "worker_mode.enable",
         "delivery.enable_pane",
+        "cli.measure",
         "cli.install.package_manager",
         "cli.install.script",
         "relay.discard_parked",

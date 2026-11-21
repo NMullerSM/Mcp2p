@@ -1033,6 +1033,8 @@ class CliCatalogService:
         platform: Optional[str] = None,
         home: Optional[str] = None,
         environ: Optional[Mapping[str, str]] = None,
+        measurements: Any = None,
+        include_measurements: Optional[bool] = None,
     ) -> None:
         self._settings = settings
         self._repo_path = repo_catalog_path
@@ -1042,6 +1044,10 @@ class CliCatalogService:
         self._platform = platform
         self._home = home
         self._environ = environ
+        # Mediciones locales (WP-5d): por defecto solo con el catalogo real del repo; las pruebas con un catalogo propio
+        # no las ven. `measurements` es un `MeasurementStore` (se crea el de la ruta por defecto si falta).
+        self._include_measurements = (repo_catalog_path is None) if include_measurements is None else bool(include_measurements)
+        self._measurements = measurements
 
     # -- contexto ---------------------------------------------------------
 
@@ -1060,8 +1066,24 @@ class CliCatalogService:
     def which(self, name: str) -> Optional[str]:
         return self._which(name)
 
+    def measurement_store(self) -> Any:
+        if self._measurements is None:
+            from src.adapters.terminal.cli_measurement_store import MeasurementStore
+
+            self._measurements = MeasurementStore()
+        return self._measurements
+
     def catalog(self) -> CliCatalog:
-        return load_catalog(self._repo_path, self._user_path, include_user=self._include_user)
+        base = load_catalog(self._repo_path, self._user_path, include_user=self._include_user)
+        if not self._include_measurements:
+            return base
+        try:
+            from src.adapters.terminal.cli_measurement_store import apply_measurements
+
+            return apply_measurements(base, self.measurement_store(), self.platform)
+        except Exception as exc:  # una medicion rota nunca debe tumbar el catalogo
+            logger.debug("No se pudieron aplicar las mediciones locales: %s", exc)
+            return base
 
     def get_spec(self, cli_id: Any) -> Optional[CliSpec]:
         return self.catalog().get(cli_id)

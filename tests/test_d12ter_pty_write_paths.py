@@ -3,7 +3,9 @@
 Caminos permitidos:
   1. teclas del humano: `ExtensionsLabUIAdapter.pty_write_input`;
   2. entrega directa: `TerminalPaneInput.write` (solo la usa `DirectDeliveryService`);
-  3. respuesta a la sonda OSC 7501: `PosixPtyHostConnector._write_osc_probe_reply` (la vigila otra prueba).
+  3. medición de CLIs (WP-5d): `HeadlessCliProbe._send`, solo sobre una terminal de PRUEBA que abre su propio conector
+     privado (nunca las terminales del usuario) y solo la importa `measurement_ui`;
+  4. respuesta a la sonda OSC 7501: `PosixPtyHostConnector._write_osc_probe_reply` (la vigila otra prueba).
 Añadir un camino de escritura cambia la invariante: se discute con el dueño, no se «arregla» esta prueba.
 """
 
@@ -18,7 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_SEND_INPUT_CALLS = {
     ("src/app/ui_adapters/extensions_lab_ui.py", "ExtensionsLabUIAdapter", "pty_write_input"),
     ("src/adapters/terminal/direct_delivery_writer.py", "TerminalPaneInput", "write"),
+    ("src/adapters/terminal/cli_measurement.py", "HeadlessCliProbe", "_send"),
 }
+PROBE_MODULE = "src.adapters.terminal.cli_measurement"
+PROBE_IMPORTERS = {"src/app/ui_adapters/measurement_ui.py"}
 WRITER_MODULE = "src.adapters.terminal.direct_delivery_writer"
 WRITER_IMPORTERS = {"src/core/factory.py", "src/app/ui_adapters/delivery_ui.py"}
 
@@ -123,3 +128,21 @@ def test_conpty_write_only_inside_send_input() -> None:
         ):
             bad.append(f"{rel}:{node.lineno} en {cls}.{fn}")
     assert bad == []
+
+
+def test_measurement_probe_is_only_imported_by_its_ui_adapter() -> None:
+    importers = set()
+    for rel, source in _sources("src"):
+        if rel == "src/adapters/terminal/cli_measurement.py":
+            continue
+        if any(name == PROBE_MODULE or name.startswith(PROBE_MODULE + ".") for name in _imports(source, rel)):
+            importers.add(rel)
+    assert importers == PROBE_IMPORTERS
+
+
+def test_measurement_probe_never_touches_the_users_panes() -> None:
+    """La sonda abre SU conector (un solo panel) y no recibe el conector ni el registro de paneles del usuario."""
+    rel = "src/adapters/terminal/cli_measurement.py"
+    source = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    for forbidden in ("terminal_connector", "_get_terminal_connector", "PaneRegistry", "get_pane_registry"):
+        assert forbidden not in source
