@@ -54,7 +54,6 @@ def _no_auto_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_table_invariants_no_native_rememberable_and_high_risk_is_native() -> None:
     expected_ids = {
         "auto_relay.enable",
-        "worker_mode.enable",
         "delivery.enable_pane",
         "cli.measure",
         "cli.install.package_manager",
@@ -88,7 +87,7 @@ def test_table_invariants_no_native_rememberable_and_high_risk_is_native() -> No
                 assert spec.surface == "native", key
 
     assert REMEMBERABLE == frozenset(
-        {"auto_relay.enable", "worker_mode.enable", "delivery.enable_pane", "cli.install.package_manager"}
+        {"auto_relay.enable", "delivery.enable_pane", "cli.install.package_manager"}
     )
     assert "cli.install.script" not in REMEMBERABLE
     assert "relay.discard_parked" not in REMEMBERABLE
@@ -160,25 +159,25 @@ def test_token_bound_to_action_and_args() -> None:
         reg.register_pane("pane_1", project_uuid="proj_a", cli_profile="custom_shell")
         reg.register_pane("pane_2", project_uuid="proj_a", cli_profile="custom_shell")
 
-        r1 = bridge.pty_set_worker_mode("pane_1", True)
+        r1 = bridge.pty_set_auto_relay("pane_1", True)
         assert r1["code"] == "CONFIRMATION_REQUIRED"
         tok1 = r1["confirmation"]["token"]
 
         # Emitir otro token para pane_2 no invalida el de pane_1, y confirmar tok1 solo cambia pane_1.
-        r2 = bridge.pty_set_worker_mode("pane_2", True)
+        r2 = bridge.pty_set_auto_relay("pane_2", True)
         assert r2["code"] == "CONFIRMATION_REQUIRED"
         tok2 = r2["confirmation"]["token"]
         assert tok1 != tok2
 
         res = bridge.ui_confirm_action(tok1, True, False)
         assert res["success"] is True and res["pane_id"] == "pane_1"
-        assert reg.get_pane("pane_1").worker_mode is True
-        assert reg.get_pane("pane_2").worker_mode is False
+        assert reg.get_pane("pane_1").auto_relay_enabled is True
+        assert reg.get_pane("pane_2").auto_relay_enabled is False
 
         # Y el broker valida expected_action_id / expected_args_digest si se comprueba explícitamente.
         broker = AppConfirmationBroker()
-        t_p1, _ = broker.issue("worker_mode.enable", lambda: {"pane": "pane_1"}, args_digest="pane_1")
-        assert broker.consume(t_p1, expected_action_id="worker_mode.enable", expected_args_digest="pane_2") is None
+        t_p1, _ = broker.issue("auto_relay.enable", lambda: {"pane": "pane_1"}, args_digest="pane_1")
+        assert broker.consume(t_p1, expected_action_id="auto_relay.enable", expected_args_digest="pane_2") is None
         assert broker.consume(t_p1) is None  # quedó quemado al fallar
     finally:
         bridge._close_terminal_matrix()
@@ -214,20 +213,20 @@ def test_remember_only_for_rememberable_actions() -> None:
         assert bridge.ui_confirm_action(scr["confirmation"]["token"], True, True)["success"] is True
         assert bridge.db.get_setting("confirm.remember.cli.install.script") is None
 
-        # 2) Acción SÍ recordable (worker_mode.enable): remember=True guarda preferencia y omite siguientes avisos.
-        req = bridge.pty_set_worker_mode("pane_1", True)
+        # 2) Acción SÍ recordable (auto_relay.enable): remember=True guarda preferencia y omite siguientes avisos.
+        req = bridge.pty_set_auto_relay("pane_1", True)
         assert req["code"] == "CONFIRMATION_REQUIRED" and req["confirmation"]["rememberable"] is True
         ok = bridge.ui_confirm_action(req["confirmation"]["token"], True, True)
-        assert ok["success"] is True and ok["worker_mode"] is True
+        assert ok["success"] is True and ok["auto_relay_enabled"] is True
 
-        raw = bridge.db.get_setting("confirm.remember.worker_mode.enable")
+        raw = bridge.db.get_setting("confirm.remember.auto_relay.enable")
         assert raw is not None
         parsed = json.loads(raw)
         assert parsed["v"] == 1 and parsed["remember"] is True and parsed["set_at"] and parsed["app_version"]
 
         # Siguiente activación en otro panel ya no pide confirmación.
-        ok2 = bridge.pty_set_worker_mode("pane_2", True)
-        assert ok2["success"] is True and ok2["worker_mode"] is True
+        ok2 = bridge.pty_set_auto_relay("pane_2", True)
+        assert ok2["success"] is True and ok2["auto_relay_enabled"] is True
     finally:
         bridge._close_terminal_matrix()
         bridge.core_kernel.close()
@@ -299,13 +298,18 @@ def test_forget_and_forget_all() -> None:
         r_auto = bridge.pty_set_auto_relay("pane_1", True)
         assert bridge.ui_confirm_action(r_auto["confirmation"]["token"], True, True)["success"] is True
 
-        r_work = bridge.pty_set_worker_mode("pane_1", True)
-        assert bridge.ui_confirm_action(r_work["confirmation"]["token"], True, True)["success"] is True
+        def ask_pkg() -> dict:
+            return bridge.confirm_gate.require(
+                "cli.install.package_manager", "Instalar", "npm install", lambda: {"success": True}
+            )
+
+        r_pkg = ask_pkg()
+        assert bridge.ui_confirm_action(r_pkg["confirmation"]["token"], True, True)["success"] is True
 
         listed = bridge.ui_list_confirmation_prefs()
         assert listed["success"] is True
         ids = {p["action_id"] for p in listed["prefs"]}
-        assert ids == {"auto_relay.enable", "worker_mode.enable"}
+        assert ids == {"auto_relay.enable", "cli.install.package_manager"}
 
         fg1 = bridge.ui_forget_confirmation("auto_relay.enable")
         assert fg1["success"] is True and fg1["removed"] is True
@@ -315,17 +319,29 @@ def test_forget_and_forget_all() -> None:
         bridge.pty_set_auto_relay("pane_1", False)
         assert bridge.pty_set_auto_relay("pane_1", True)["code"] == "CONFIRMATION_REQUIRED"
 
-        # worker_mode.enable sigue recordado hasta forget_all
-        assert [p["action_id"] for p in bridge.ui_list_confirmation_prefs()["prefs"]] == ["worker_mode.enable"]
+        # la otra preferencia sigue recordada hasta forget_all
+        assert [p["action_id"] for p in bridge.ui_list_confirmation_prefs()["prefs"]] == ["cli.install.package_manager"]
         fg_all = bridge.ui_forget_all_confirmations()
         assert fg_all["success"] is True and fg_all["removed_count"] == 1
         assert bridge.ui_list_confirmation_prefs()["prefs"] == []
-
-        bridge.pty_set_worker_mode("pane_1", False)
-        assert bridge.pty_set_worker_mode("pane_1", True)["code"] == "CONFIRMATION_REQUIRED"
+        assert ask_pkg()["code"] == "CONFIRMATION_REQUIRED"
     finally:
         bridge._close_terminal_matrix()
         bridge.core_kernel.close()
+
+
+def test_retired_worker_mode_action_has_no_spec_and_an_old_stored_preference_is_ignored() -> None:
+    assert "worker_mode.enable" not in CONFIRMATION_TABLE and "worker_mode.enable" not in REMEMBERABLE
+    db = make_test_db()
+    try:
+        db.set_setting(
+            "confirm.remember.worker_mode.enable",
+            json.dumps({"v": 1, "remember": True, "set_at": "2026-11-20T00:00:00Z", "app_version": "2.0.1"}),
+        )
+        gate = ConfirmationGate(NativeConfirmationService(lambda: None), db)
+        assert gate.list_prefs() == []
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------

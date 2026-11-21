@@ -57,7 +57,7 @@ def build_operator_server(service: Any, op: Any, *, version: str = "") -> MCPSer
     @server.tool()
     def operator_list_targets(project_uuid: Optional[str] = None) -> str:
         """Lista los paneles activos a los que puedes enviar tareas (solo los proyectos de tu sesion): target (identidad
-        estable), CLI, estado, modo trabajador, Auto-Relay, clase de privilegio y si exige confirmacion humana."""
+        estable), CLI, estado, Auto-Relay, clase de privilegio y si exige confirmacion humana."""
         return _json(service.call(op, "list_targets", project_uuid=project_uuid))
 
     @server.tool()

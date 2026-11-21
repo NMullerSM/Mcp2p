@@ -13,10 +13,10 @@ const base = {
 
 /**
  * Franja de procedencia de un panel: identidad estable (node_uuid corto, la misma que ve el destinatario en el
- * sobre firmado) y estado del relevo: modo trabajador y pausa. Solo informa; no autoriza ninguna acción.
+ * sobre firmado) y estado del relevo: pausa. Solo informa; no autoriza ninguna acción.
  */
-export function PaneProvenance({ paneId, nodeUuid, workerMode = false, relayPaused = false, globalPaused = false }) {
-  if (!nodeUuid && !workerMode && !relayPaused && !globalPaused) return null;
+export function PaneProvenance({ paneId, nodeUuid, relayPaused = false, globalPaused = false }) {
+  if (!nodeUuid && !relayPaused && !globalPaused) return null;
   return (
     <span
       data-testid={`pane-provenance-${paneId}`}
@@ -29,15 +29,6 @@ export function PaneProvenance({ paneId, nodeUuid, workerMode = false, relayPaus
           style={{ ...base, color: 'var(--text-secondary)', border: '1px solid var(--border-subtle)', backgroundColor: 'var(--bg-subtle)' }}
         >
           {shortId(nodeUuid, 12)}
-        </span>
-      )}
-      {workerMode && (
-        <span
-          data-testid={`pane-provenance-worker-${paneId}`}
-          title="Modo trabajador: este agente espera mensajes de otros agentes en su bandeja y responde sin que usted escriba en la terminal."
-          style={{ ...base, color: '#60a5fa', backgroundColor: 'rgba(59, 130, 246, 0.14)', border: '1px solid rgba(59, 130, 246, 0.35)' }}
-        >
-          Trabajador
         </span>
       )}
       {(relayPaused || globalPaused) && (

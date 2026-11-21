@@ -8,7 +8,6 @@ import { SettingsDrawer } from '../SettingsDrawer';
 
 const EXPECTED_ANCHORS = [
   'ayuda-auto-relay',
-  'ayuda-modo-trabajador',
   'ayuda-entrega-directa',
   'ayuda-medicion',
   'ayuda-roles',
@@ -36,7 +35,6 @@ describe('TerminalsRelaySettings', () => {
     const { container } = render(<TerminalsRelaySettings api={{}} />);
 
     expect(HINT_TEXTS.autoRelay.length).toBeLessThanOrEqual(140);
-    expect(HINT_TEXTS.workerMode.length).toBeLessThanOrEqual(140);
 
     for (const anchorId of EXPECTED_ANCHORS) {
       const section = container.querySelector(`#${anchorId}`);
@@ -102,13 +100,13 @@ describe('TerminalsRelaySettings', () => {
           activeProject={{ project_uuid: 'proj_1', name: 'Demo' }}
           projectsList={[{ project_uuid: 'proj_1', name: 'Demo' }]}
           initialTab="terminals_relay"
-          initialAnchor="ayuda-modo-trabajador"
+          initialAnchor="ayuda-auto-relay"
         />
       );
 
       expect(await screen.findByTestId('terminals-relay-settings')).toBeTruthy();
       expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'start' });
-      const heading = container.querySelector('#ayuda-modo-trabajador h5');
+      const heading = container.querySelector('#ayuda-auto-relay h5');
       expect(document.activeElement).toBe(heading);
 
       rerender(

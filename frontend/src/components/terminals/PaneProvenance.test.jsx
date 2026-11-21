@@ -17,13 +17,11 @@ describe('PaneProvenance', () => {
     const node = screen.getByTestId('pane-provenance-node-pane_1');
     expect(node.textContent).toBe('pane-0123456');
     expect(node.getAttribute('title')).toContain('pane-0123456789abcdef');
-    expect(screen.queryByTestId('pane-provenance-worker-pane_1')).toBeNull();
     expect(screen.queryByTestId('pane-provenance-paused-pane_1')).toBeNull();
   });
 
-  it('indica modo trabajador y pausa del propio panel', () => {
-    render(<PaneProvenance paneId="pane_2" nodeUuid="n2" workerMode relayPaused />);
-    expect(screen.getByTestId('pane-provenance-worker-pane_2').textContent).toBe('Trabajador');
+  it('indica la pausa del propio panel', () => {
+    render(<PaneProvenance paneId="pane_2" nodeUuid="n2" relayPaused />);
     const paused = screen.getByTestId('pane-provenance-paused-pane_2');
     expect(paused.textContent).toBe('Relevo en pausa');
     expect(paused.getAttribute('title')).toContain('solo usted puede reanudarlo');

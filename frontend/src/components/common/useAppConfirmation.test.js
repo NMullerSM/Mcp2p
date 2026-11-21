@@ -36,7 +36,7 @@ function Harness({ api, action }) {
 describe('useAppConfirmation', () => {
   it('devuelve la respuesta directa cuando no hace falta confirmación', async () => {
     const api = { ui_confirm_action: vi.fn() };
-    const action = vi.fn(async () => ({ success: true, code: 'OK', worker_mode: true }));
+    const action = vi.fn(async () => ({ success: true, code: 'OK', auto_relay_enabled: true }));
 
     render(React.createElement(Harness, { api, action }));
     fireEvent.click(screen.getByTestId('run-btn'));
@@ -45,7 +45,7 @@ describe('useAppConfirmation', () => {
     expect(JSON.parse(screen.getByTestId('run-result').textContent)).toEqual({
       success: true,
       code: 'OK',
-      worker_mode: true
+      auto_relay_enabled: true
     });
     expect(api.ui_confirm_action).not.toHaveBeenCalled();
     expect(screen.queryByRole('alertdialog')).toBeNull();

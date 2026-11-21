@@ -13,8 +13,8 @@ afterEach(() => {
 function makeConfirmation(over = {}) {
   return {
     token: 'tok-abc-123',
-    action_id: 'worker_mode.enable',
-    title: 'Activar el modo trabajador',
+    action_id: 'auto_relay.enable',
+    title: 'Activar Auto-Relay',
     message: 'Línea 1\nLínea 2',
     rememberable: true,
     expires_in_s: 120,

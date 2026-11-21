@@ -26,13 +26,9 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
   vuelta, o un mensaje que el agente pidió confirmar) aparecen en el panel lateral de Terminales con quién lo envía,
   a quién va, en qué vuelta de la conversación está y su texto tal cual. Puedes liberarlos o descartarlos; antes se
   muestra el texto exacto en un diálogo del sistema.
-- Modo trabajador por terminal: un interruptor en «Terminales activas» (apagado por defecto, pide confirmación al
-  encenderlo y se recuerda por proyecto) deja al agente esperando mensajes de otros agentes y respondiéndolos, para que
-  dos agentes conversen sin que escribas nada en sus terminales. MCP2P sigue sin escribir en ninguna terminal: las
-  instrucciones llegan al agente al conectarse y en cada respuesta de su bandeja. Una conversación entre dos agentes se
-  detiene sola tras una respuesta automática y espera tu confirmación.
-- Cada terminal muestra su identidad estable (la misma que firma MCP2P en sus mensajes) y si está en modo trabajador o
-  con el relevo en pausa.
+- Una conversación entre dos agentes se detiene sola tras una respuesta automática y espera tu confirmación.
+- Cada terminal muestra su identidad estable (la misma que firma MCP2P en sus mensajes) y si tiene el relevo en
+  pausa.
 - El panel lateral de Terminales muestra si el historial de mensajes entre agentes sigue íntegro o ha sido alterado, y
   tiene el interruptor de la parada general del relevo.
 - Puedes escribir a un agente desde el panel lateral: el mensaje llega a su bandeja como mensaje tuyo, sin teclear en su
@@ -55,8 +51,8 @@ en GitHub se toma de la sección de este archivo que coincide con esa versión.
 - En Linux y macOS, las terminales integradas reconocen los avisos de estado completos de los CLI compatibles (incluido
   cuando esperan permiso o limpian el estado) y responden a la sonda de compatibilidad únicamente en los CLI
   verificados (Claude Code), con límite de frecuencia y sin enviar nada a shells ni programas sin verificar.
-- Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que la
-  espera larga del modo trabajador no se corte.
+- Claude Code y Gemini CLI reciben desde MCP2P un límite de 5,5 minutos por llamada y Codex 330 segundos, para que las
+  esperas largas de la bandeja no se corten.
 - Cada terminal conserva su identidad al cerrarla y volver a abrirla en el mismo proyecto, también tras reiniciar
   MCP2P, así que las tarjetas asignadas a ese agente siguen siendo suyas.
 - Al cambiar de proyecto, las terminales del proyecto anterior siguen abiertas pero ocultas, y el panel lateral

@@ -104,7 +104,6 @@ class RestoreItem:
     role: str
     mandate: str
     auto_relay: bool
-    worker_mode: bool
     delivery_mode: str
     resume_mode: str
     cli_session_id: Optional[str]
@@ -369,7 +368,6 @@ class TerminalSessionService:
             role = str((ident or {}).get("role") or "peer")
             mandate = str((ident or {}).get("mandate") or "")
             auto_relay = bool((ident or {}).get("auto_relay_enabled", False))
-            worker_mode = bool((ident or {}).get("worker_mode", False))
             delivery_mode = str((ident or {}).get("delivery_mode") or "auto")
 
             items.append(
@@ -381,7 +379,6 @@ class TerminalSessionService:
                     role=role,
                     mandate=mandate,
                     auto_relay=auto_relay,
-                    worker_mode=worker_mode,
                     delivery_mode=delivery_mode,
                     resume_mode=modo,
                     cli_session_id=sid,

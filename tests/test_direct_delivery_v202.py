@@ -58,7 +58,6 @@ def test_happy_path_writes_paste_then_enter_and_marks_injected(lab):
         ("mode_inbox", "DELIVERY_MODE_INBOX"),
         ("cli_unverified", "CLI_NOT_VERIFIED"),
         ("elevated", "TARGET_ELEVATED"),
-        ("waiting", "AGENT_IN_INBOX_WAIT"),
         ("busy", "AGENT_BUSY"),
         ("permission", "AGENT_PERMISSION"),
         ("unknown", "AGENT_STATE_UNKNOWN"),
@@ -81,8 +80,6 @@ def test_each_condition_c1_to_c13_blocks_with_its_reason(lab, setup, reason):
         lab.caps["delivery_verified"] = False
     elif setup == "elevated":
         lab.privilege = "elevated"
-    elif setup == "waiting":
-        lab.relay._waiting_delta(NODE_B, +1)
     elif setup == "busy":
         lab.hook(NODE_B, "turn_started")
     elif setup == "permission":
@@ -117,10 +114,14 @@ def test_each_condition_c1_to_c13_blocks_with_its_reason(lab, setup, reason):
     assert lab.input.writes == [] and lab.state_of(msg) == "queued"
 
 
-def test_waiter_in_inbox_wait_gets_it_via_inbox_without_write(lab):
+def test_agent_blocked_in_inbox_wait_is_working_for_hooks_so_it_gets_the_message_via_inbox_without_write(lab):
+    # El modo trabajador se retiró: ya no hay un motivo propio para «espera en la bandeja». Un agente que llama a
+    # `inbox_wait` está dentro de un turno (los hooks lo dan por ocupado), así que la entrega directa no escribe y el
+    # mensaje le llega por la propia espera.
     msg = lab.insert(NODE_B, "hola")
     lab.relay._waiting_delta(NODE_B, +1)
-    assert lab.service.pump(NODE_B)["reason"] == "AGENT_IN_INBOX_WAIT"
+    lab.hook(NODE_B, "turn_started")
+    assert lab.service.pump(NODE_B)["reason"] == "AGENT_BUSY"
     taken = lab.store.take_for_delivery(f"pane:{NODE_B}", PROJECT, limit=5, include_unacked=False,
                                         now_ms=lab.clock(), actor=f"pane:{NODE_B}")
     assert [r["msg_id"] for r in taken] == [msg]
