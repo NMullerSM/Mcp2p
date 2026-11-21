@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// F2.4 (modo trabajador por terminal) y F1.6 (franja de procedencia, bandeja del humano, auditoria y parada global).
+// F1.6 (franja de procedencia, bandeja del humano, auditoria y parada global).
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { resetPaneSessionMemory } from './terminals/terminalModel';
@@ -48,81 +48,6 @@ function relayApi(over = {}) {
     ...over
   };
 }
-
-describe('SwarmTerminalMatrix: modo trabajador por terminal', () => {
-  it('el interruptor es por terminal, llama a pty_set_worker_mode y usa InfoHint en lugar de seccion larga', async () => {
-    const pty_set_worker_mode = vi.fn(async (paneId, enabled) => ({ success: true, pane_id: paneId, worker_mode: Boolean(enabled) }));
-    renderMatrix(makeMatrixApi({ pty_set_worker_mode }));
-    await openCli('claude', 'pane_1');
-    await openCli('codex', 'pane_2');
-
-    expect(screen.queryByTestId('worker-mode-section')).toBeNull();
-    expect(screen.queryByTestId('worker-mode-description')).toBeNull();
-
-    const toggle1 = screen.getByTestId('pane-worker-mode-toggle-pane_1');
-    const toggle2 = screen.getByTestId('pane-worker-mode-toggle-pane_2');
-    expect(screen.getByTestId('pane-worker-mode-hint-pane_1')).toBeTruthy();
-    expect(screen.getByTestId('pane-worker-mode-hint-pane_2')).toBeTruthy();
-    expect(toggle1.textContent).toContain('OFF');
-    fireEvent.click(toggle2);
-    await waitFor(() => expect(pty_set_worker_mode).toHaveBeenCalledWith('pane_2', true));
-    await waitFor(() => expect(toggle2.textContent).toContain('ON'));
-    expect(toggle2.getAttribute('aria-pressed')).toBe('true');
-    expect(toggle1.textContent).toContain('OFF');
-    // La franja de procedencia del panel lo refleja.
-    expect(screen.getByTestId('pane-provenance-worker-pane_2').textContent).toBe('Trabajador');
-    expect(screen.queryByTestId('pane-provenance-worker-pane_1')).toBeNull();
-
-    fireEvent.click(toggle2);
-    await waitFor(() => expect(pty_set_worker_mode).toHaveBeenLastCalledWith('pane_2', false));
-    await waitFor(() => expect(toggle2.textContent).toContain('OFF'));
-    expect(screen.queryByTestId('pane-provenance-worker-pane_2')).toBeNull();
-  });
-
-  it('si el dialogo nativo rechaza activarlo, sigue en OFF y se avisa con la causa', async () => {
-    const pty_set_worker_mode = vi.fn(async () => ({
-      success: false,
-      code: 'CONFIRMATION_DECLINED',
-      message: 'La accion fue rechazada en el dialogo de confirmacion.'
-    }));
-    renderMatrix(makeMatrixApi({ pty_set_worker_mode }));
-    await openCli('claude', 'pane_1');
-    const toggle = await screen.findByTestId('pane-worker-mode-toggle-pane_1');
-    fireEvent.click(toggle);
-    await waitFor(() => expect(pty_set_worker_mode).toHaveBeenCalledWith('pane_1', true));
-    await waitFor(() => expect(toggle.getAttribute('aria-pressed')).toBe('false'));
-    expect(toggle.disabled).toBe(false);
-    expect((await screen.findByTestId('matrix-notice')).getAttribute('data-code')).toBe('CONFIRMATION_DECLINED');
-  });
-
-  it('el estado de cada terminal viene del backend (persistido) al recargar', async () => {
-    const api = makeMatrixApi({
-      pty_set_worker_mode: vi.fn(async () => ({ success: true })),
-      pty_get_matrix_status: vi.fn(async () => ({
-        success: true, degraded: false, hub_url: null, hub_running: false,
-        panes: [
-          { pane_id: 'pane_1', node_uuid: 'n1', status: 'active', cli_profile: 'claude', project_uuid: PROJECT.project_uuid, worker_mode: true },
-          { pane_id: 'pane_2', node_uuid: 'n2', status: 'active', cli_profile: 'claude', project_uuid: PROJECT.project_uuid, worker_mode: false }
-        ],
-        sessions: [
-          { pane_id: 'pane_1', session_id: 's1', alive: true, cli_profile: 'claude' },
-          { pane_id: 'pane_2', session_id: 's2', alive: true, cli_profile: 'claude' }
-        ]
-      }))
-    });
-    renderMatrix(api);
-    expect((await screen.findByTestId('pane-worker-mode-toggle-pane_1')).textContent).toContain('ON');
-    expect(screen.getByTestId('pane-worker-mode-toggle-pane_2').textContent).toContain('OFF');
-  });
-
-  it('sin pty_set_worker_mode en el puente no hay interruptor ni seccion', async () => {
-    renderMatrix(makeMatrixApi());
-    await openCli('claude', 'pane_1');
-    await screen.findByTestId('active-row-pane_1');
-    expect(screen.queryByTestId('pane-worker-mode-toggle-pane_1')).toBeNull();
-    expect(screen.queryByTestId('worker-mode-section')).toBeNull();
-  });
-});
 
 describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
   it('cada panel muestra su identidad estable corta en la franja de procedencia', async () => {
@@ -209,28 +134,20 @@ describe('SwarmTerminalMatrix: relevo entre agentes (F1.6)', () => {
   it('long_descriptions_removed_and_info_hints_present', async () => {
     const onOpenSettings = vi.fn();
     const api = makeMatrixApi({
-      pty_set_auto_relay: vi.fn(async () => ({ success: true })),
-      pty_set_worker_mode: vi.fn(async () => ({ success: true }))
+      pty_set_auto_relay: vi.fn(async () => ({ success: true }))
     });
     renderMatrix(api, { onOpenSettings });
     await openCli('claude', 'pane_1');
 
     expect(screen.queryByTestId('auto-relay-section')).toBeNull();
     expect(screen.queryByTestId('auto-relay-description')).toBeNull();
-    expect(screen.queryByTestId('worker-mode-section')).toBeNull();
-    expect(screen.queryByTestId('worker-mode-description')).toBeNull();
 
     const toggleAuto = await screen.findByTestId('pane-auto-relay-toggle-pane_1');
-    const toggleWorker = screen.getByTestId('pane-worker-mode-toggle-pane_1');
     expect(toggleAuto.getAttribute('title')).toBeNull();
-    expect(toggleWorker.getAttribute('title')).toBeNull();
 
     const hintAuto = screen.getByTestId('pane-auto-relay-hint-pane_1');
-    const hintWorker = screen.getByTestId('pane-worker-mode-hint-pane_1');
     fireEvent.click(hintAuto);
     expect(onOpenSettings).toHaveBeenNthCalledWith(1, 'terminals_relay', 'ayuda-auto-relay');
-    fireEvent.click(hintWorker);
-    expect(onOpenSettings).toHaveBeenNthCalledWith(2, 'terminals_relay', 'ayuda-modo-trabajador');
 
     // Contrato 375 px: ningún estilo en línea en ActiveTerminalRow fija un ancho > 343 px.
     const row = screen.getByTestId('active-row-pane_1');

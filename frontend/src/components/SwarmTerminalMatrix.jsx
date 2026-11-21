@@ -160,7 +160,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
     handleSetMaxPanes,
     handleSetCliPath,
     handleTogglePaneAutoRelay,
-    handleTogglePaneWorkerMode,
     handleRegisterAgyMcp,
     handleUnregisterAgyMcp,
     handleResetLoopBreaker
@@ -242,8 +241,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
           status={matrixStatus}
           autoRelay={{ available: Boolean(api?.pty_set_auto_relay) }}
           onToggleAutoRelay={(paneId) => void handleTogglePaneAutoRelay(paneId)}
-          workerMode={{ available: Boolean(api?.pty_set_worker_mode) }}
-          onToggleWorkerMode={api?.pty_set_worker_mode ? (paneId) => void handleTogglePaneWorkerMode(paneId) : undefined}
           relaySection={
             <RelayPanel api={api} projectUuid={project?.project_uuid} relay={relay} targets={relayTargets} />
           }

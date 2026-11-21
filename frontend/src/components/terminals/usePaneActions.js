@@ -57,7 +57,7 @@ function parseTrippedCase(rawCase, fallbackProjectUuid = '') {
 /**
  * Acciones imperativas sobre paneles y controles de la matriz:
  * lanzar, cerrar, pausar, redimensionar, envío de teclas, Auto-Relay,
- * modo trabajador, registro de agy y reinicio del Loop Breaker.
+ * registro de agy y reinicio del Loop Breaker.
  */
 export function usePaneActions({
   api,
@@ -178,7 +178,6 @@ export function usePaneActions({
         activitySource: sess.activity_source ?? paneMeta.activity_source ?? '',
         projectUuid: res.project_uuid ?? paneMeta.project_uuid ?? project?.project_uuid ?? '',
         autoRelayEnabled: Boolean(paneMeta.auto_relay_enabled),
-        workerMode: Boolean(paneMeta.worker_mode),
         deliveryMode: paneMeta.delivery_mode || sess.delivery_mode || 'auto'
       });
       setNotice(null);
@@ -345,31 +344,6 @@ export function usePaneActions({
     }
   }, [api, panesRef, mountedRef, patchPane, runWithAppConfirmation, showNotice]);
 
-  // F2.4: modo trabajador POR PANEL. Activarlo usa confirmacion propia recordable; apagarlo no pregunta.
-  const handleTogglePaneWorkerMode = useCallback(async (paneId) => {
-    const pane = panesRef.current[paneId];
-    if (!api?.pty_set_worker_mode || !pane || pane.workerModeBusy) return;
-    const nextEnabled = !pane.workerMode;
-    patchPane(paneId, { workerModeBusy: true });
-    try {
-      const invoke = () => api.pty_set_worker_mode(paneId, nextEnabled);
-      const res = await (nextEnabled ? runWithAppConfirmation(invoke) : invoke());
-      if (!mountedRef.current) return;
-      if (res?.success === false) {
-        showNotice(res);
-        patchPane(paneId, { workerModeBusy: false });
-        return;
-      }
-      const enabledVal = typeof res?.worker_mode === 'boolean' ? res.worker_mode : nextEnabled;
-      patchPane(paneId, { workerMode: enabledVal, workerModeBusy: false });
-    } catch (err) {
-      if (mountedRef.current) {
-        patchPane(paneId, { workerModeBusy: false });
-        showNotice({ code: 'INTERNAL_ERROR', message: err?.message || String(err) });
-      }
-    }
-  }, [api, panesRef, mountedRef, patchPane, runWithAppConfirmation, showNotice]);
-
   const handleRegisterAgyMcp = useCallback(async () => {
     if (!api?.pty_register_agy_mcp) return;
     try {
@@ -459,7 +433,6 @@ export function usePaneActions({
     handleSetMaxPanes,
     handleSetCliPath,
     handleTogglePaneAutoRelay,
-    handleTogglePaneWorkerMode,
     handleRegisterAgyMcp,
     handleUnregisterAgyMcp,
     handleResetLoopBreaker

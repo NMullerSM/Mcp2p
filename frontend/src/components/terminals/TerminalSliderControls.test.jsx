@@ -28,7 +28,6 @@ function makePane(over = {}) {
     registryStatus: 'active',
     exitCode: null,
     autoRelayEnabled: false,
-    workerMode: false,
     deliveryMode: 'auto',
     ...over
   };

@@ -65,13 +65,13 @@ describe('InfoHint', () => {
   it('shows_after_delay_on_keyboard_focus_and_hides_on_escape', () => {
     render(
       <InfoHint
-        topic="Modo trabajador"
-        text="El agente espera mensajes en su bandeja y responde solo. Gasta turnos mientras espera."
-        anchor="ayuda-modo-trabajador"
-        testId="hint-worker"
+        topic="Entrega directa"
+        text="Los mensajes llegan escritos en la terminal cuando el agente queda libre."
+        anchor="ayuda-entrega-directa"
+        testId="hint-delivery"
       />
     );
-    const btn = screen.getByTestId('hint-worker');
+    const btn = screen.getByTestId('hint-delivery');
     fireEvent.focus(btn);
 
     act(() => {
@@ -129,25 +129,25 @@ describe('InfoHint', () => {
     const onOpenSettings = vi.fn();
     render(
       <InfoHint
-        topic="Modo trabajador"
-        text="El agente espera mensajes en su bandeja y responde solo."
-        anchor="ayuda-modo-trabajador"
+        topic="Entrega directa"
+        text="Los mensajes llegan escritos en la terminal cuando el agente queda libre."
+        anchor="ayuda-entrega-directa"
         onOpenSettings={onOpenSettings}
         testId="hint-click"
       />
     );
     const btn = screen.getByTestId('hint-click');
-    expect(btn.getAttribute('aria-label')).toBe('Ayuda: Modo trabajador');
+    expect(btn.getAttribute('aria-label')).toBe('Ayuda: Entrega directa');
 
     fireEvent.pointerDown(btn, { pointerType: 'mouse' });
     fireEvent.click(btn);
-    expect(onOpenSettings).toHaveBeenNthCalledWith(1, 'terminals_relay', 'ayuda-modo-trabajador');
+    expect(onOpenSettings).toHaveBeenNthCalledWith(1, 'terminals_relay', 'ayuda-entrega-directa');
 
     fireEvent.keyDown(btn, { key: 'Enter' });
-    expect(onOpenSettings).toHaveBeenNthCalledWith(2, 'terminals_relay', 'ayuda-modo-trabajador');
+    expect(onOpenSettings).toHaveBeenNthCalledWith(2, 'terminals_relay', 'ayuda-entrega-directa');
 
     fireEvent.keyDown(btn, { key: ' ' });
-    expect(onOpenSettings).toHaveBeenNthCalledWith(3, 'terminals_relay', 'ayuda-modo-trabajador');
+    expect(onOpenSettings).toHaveBeenNthCalledWith(3, 'terminals_relay', 'ayuda-entrega-directa');
   });
 
   it('tooltip_has_role_and_aria_describedby_while_visible', () => {

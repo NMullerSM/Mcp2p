@@ -10,7 +10,6 @@ export const DELIVERY_REASON_TEXT = Object.freeze({
   DELIVERY_MODE_INBOX: 'Esta terminal recibe solo por la bandeja.',
   CLI_NOT_VERIFIED: 'Este CLI aun no esta medido: solo bandeja.',
   TARGET_ELEVATED: 'Terminal con permisos saltados: solo bandeja.',
-  AGENT_IN_INBOX_WAIT: 'El agente esta esperando en su bandeja.',
   AGENT_BUSY: 'El agente esta trabajando.',
   AGENT_PERMISSION: 'El agente espera un permiso.',
   AGENT_STATE_UNKNOWN: 'Aun no se sabe si el agente esta libre.',

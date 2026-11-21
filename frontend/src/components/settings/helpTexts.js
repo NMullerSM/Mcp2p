@@ -5,7 +5,6 @@
 
 export const HINT_TEXTS = {
   autoRelay: 'Deja avisos de tareas asignadas en la bandeja de este agente.',
-  workerMode: 'El agente espera mensajes en su bandeja y responde solo. Gasta turnos mientras espera.',
   deliveryDirect: 'Los mensajes llegan escritos en la terminal cuando el agente queda libre.'
 };
 
@@ -13,12 +12,7 @@ export const HELP_SECTIONS = [
   {
     id: 'ayuda-auto-relay',
     title: 'Auto-Relay',
-    body: 'Se activa por terminal y se recuerda en este proyecto. Deja un aviso en la bandeja del agente cuando le asignan una tarjeta del tablero. El Auto-Relay no escribe en su terminal: el agente lo recoge desde MCP.'
-  },
-  {
-    id: 'ayuda-modo-trabajador',
-    title: 'Modo trabajador',
-    body: 'Se activa por terminal. El agente espera mensajes de otros agentes en su bandeja (inbox_wait) y responde con inbox_reply. Mientras espera, gasta turnos del modelo.'
+    body: 'Se activa por terminal y se recuerda en este proyecto. Deja un aviso en la bandeja del agente cuando le asignan una tarjeta del tablero. El Auto-Relay no escribe en su terminal: el agente lo lee con inbox_next o inbox_wait cuando se lo pidas.'
   },
   {
     id: 'ayuda-entrega-directa',
