@@ -237,4 +237,16 @@ describe('CliMeasurementSettingsSection', () => {
     expect(screen.getByTestId('measure-claude').textContent).toBe('Volver a medir');
     expect(screen.queryByTestId('forget-claude')).toBeNull();
   });
+
+  it('forwards_project_uuid_when_present', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => snapshot([item()])),
+      pty_measure_cli: vi.fn(async () => ({ success: true, started: true })),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} projectUuid="proj-123" />);
+    fireEvent.click(await screen.findByTestId('measure-claude'));
+    await waitFor(() => expect(api.pty_measure_cli).toHaveBeenCalledWith('claude', 'proj-123'));
+  });
 });

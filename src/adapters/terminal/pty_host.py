@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import logging
+import math
 import os
 import select
 import shutil
@@ -133,6 +134,22 @@ class _PtySession:
 
 
 
+def _wait_fd_ready(fd: int, *, write: bool = False, timeout: float = 0.1) -> bool:
+    """Espera disponibilidad de E/S en `fd` evitando el límite FD_SETSIZE (1024) de `select.select`."""
+    poll_fn = getattr(select, "poll", None)
+    if poll_fn is not None and (sys.platform != "darwin" or fd >= 1024):
+        poller = poll_fn()
+        event = select.POLLOUT if write else select.POLLIN
+        poller.register(fd, event | select.POLLERR | select.POLLHUP)
+        timeout_ms = max(1, int(math.ceil(timeout * 1000))) if timeout > 0 else 0
+        return bool(poller.poll(timeout_ms))
+    if write:
+        _, wlist, _ = select.select([], [fd], [], timeout)
+        return bool(wlist)
+    rlist, _, _ = select.select([fd], [], [], timeout)
+    return bool(rlist)
+
+
 class PosixPtyHostConnector(PtyHostBase):
     """
     Adaptador POSIX real de `AgentTerminalPort` respaldado por `pty.openpty()`,
@@ -229,10 +246,10 @@ class PosixPtyHostConnector(PtyHostBase):
                 if fd is None:
                     break
                 try:
-                    rlist, _, _ = select.select([fd], [], [], 0.1)
+                    ready = _wait_fd_ready(fd, write=False, timeout=0.1)
                 except (OSError, ValueError):
                     break
-                if not rlist:
+                if not ready:
                     continue
 
                 eof = False
@@ -647,8 +664,7 @@ class PosixPtyHostConnector(PtyHostBase):
                         raise OSError("os.write en PTY devolvió 0 bytes")
                     total_written += n
                 except BlockingIOError:
-                    _, wlist, _ = select.select([], [fd], [], 0.5)
-                    if not wlist:
+                    if not _wait_fd_ready(fd, write=True, timeout=0.5):
                         raise TimeoutError(f"Timeout escribiendo en PTY {norm_pane}")
 
         if total_written > 0:

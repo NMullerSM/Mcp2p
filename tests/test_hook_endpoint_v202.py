@@ -642,3 +642,57 @@ def test_opencode_combined_config_keeps_mcp_server(
         assert win_combined["plugin"] == [str(win_plugin_files[0])]
     finally:
         win_host.close()
+
+
+def test_agy_hooks_use_global_hooks_json_only_with_consent_never_settings_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.adapters.terminal import mcp_injection
+
+    hooks_file = tmp_path / ".gemini" / "config" / "hooks.json"
+    hooks_file.parent.mkdir(parents=True)
+    hooks_file.write_text(json.dumps({"user-linter": {"Stop": [{"type": "command", "command": "echo hi"}]}}), encoding="utf-8")
+    monkeypatch.setattr(mcp_injection, "default_agy_hooks_path", lambda: hooks_file)
+
+    services = LaunchServices(hook_argv=lambda ev: ["/opt/mcp2p/Mcp2p", "--hook-post", ev])
+    spec_agy = _spec_with_activity(
+        "antigravity",
+        hook_install="agy_settings",
+        events={"agy.SessionStart": "session_started", "agy.PreInvocation": "turn_started", "agy.Stop": "turn_ended"},
+        session_id_field="conversationId",
+        status="verified",
+        platforms=("linux",),
+    )
+    ctx = LaunchContext(
+        spec=spec_agy,
+        platform="linux",
+        pane_slot="pane_1",
+        session_id="pane_1-agy1",
+        hub_url="http://127.0.0.1:8765/mcp",
+        request={},
+        session_file=lambda n: tmp_path / n,
+        services=services,
+    )
+
+    # Sin consentimiento: nunca pasa --settings hooks.json ni modifica hooks.json global
+    snapshot_before = hooks_file.read_text(encoding="utf-8")
+    no_consent = hooks_launch.augment(ctx)
+    assert no_consent.argv == () and no_consent.files == {}
+    assert no_consent.meta == {"hooks": "needs_consent"}
+    assert hooks_file.read_text(encoding="utf-8") == snapshot_before
+
+    # Con consentimiento explícito: añade solo "mcp2p" con respaldo y sin pasar --settings
+    with mcp_injection.global_registration_consent(True):
+        with_consent = hooks_launch.augment(ctx)
+    assert with_consent.argv == () and with_consent.files == {}
+    assert with_consent.meta == {"hooks": "installed"}
+    written = json.loads(hooks_file.read_text(encoding="utf-8"))
+    assert "user-linter" in written and "mcp2p" in written
+    assert "Stop" in written["mcp2p"] and "SessionStart" in written["mcp2p"]
+    assert hooks_file.with_name("hooks.json.mcp2p.bak").exists()
+
+    # Al revocar, quita solo "mcp2p" y conserva los hooks del usuario
+    rem = mcp_injection.unregister_agy_hooks()
+    assert rem["removed"] is True
+    after_rem = json.loads(hooks_file.read_text(encoding="utf-8"))
+    assert list(after_rem.keys()) == ["user-linter"]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.app.ui_adapters import _BaseUIAdapter
@@ -33,7 +34,7 @@ class MeasurementUIAdapter(_BaseUIAdapter):
         if self._svc is not None:
             return self._svc
         from src.adapters.terminal.cli_measurement import HeadlessCliProbe
-        from src.adapters.terminal.cli_measurement_store import binary_stamp, validate_record
+        from src.adapters.terminal.cli_measurement_store import binary_stamp, detect_cli_version, validate_record
         from src.core.services.cli_measurement_service import CliMeasurementService
 
         catalog_svc = self._catalog()
@@ -52,7 +53,7 @@ class MeasurementUIAdapter(_BaseUIAdapter):
             res = catalog_svc.resolve(cli_id)
             if not res.found or not res.path:
                 return None
-            return {"path": res.path, "version": res.version}
+            return {"path": res.path, "version": res.version or detect_cli_version(res.path)}
 
         def record_state(cli_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
             record = store.get(cli_id, platform)
@@ -60,7 +61,8 @@ class MeasurementUIAdapter(_BaseUIAdapter):
             if record is None or spec is None:
                 return "none", None
             _blocks, why = validate_record(record, spec, platform)
-            return {"ok": "measured", "stale": "stale"}.get(why, "none"), (record if why in ("ok", "stale") else None)
+            state = {"ok": "measured", "stale": "stale"}.get(why, "invalid")
+            return state, (record if why in ("ok", "stale") else None)
 
         self._svc = CliMeasurementService(
             probe_run=probe.run,
@@ -81,7 +83,27 @@ class MeasurementUIAdapter(_BaseUIAdapter):
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
-    def pty_measure_cli(self, cli_id: Any) -> Dict[str, Any]:
+    def _probe_cwd_for(self, cli_id: str, project_uuid: Any) -> Optional[Path]:
+        if cli_id != "claude":
+            return None
+        if isinstance(project_uuid, str) and project_uuid.strip():
+            db = getattr(getattr(self._bridge, "core_kernel", None), "db", None)
+            getter = getattr(db, "get_project_by_uuid", None) if db is not None else None
+            proj = getter(project_uuid.strip()) if callable(getter) else None
+            if isinstance(proj, dict):
+                for key in ("code_repo_path", "base_path"):
+                    raw = proj.get(key)
+                    if isinstance(raw, str) and raw.strip():
+                        cand = Path(raw.strip())
+                        if cand.is_dir():
+                            return cand
+        from src.runtime.paths import get_user_data_dir
+
+        sandbox = Path(get_user_data_dir()) / "cli_probe_cwd"
+        sandbox.mkdir(parents=True, exist_ok=True)
+        return sandbox
+
+    def pty_measure_cli(self, cli_id: Any, project_uuid: Any = None) -> Dict[str, Any]:
         try:
             service = self._service()
             catalog = self._catalog()
@@ -91,6 +113,7 @@ class MeasurementUIAdapter(_BaseUIAdapter):
             gate = getattr(self._bridge, "confirm_gate", None)
             if gate is None:
                 return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmación; la acción se rechaza.")
+            probe_cwd = self._probe_cwd_for(cli_id, project_uuid)
             return gate.require(
                 "cli.measure",
                 f"Medir {spec.display_name} en este equipo",
@@ -98,7 +121,7 @@ class MeasurementUIAdapter(_BaseUIAdapter):
                 "líneas y esperará su respuesta de una palabra. Gasta unos pocos tokens del modelo y puede tardar un "
                 "par de minutos. No toca tus terminales abiertas ni tu configuración. Si sale bien, se activa la "
                 "entrega directa para este CLI.",
-                lambda: service.start(cli_id),
+                lambda: service.start(cli_id, cwd=probe_cwd),
                 args_digest=f"measure:{cli_id}",
             )
         except Exception as exc:

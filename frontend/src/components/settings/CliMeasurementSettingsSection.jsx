@@ -100,7 +100,7 @@ function ProgressBlock({ running, onCancel, cancelBusy }) {
  * Medicion automatica de CLIs (WP-5d): una fila por CLI con su estado, boton «Medir» (con confirmacion
  * propia), «Olvidar» y progreso mientras hay una medicion en curso. Sin los metodos del puente no pinta nada.
  */
-export function CliMeasurementSettingsSection({ api }) {
+export function CliMeasurementSettingsSection({ api, projectUuid = null }) {
   const available = typeof api?.pty_get_cli_measurements === 'function'
     && typeof api?.pty_measure_cli === 'function'
     && typeof api?.pty_cancel_cli_measurement === 'function'
@@ -168,7 +168,10 @@ export function CliMeasurementSettingsSection({ api }) {
     setBusyKey(`measure:${item.cli_id}`);
     setFeedback(null);
     try {
-      const res = await run(() => Promise.resolve(api.pty_measure_cli(item.cli_id)).then(withConfirmation));
+      const invokeMeasure = () => (
+        projectUuid ? api.pty_measure_cli(item.cli_id, projectUuid) : api.pty_measure_cli(item.cli_id)
+      );
+      const res = await run(() => Promise.resolve(invokeMeasure()).then(withConfirmation));
       if (!mountedRef.current) return;
       if (res?.success === false) {
         // Rechazar el dialogo no es un error: no se muestra mensaje.

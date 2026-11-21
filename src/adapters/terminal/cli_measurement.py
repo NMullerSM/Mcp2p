@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from src.adapters.terminal.cli_catalog import CliCatalog, CliCatalogService
+from src.adapters.terminal.hook_configs import agy_hooks_config
 from src.core.domain.cli_measurement import (
     DEFAULT_SUBMIT_DELAY_MS,
     HOOK_INSTALL_BY_CLI,
@@ -33,6 +34,7 @@ from src.core.domain.cli_measurement import (
     HookEvent,
     normalize_event,
     prompt_lines,
+    strip_ansi,
 )
 
 logger = logging.getLogger("mcp2p.adapters.terminal.cli_measurement")
@@ -65,10 +67,15 @@ def _session_fields(payload: Any, prefix: str = "", depth: int = 0) -> List[str]
     for key, val in payload.items():
         dotted = f"{prefix}.{key}" if prefix else str(key)
         if str(key).lower() in _SESSION_KEYS and isinstance(val, str) and val.strip():
-            out.append(str(key))
+            out.append(dotted)
         elif isinstance(val, Mapping):
             out.extend(_session_fields(val, dotted, depth + 1))
     return out
+
+
+def _looks_like_trust_prompt(screen_text: str) -> bool:
+    collapsed = re.sub(r"[^a-z]+", "", strip_ansi(screen_text).lower())
+    return "trustthisfolder" in collapsed or "projectyoucreatedoroneyoutrust" in collapsed
 
 
 def _payload_type(payload: Any) -> str:
@@ -101,38 +108,101 @@ class HookListener:
         outer = self
 
         class _Handler(BaseHTTPRequestHandler):
-            def _reply(self, status: int) -> None:
-                body = b'{"ok":true}' if status == 200 else b'{"ok":false}'
+            def _reply(
+                self,
+                status: int,
+                body: bytes = b'{"ok":true}',
+                *,
+                extra_headers: Optional[Sequence[tuple[str, str]]] = None,
+            ) -> None:
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                if body:
+                    self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                for hk, hv in extra_headers or ():
+                    self.send_header(hk, hv)
                 self.end_headers()
-                self.wfile.write(body)
+                if body:
+                    self.wfile.write(body)
 
-            def do_POST(self) -> None:  # noqa: N802
-                if not self.path.startswith("/hooks/v1/"):
-                    self._reply(404)
-                    return
-                name = self.path[len("/hooks/v1/"):].split("?", 1)[0]
-                if _EVENT_RE.fullmatch(name) is None:
-                    self._reply(400)
-                    return
-                if not hmac.compare_digest(self.headers.get("Authorization") or "", f"Bearer {outer.token}"):
-                    self._reply(401)
-                    return
+            def _authorized(self) -> bool:
+                return hmac.compare_digest(self.headers.get("Authorization") or "", f"Bearer {outer.token}")
+
+            def _read_json_body(self) -> Optional[Any]:
                 try:
                     length = int(self.headers.get("Content-Length") or "0")
                 except ValueError:
-                    self._reply(400)
-                    return
+                    self._reply(400, b'{"ok":false}')
+                    return None
                 if length < 0 or length > _MAX_BODY_BYTES:
-                    self._reply(413)
-                    return
+                    self._reply(413, b'{"ok":false}')
+                    return None
                 raw = self.rfile.read(length) if length else b""
                 try:
-                    payload = json.loads(raw.decode("utf-8", errors="replace").strip() or "{}")
+                    return json.loads(raw.decode("utf-8", errors="replace").strip() or "{}")
                 except ValueError:
-                    self._reply(400)
+                    self._reply(400, b'{"ok":false}')
+                    return None
+
+            def _handle_mcp_post(self) -> None:
+                payload = self._read_json_body()
+                if payload is None:
+                    return
+                if not isinstance(payload, Mapping) or "id" not in payload or payload.get("id") is None:
+                    self._reply(202, b"")
+                    return
+                req_id = payload.get("id")
+                method = str(payload.get("method") or "")
+                params = payload.get("params") if isinstance(payload.get("params"), Mapping) else {}
+                if method == "initialize":
+                    result: Dict[str, Any] = {
+                        "protocolVersion": str(params.get("protocolVersion") or "2024-11-05"),
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "mcp2p-probe", "version": "2.0.2"},
+                    }
+                    reply_obj: Dict[str, Any] = {"jsonrpc": "2.0", "id": req_id, "result": result}
+                elif method == "tools/list":
+                    reply_obj = {"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}}
+                elif method == "ping":
+                    reply_obj = {"jsonrpc": "2.0", "id": req_id, "result": {}}
+                else:
+                    reply_obj = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32601, "message": f"Method not found: {method}"},
+                    }
+                self._reply(200, json.dumps(reply_obj, ensure_ascii=False).encode("utf-8"))
+
+            def do_GET(self) -> None:  # noqa: N802
+                clean_path = self.path.split("?", 1)[0]
+                if clean_path == "/mcp":
+                    if not self._authorized():
+                        self._reply(401, b'{"ok":false}')
+                        return
+                    self._reply(405, b'{"ok":false}', extra_headers=(("Allow", "POST"),))
+                    return
+                self._reply(404, b'{"ok":false}')
+
+            def do_POST(self) -> None:  # noqa: N802
+                clean_path = self.path.split("?", 1)[0]
+                if clean_path == "/mcp":
+                    if not self._authorized():
+                        self._reply(401, b'{"ok":false}')
+                        return
+                    self._handle_mcp_post()
+                    return
+                if not clean_path.startswith("/hooks/v1/"):
+                    self._reply(404, b'{"ok":false}')
+                    return
+                name = clean_path[len("/hooks/v1/"):]
+                if _EVENT_RE.fullmatch(name) is None:
+                    self._reply(400, b'{"ok":false}')
+                    return
+                if not self._authorized():
+                    self._reply(401, b'{"ok":false}')
+                    return
+                payload = self._read_json_body()
+                if payload is None:
                     return
                 event = HookEvent(
                     event=name,
@@ -142,7 +212,7 @@ class HookListener:
                 )
                 with outer._lock:
                     outer._events.append(event)
-                self._reply(200)
+                self._reply(200, b'{"ok":true}')
 
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 return None
@@ -171,7 +241,7 @@ class MeasuringCatalogService(CliCatalogService):
     """Catálogo que, SOLO para la terminal de prueba, trata `activity` del CLI como verificado para que el conector
     prepare los hooks por el mismo camino que producción."""
 
-    def __init__(self, base: CliCatalogService, cli_id: str) -> None:
+    def __init__(self, base: CliCatalogService, cli_id: str, extra_launch_flags: Sequence[str] = ()) -> None:
         super().__init__(
             base._settings,
             repo_catalog_path=base._repo_path,
@@ -185,6 +255,7 @@ class MeasuringCatalogService(CliCatalogService):
             include_measurements=False,  # medimos desde cero, sin fiarnos de lo medido antes
         )
         self._probe_cli = cli_id
+        self._extra_flags = tuple(str(x) for x in extra_launch_flags)
 
     def catalog(self) -> CliCatalog:
         cat = super().catalog()
@@ -198,7 +269,8 @@ class MeasuringCatalogService(CliCatalogService):
             hook_install=HOOK_INSTALL_BY_CLI.get(self._probe_cli, "none"),
         )
         profiles = dict(cat.profiles)
-        profiles[self._probe_cli] = replace(spec, activity=activity)
+        launch_flags = tuple(spec.launch_flags) + self._extra_flags if self._extra_flags else spec.launch_flags
+        profiles[self._probe_cli] = replace(spec, activity=activity, launch_flags=launch_flags)
         return CliCatalog(catalog_version=cat.catalog_version, profiles=profiles, warnings=cat.warnings)
 
 
@@ -258,11 +330,18 @@ class HeadlessCliProbe:
         cancel: threading.Event,
         step_offset: int = 0,
         steps_total: int = STEPS_PER_ATTEMPT,
+        cwd: Optional[Path] = None,
     ) -> Attempt:
         t = self._timings
         work_dir = Path(tempfile.mkdtemp(prefix="mcp2p-medicion-"))
-        cwd = work_dir / "cwd"
-        cwd.mkdir()
+        if cli_id == "antigravity" or cwd is None:
+            probe_cwd = work_dir / "cwd"
+            probe_cwd.mkdir()
+        else:
+            probe_cwd = Path(cwd)
+            if not probe_cwd.is_dir():
+                shutil.rmtree(work_dir, ignore_errors=True)
+                return Attempt(paste_mode=paste_mode, spawn_ok=False)
         listener = HookListener(self._clock_ms)
         conn: Any = None
         screen: List[str] = []
@@ -290,14 +369,33 @@ class HeadlessCliProbe:
         try:
             step(1, "Preparando la prueba")
             listener.start()
-            measuring = MeasuringCatalogService(self._catalog, cli_id)
             hook_argv = _hook_argv_factory()
+            extra_flags: List[str] = []
+            if cli_id == "antigravity" and self._command is None:
+                # agy rechaza `"hooks"` en --settings; descubre hooks en .agents/hooks.json y acepta trustedWorkspaces
+                # solo para esta sesión en --settings. Todo vive dentro del temporal de la sonda.
+                agents_dir = probe_cwd / ".agents"
+                agents_dir.mkdir(exist_ok=True)
+                hooks_file = agents_dir / "hooks.json"
+                hooks_file.write_text(
+                    json.dumps(agy_hooks_config(hook_argv, self._catalog.platform), indent=2, ensure_ascii=False)
+                    + "\n",
+                    encoding="utf-8",
+                )
+                settings_file = work_dir / "agy_settings.json"
+                settings_file.write_text(
+                    json.dumps({"trustedWorkspaces": [str(probe_cwd)]}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                settings_file.chmod(0o600)
+                extra_flags.extend(["--settings", str(settings_file)])
+            measuring = MeasuringCatalogService(self._catalog, cli_id, extra_launch_flags=extra_flags)
             conn = self._factory(measuring, work_dir, hook_argv)
             spawn = conn.spawn_session(
                 PROBE_PANE,
                 cli_profile=cli_id,
                 command=self._command,
-                cwd=cwd,
+                cwd=probe_cwd,
                 hub_url=listener.url,
                 session_token=listener.token,
                 use_trampoline=False,
@@ -313,10 +411,12 @@ class HeadlessCliProbe:
                 alive = pump()
                 if cursor != before:
                     last_output = time.monotonic()
+                    if _looks_like_trust_prompt("".join(screen)):
+                        return Attempt(paste_mode=paste_mode, spawn_ok=False, trust_prompt_cwd=str(probe_cwd))
                 now = time.monotonic()
-                if attempt_events():
-                    break
                 if not alive:
+                    if _looks_like_trust_prompt("".join(screen)):
+                        return Attempt(paste_mode=paste_mode, spawn_ok=False, trust_prompt_cwd=str(probe_cwd))
                     return Attempt(paste_mode=paste_mode, spawn_ok=False)
                 if now - started >= t.startup_min_s and now - last_output >= t.startup_quiet_s:
                     break

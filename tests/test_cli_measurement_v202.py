@@ -455,3 +455,105 @@ def test_bridge_measured_cli_shows_verified_in_delivery_overview(bridge, tmp_pat
     assert bridge.pty_forget_cli_measurement("claude")["success"] is True
     again = bridge.relay_get_delivery_overview()
     assert not [r for r in again["verified"] if r["cli_id"] == "claude" and r["verified"]]
+
+
+def test_agy_session_start_and_workspace_trust_domain_rules(env):
+    att = Attempt(
+        "bracketed",
+        True,
+        events=(
+            ev("agy.SessionStart", 10, sess=("conversationId",)),
+            ev("agy.PreInvocation", 1100),
+            ev("agy.Stop", 2000),
+        ),
+        enter_at_ms=1000,
+        screen_after_paste="Prueba LISTO",
+    )
+    res = evaluate_attempt(att)
+    assert res.ok and res.confirm_event == "turn_started"
+    assert res.mapped_events == {
+        "agy.SessionStart": "session_started",
+        "agy.PreInvocation": "turn_started",
+        "agy.Stop": "turn_ended",
+    }
+    assert res.session_id_field == "conversationId"
+
+    env.attempts = [Attempt("bracketed", False, trust_prompt_cwd="/tmp/untrusted")]
+    env.svc.start("claude")
+    env.svc.wait()
+    it = item(env.svc.status())
+    assert it["state"] == "failed" and it["reason_code"] == "NEEDS_WORKSPACE_TRUST"
+    assert "/tmp/untrusted" in it["reason_text"]
+    assert env.calls == ["bracketed"]
+
+
+def test_probe_session_fields_nested_and_hook_listener_mcp_rpc():
+    import urllib.error
+    import urllib.request
+    from src.adapters.terminal.cli_measurement import HookListener, _looks_like_trust_prompt, _session_fields
+
+    assert _session_fields({"event": {"type": "session.idle", "properties": {"sessionID": "ses_123"}}}) == [
+        "event.properties.sessionID"
+    ]
+    assert _looks_like_trust_prompt("Quick safety check: Yes, I trust this folder")
+    assert _looks_like_trust_prompt("Yes,Itrustthisfolder")
+    assert not _looks_like_trust_prompt("Prueba de MCP2P ab12. LISTO")
+
+    listener = HookListener(lambda: 1000)
+    listener.start()
+    try:
+        headers = {"Authorization": f"Bearer {listener.token}", "Content-Type": "application/json"}
+        req_init = urllib.request.Request(
+            listener.url,
+            data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req_init, timeout=3) as resp:
+            assert resp.status == 200
+            body = json.loads(resp.read().decode())
+            assert body["result"]["serverInfo"]["name"] == "mcp2p-probe"
+
+        req_tools = urllib.request.Request(
+            listener.url,
+            data=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req_tools, timeout=3) as resp:
+            assert json.loads(resp.read().decode())["result"] == {"tools": []}
+
+        req_notif = urllib.request.Request(
+            listener.url,
+            data=json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode(),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req_notif, timeout=3) as resp:
+            assert resp.status == 202
+
+        req_bad = urllib.request.Request(
+            listener.url,
+            data=b'{"jsonrpc":"2.0","id":3,"method":"initialize"}',
+            headers={"Authorization": "Bearer wrong", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req_bad, timeout=3)
+        assert exc.value.code == 401
+    finally:
+        listener.stop()
+
+
+def test_measurement_adapter_resolves_project_cwd_only_for_claude(bridge, tmp_path, monkeypatch):
+    monkeypatch.setattr("src.runtime.paths.get_user_data_dir", lambda: str(tmp_path / "userdata"))
+    proj = bridge.db.create_project("Claude Trust", str(tmp_path / "proj"))
+    repo_dir = Path(proj["code_repo_path"])
+    assert repo_dir.is_dir()
+
+    resolved_claude = bridge.measurement_ui._probe_cwd_for("claude", proj["project_uuid"])
+    assert resolved_claude == repo_dir
+    assert bridge.measurement_ui._probe_cwd_for("opencode", proj["project_uuid"]) is None
+    assert bridge.measurement_ui._probe_cwd_for("antigravity", proj["project_uuid"]) is None
+    fallback = bridge.measurement_ui._probe_cwd_for("claude", None)
+    assert fallback == tmp_path / "userdata" / "cli_probe_cwd" and fallback.is_dir()

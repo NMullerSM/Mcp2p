@@ -907,8 +907,8 @@ class ApiBridge:
     def pty_get_cli_measurements(self) -> Dict[str, Any]:
         return self.measurement_ui.pty_get_cli_measurements()
 
-    def pty_measure_cli(self, cli_id: Any) -> Dict[str, Any]:
-        return self.measurement_ui.pty_measure_cli(cli_id=cli_id)
+    def pty_measure_cli(self, cli_id: Any, project_uuid: Any = None) -> Dict[str, Any]:
+        return self.measurement_ui.pty_measure_cli(cli_id=cli_id, project_uuid=project_uuid)
 
     def pty_cancel_cli_measurement(self) -> Dict[str, Any]:
         return self.measurement_ui.pty_cancel_cli_measurement()

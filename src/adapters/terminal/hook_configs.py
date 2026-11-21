@@ -4,7 +4,9 @@ Funciones 100% puras y sin I/O ni estado global:
 - `hook_command_argv`: construye el comando del cliente mínimo (`--hook-post` congelado o `hook_client.py` en fuentes).
 - `command_line`: cita argumentos con `shlex.join` (POSIX) o `subprocess.list2cmdline` (`win32`).
 - `claude_settings`: estructura `--settings` de Claude Code con `Notification` y sus *matchers*.
-- `agy_settings`: estructura tentativa para `agy --settings` (forma POR VERIFICAR en WP-5b M1).
+- `agy_hooks_config` (alias `agy_settings`): estructura `hooks.json` de Antigravity (`agy` 1.5.14: objeto con clave
+  nombrada `"mcp2p"`, listas planas para `SessionStart`/`PreInvocation`/`PostInvocation`/`Stop` y `matcher` + `hooks`
+  para `PostToolUse`).
 - `codex_notify_args`: argumentos `-c notify=[...]` con cadenas literales TOML (POR VERIFICAR en WP-5b M1).
 - `opencode_plugin_source` / `opencode_config_with_plugin`: plugin JS para OpenCode y fusión no destructiva con `mcp`.
 """
@@ -30,7 +32,10 @@ CLAUDE_SIMPLE_EVENTS = (
     "PostToolUse",
 )
 CLAUDE_NOTIFICATION_MATCHERS = ("permission_prompt", "idle_prompt")
-AGY_HOOK_EVENTS = ("PreInvocation", "PostInvocation", "PreToolUse", "PostToolUse", "Stop")
+AGY_HOOK_SECTION_NAME = "mcp2p"
+AGY_SIMPLE_EVENTS = ("SessionStart", "PreInvocation", "PostInvocation", "Stop")
+AGY_TOOL_EVENTS = ("PostToolUse",)
+AGY_HOOK_EVENTS = (*AGY_SIMPLE_EVENTS, *AGY_TOOL_EVENTS)
 
 
 def _validate_event(event: str) -> str:
@@ -93,13 +98,21 @@ def claude_settings(hook_argv: Callable[[str], List[str]], platform: str) -> Dic
     return {"hooks": hooks}
 
 
-def agy_settings(hook_argv: Callable[[str], List[str]], platform: str) -> Dict[str, Any]:
-    """Genera la configuración tentativa para `agy --settings <archivo>` (forma POR VERIFICAR en WP-5b M1)."""
-    hooks: Dict[str, List[Dict[str, Any]]] = {}
-    for ev in AGY_HOOK_EVENTS:
+def agy_hooks_config(hook_argv: Callable[[str], List[str]], platform: str) -> Dict[str, Any]:
+    """Genera `hooks.json` para Antigravity (`agy` 1.5.14; `--settings` rechaza la clave `hooks`)."""
+    section: Dict[str, Any] = {}
+    for ev in AGY_SIMPLE_EVENTS:
         cmd = command_line(hook_argv(f"agy.{ev}"), platform)
-        hooks[ev] = [_command_entry(cmd, timeout=5)]
-    return {"hooks": hooks}
+        section[ev] = [{"type": "command", "command": cmd, "timeout": 5}]
+    for ev in AGY_TOOL_EVENTS:
+        cmd = command_line(hook_argv(f"agy.{ev}"), platform)
+        section[ev] = [{"matcher": "*", "hooks": [{"type": "command", "command": cmd, "timeout": 5}]}]
+    return {AGY_HOOK_SECTION_NAME: section}
+
+
+def agy_settings(hook_argv: Callable[[str], List[str]], platform: str) -> Dict[str, Any]:
+    """Alias compatible hacia `agy_hooks_config` (esquema `hooks.json` de `agy` 1.5.14)."""
+    return agy_hooks_config(hook_argv, platform)
 
 
 def _toml_literal_string(value: str) -> str:

@@ -892,6 +892,18 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             except Exception as exc:
                 logger.warning("No se pudo recordar el consentimiento del registro de agy: %s", exc)
 
+    def _agy_activity_verified(self) -> bool:
+        try:
+            svc = self._catalog_service()
+            spec = svc.get_spec("antigravity")
+            return bool(spec is not None and spec.capability_verified("activity", svc.platform))
+        except Exception:
+            return False
+
+    def _agy_hook_argv(self):
+        fn = getattr(self.launch_services, "hook_argv", None)
+        return fn if callable(fn) else None
+
     def _confirm_agy_registration(self) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         """Dialogo nativo con el archivo global y la entrada EXACTA. Devuelve `(error|None, estado)`."""
         state = _mcp_injection.agy_registration_state()
@@ -906,6 +918,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             f"{state.get('path')}\n\nEntrada que se escribira (no lleva token):\n\n{shown}\n\n"
             "Se guarda una copia del original en mcp_config.json.mcp2p.bak la primera vez y puede quitarlo cuando quiera."
         )
+        if self._agy_activity_verified():
+            hooks_path = _mcp_injection.default_agy_hooks_path()
+            message += (
+                f"\n\nTambién registrará la sección «mcp2p» en {hooks_path} para detectar el estado del agente "
+                "(se quita al revocar el registro)."
+            )
         if replace_manual:
             message += (
                 "\n\nATENCION: ya existe una entrada 'mcp2p' manual que NO usa --hub-proxy-only (puede abrir su base "
@@ -915,7 +933,7 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         return self._confirm_native("Registrar MCP2P en Antigravity", message), state
 
     def _agy_entry_matches_current(self, state: Optional[Dict[str, Any]] = None) -> bool:
-        """True solo si `agy_registration_state()` es `managed` y la entrada coincide con `build_agy_entry()`."""
+        """True solo si `agy_registration_state()` es `managed`, coincide con `build_agy_entry()` y hooks al día."""
         st = state if state is not None else _mcp_injection.agy_registration_state()
         if st.get("state") != "managed":
             return False
@@ -931,7 +949,12 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if not isinstance(existing, dict):
                 return False
             desired = _mcp_injection.build_agy_entry()
-            return set(existing.keys()) == set(desired.keys()) and _mcp_injection._same_launch(existing, desired)
+            if not (set(existing.keys()) == set(desired.keys()) and _mcp_injection._same_launch(existing, desired)):
+                return False
+            if self._agy_activity_verified():
+                svc = self._catalog_service()
+                return _mcp_injection.agy_hooks_registered(self._agy_hook_argv(), svc.platform)
+            return True
         except Exception:
             return False
 
@@ -980,6 +1003,9 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
             if not res.get("registered"):
                 return _fail("AGY_REGISTRATION_FAILED", "No se pudo registrar MCP2P en Antigravity.",
                              reason=res.get("reason"), path=res.get("path"))
+            if self._agy_activity_verified():
+                svc = self._catalog_service()
+                _mcp_injection.ensure_agy_hooks_registered(self._agy_hook_argv(), svc.platform)
             self._set_agy_consent_state("granted")
             return {"success": True, "code": "OK", "message": "MCP2P registrado en Antigravity. Abra el panel de nuevo.",
                     "path": res.get("path"), "managed": bool(res.get("managed")),
@@ -992,7 +1018,8 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         try:
             self._set_agy_consent_state("declined")
             res = _mcp_injection.unregister_agy_mcp()
-            if res.get("removed"):
+            hooks_res = _mcp_injection.unregister_agy_hooks()
+            if res.get("removed") or hooks_res.get("removed"):
                 return {"success": True, "code": "OK", "removed": True, "path": res.get("path"),
                         "message": "MCP2P quitado de la configuracion de Antigravity."}
             if res.get("reason") in ("not_registered", "not_managed"):

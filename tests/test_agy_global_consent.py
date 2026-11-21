@@ -48,6 +48,7 @@ def agy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("MCP2P_MEASUREMENTS_FILE", str(tmp_path / "measurements.json"))
     monkeypatch.delenv("MCP2P_TEST_AUTO_CONFIRM", raising=False)  # estos tests SI pasan por el dialogo
     monkeypatch.setattr("src.app.ui_adapters.extensions_lab_ui.is_unsupported_terminal_platform", lambda: False)
     fake_agy = _install_fake_agy(home)
@@ -225,3 +226,54 @@ def test_revoke_leaves_a_manual_entry_alone(agy) -> None:
     res = agy["bridge"].pty_unregister_agy_mcp()
     assert res["success"] is True and res["removed"] is False and res["reason"] == "not_managed"
     assert cfg.read_bytes() == snapshot
+
+
+def test_verified_agy_registers_and_revokes_hooks_json_alongside_mcp_config(agy) -> None:
+    from src.adapters.terminal.cli_measurement_store import MeasurementStore
+    from src.core.domain.cli_measurement import Attempt, HookEvent, build_record, evaluate_attempt
+
+    plat = "win32" if sys.platform == "win32" else "linux"
+    fake_agy = agy["home"] / ".local" / "bin" / ("agy.cmd" if plat == "win32" else "agy")
+    st = os.stat(fake_agy)
+    ev = evaluate_attempt(
+        Attempt(
+            "bracketed",
+            True,
+            events=(
+                HookEvent("agy.SessionStart", 10, session_fields=("conversationId",)),
+                HookEvent("agy.PreInvocation", 1100, session_fields=("conversationId",)),
+                HookEvent("agy.Stop", 2000, session_fields=("conversationId",)),
+            ),
+            enter_at_ms=1000,
+            screen_after_paste="Prueba LISTO",
+        )
+    )
+    assert ev.ok
+    rec = build_record(
+        cli_id="antigravity",
+        platform=plat,
+        today="2026-11-21",
+        cli_version="1.5.14",
+        binary_path=str(fake_agy),
+        binary_mtime_ns=st.st_mtime_ns,
+        binary_size=st.st_size,
+        result=ev,
+        paste_mode="bracketed",
+    )
+    store = agy["bridge"].extensions_ui._catalog_service().measurement_store()
+    store.put(rec)
+    hooks_cfg: Path = agy["home"] / ".gemini" / "config" / "hooks.json"
+
+    dialog = Dialog(True)
+    agy["bridge"].confirmations.dialog = dialog
+    res = agy["bridge"].pty_register_agy_mcp()
+    assert res["success"] is True
+    assert str(hooks_cfg) in dialog.shown[0]
+    assert agy["cfg"].is_file() and hooks_cfg.is_file()
+    hooks_data = json.loads(hooks_cfg.read_text(encoding="utf-8"))
+    assert "mcp2p" in hooks_data and "Stop" in hooks_data["mcp2p"]
+
+    unreg = agy["bridge"].pty_unregister_agy_mcp()
+    assert unreg["success"] is True and unreg["removed"] is True
+    assert "mcp2p" not in json.loads(agy["cfg"].read_text(encoding="utf-8")).get("mcpServers", {})
+    assert "mcp2p" not in json.loads(hooks_cfg.read_text(encoding="utf-8"))

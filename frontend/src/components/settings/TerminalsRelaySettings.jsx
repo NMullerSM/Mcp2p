@@ -18,7 +18,7 @@ const SLOT_COMPONENTS = {
  * Pestaña «Terminales y relevo» de Ajustes: reúne la ayuda veraz de cada mecanismo
  * con anclas fijas y reserva los huecos de configuración para los paquetes de la ola 2.
  */
-export function TerminalsRelaySettings({ api, initialAnchor = null }) {
+export function TerminalsRelaySettings({ api, initialAnchor = null, projectUuid = null }) {
   const sectionRefs = useRef({});
   const headingRefs = useRef({});
 
@@ -99,7 +99,7 @@ export function TerminalsRelaySettings({ api, initialAnchor = null }) {
             </p>
             {section.slotId && SlotComponent && (
               <div id={section.slotId} data-testid={section.slotId}>
-                <SlotComponent api={api} />
+                <SlotComponent api={api} projectUuid={projectUuid} />
               </div>
             )}
           </section>

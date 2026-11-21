@@ -1337,7 +1337,11 @@ export function SettingsDrawer({
 
           {/* TAB 2b: Terminales y relevo (ayuda y preferencias 2.0.2) */}
           {activeTab === 'terminals_relay' && (
-            <TerminalsRelaySettings api={api} initialAnchor={initialAnchor} />
+            <TerminalsRelaySettings
+              api={api}
+              initialAnchor={initialAnchor}
+              projectUuid={activeProject?.project_uuid || null}
+            />
           )}
 
           {/* TAB 3: GitHub (Dual Auth: PAT y gh CLI + Git Identity) */}

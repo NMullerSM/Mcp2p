@@ -249,3 +249,37 @@ def test_stale_id_check_happens_under_the_write_lock_winpty() -> None:
     assert lock_at < guard_at < write_at
     indent = lambda s: len(s) - len(s.lstrip())  # noqa: E731
     assert indent(guard_line) > indent(lock_line)
+
+
+@posix_only
+def test_pty_reader_handles_fd_above_fd_setsize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regresión FD_SETSIZE (fd >= 1024): `_reader_loop` y `send_input` no deben caer con `ValueError`."""
+    import fcntl
+    import pty as pty_mod
+    import resource
+
+    soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft <= 1040:
+        pytest.skip(f"RLIMIT_NOFILE={soft} insuficiente para probar fd >= 1024")
+
+    real_openpty = pty_mod.openpty
+    duped_fds: list[int] = []
+
+    def _high_fd_openpty():
+        m_fd, s_fd = real_openpty()
+        high_m = fcntl.fcntl(m_fd, fcntl.F_DUPFD, 1024)
+        os.close(m_fd)
+        duped_fds.append(high_m)
+        return high_m, s_fd
+
+    monkeypatch.setattr(pty_mod, "openpty", _high_fd_openpty)
+    out = tmp_path / "high_fd_stdin.txt"
+    host = PosixPtyHostConnector(max_panes=4)
+    try:
+        res = _spawn_dump(host, out)
+        assert duped_fds and duped_fds[0] >= 1024
+        wr = host.send_input(1, "HIGH_FD_OK\n", expected_session_id=res["session_id"])
+        assert wr["success"] is True, wr
+        _wait_file_contains(out, "HIGH_FD_OK")
+    finally:
+        host.close()

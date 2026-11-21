@@ -13,6 +13,7 @@ Garantías:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import select
@@ -72,7 +73,14 @@ def _read_stdin_posix(fd: int, max_bytes: int, timeout_s: float) -> bytes:
         if remaining <= 0:
             break
         try:
-            ready, _, _ = select.select([fd], [], [], remaining)
+            poll_fn = getattr(select, "poll", None)
+            if poll_fn is not None and (sys.platform != "darwin" or fd >= 1024):
+                poller = poll_fn()
+                poller.register(fd, select.POLLIN | select.POLLERR | select.POLLHUP)
+                ready = bool(poller.poll(max(1, int(math.ceil(remaining * 1000)))))
+            else:
+                rlist, _, _ = select.select([fd], [], [], remaining)
+                ready = bool(rlist)
         except (InterruptedError, ValueError, OSError):
             break
         if not ready:

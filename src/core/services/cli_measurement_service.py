@@ -18,6 +18,7 @@ from src.core.domain.cli_measurement import (
     AttemptResult,
     build_record,
     choose_best,
+    clean_version,
     evaluate_attempt,
     reason_text,
 )
@@ -105,6 +106,8 @@ class CliMeasurementService:
                 if record is not None:
                     item["measured_at"] = record.get("measured_on")
                     item["cli_version"] = record.get("cli_version") or None
+            elif state == "invalid":
+                item.update(state="failed", reason_code="RECORD_INVALID", reason_text=reason_text("RECORD_INVALID"))
             failure = last.get(cli_id)
             if failure is not None and item["state"] != "measured":
                 item.update(state="failed", reason_code=failure["reason_code"], reason_text=failure["reason_text"])
@@ -113,7 +116,7 @@ class CliMeasurementService:
 
     # -- acciones --------------------------------------------------------------------------------------------------
 
-    def start(self, cli_id: Any) -> Dict[str, Any]:
+    def start(self, cli_id: Any, *, cwd: Optional[Any] = None) -> Dict[str, Any]:
         if not isinstance(cli_id, str) or cli_id not in MEASURABLE_CLIS:
             return _fail("UNSUPPORTED_CLI", reason_text("UNSUPPORTED_CLI"))
         resolved = self._resolve(cli_id)
@@ -133,7 +136,7 @@ class CliMeasurementService:
             }
             self._last.pop(cli_id, None)
             self._thread = threading.Thread(
-                target=self._run, args=(cli_id, resolved), name=f"mcp2p-measure-{cli_id}", daemon=True
+                target=self._run, args=(cli_id, resolved, cwd), name=f"mcp2p-measure-{cli_id}", daemon=True
             )
             thread = self._thread
         thread.start()
@@ -166,9 +169,9 @@ class CliMeasurementService:
             if self._running is not None:
                 self._running.update(step=step, steps_done=min(done, total), steps_total=total, message=message)
 
-    def _run(self, cli_id: str, resolved: Dict[str, Any]) -> None:
+    def _run(self, cli_id: str, resolved: Dict[str, Any], cwd: Optional[Any] = None) -> None:
         try:
-            self._measure(cli_id, resolved)
+            self._measure(cli_id, resolved, cwd=cwd)
         except Exception as exc:  # nunca deja la medición «en curso» para siempre
             logger.warning("Fallo la medición de %s", cli_id, exc_info=True)
             self._fail_run(cli_id, "SPAWN_FAILED", f"La medición falló: {exc}")
@@ -180,18 +183,20 @@ class CliMeasurementService:
         with self._lock:
             self._last[cli_id] = {"reason_code": code, "reason_text": text or reason_text(code)}
 
-    def _measure(self, cli_id: str, resolved: Dict[str, Any]) -> None:
+    def _measure(self, cli_id: str, resolved: Dict[str, Any], cwd: Optional[Any] = None) -> None:
         results: List[Tuple[str, AttemptResult]] = []
         modes = ["bracketed", "single_line"]
         for index, mode in enumerate(modes):
-            attempt = self._probe_run(
-                cli_id,
-                paste_mode=mode,
-                progress=self._progress,
-                cancel=self._cancel,
-                step_offset=index * 5,
-                steps_total=STEPS_TOTAL,
-            )
+            probe_kw: Dict[str, Any] = {
+                "paste_mode": mode,
+                "progress": self._progress,
+                "cancel": self._cancel,
+                "step_offset": index * 5,
+                "steps_total": STEPS_TOTAL,
+            }
+            if cwd is not None:
+                probe_kw["cwd"] = cwd
+            attempt = self._probe_run(cli_id, **probe_kw)
             result = evaluate_attempt(attempt)
             results.append((mode, result))
             if result.ok or result.reason_code not in RETRY_WITH_SINGLE_LINE:
@@ -201,9 +206,19 @@ class CliMeasurementService:
             self._fail_run(cli_id, "SPAWN_FAILED")
             return
         if not best.ok:
-            self._fail_run(cli_id, best.reason_code or "TIMEOUT")
+            code = best.reason_code or "TIMEOUT"
+            detail = (
+                f"El CLI pidió confirmar que confía en «{best.detail}». Ábrelo ahí una vez, "
+                "acepta «Yes, I trust this folder» y vuelve a medir."
+                if code == "NEEDS_WORKSPACE_TRUST" and best.detail
+                else None
+            )
+            self._fail_run(cli_id, code, detail)
             return
         path = str(resolved.get("path") or "")
+        if not clean_version(resolved.get("version")):
+            self._fail_run(cli_id, "VERSION_UNKNOWN")
+            return
         stamp = self._stamp(path)
         if not path or stamp is None:
             self._fail_run(cli_id, "CLI_NOT_INSTALLED")

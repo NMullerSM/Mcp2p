@@ -7,14 +7,18 @@ import sys
 from typing import TYPE_CHECKING, Any, Dict
 
 from src.adapters.terminal.hook_configs import (
-    agy_settings,
     claude_settings,
     codex_notify_args,
     hook_command_argv,
     opencode_config_with_plugin,
     opencode_plugin_source,
 )
-from src.adapters.terminal.mcp_injection import CONFIG_FILENAME
+from src.adapters.terminal.mcp_injection import (
+    CONFIG_FILENAME,
+    agy_hooks_registered,
+    ensure_agy_hooks_registered,
+    has_global_registration_consent,
+)
 
 if TYPE_CHECKING:
     from src.adapters.terminal.launch_augment import LaunchAddition, LaunchContext
@@ -39,12 +43,8 @@ def augment(ctx: "LaunchContext") -> "LaunchAddition":
     activity_cfg = getattr(ctx.spec, "activity", None) or {}
     hook_install = str(activity_cfg.get("hook_install") or "none")
 
-    if hook_install in ("claude_settings", "agy_settings"):
-        cfg = (
-            claude_settings(hook_argv, ctx.platform)
-            if hook_install == "claude_settings"
-            else agy_settings(hook_argv, ctx.platform)
-        )
+    if hook_install == "claude_settings":
+        cfg = claude_settings(hook_argv, ctx.platform)
         target = ctx.session_file("hooks.json")
         raw = (json.dumps(cfg, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         return LaunchAddition(
@@ -52,6 +52,14 @@ def augment(ctx: "LaunchContext") -> "LaunchAddition":
             files={"hooks.json": raw},
             meta={"hooks": "installed"},
         )
+
+    if hook_install == "agy_settings":
+        if has_global_registration_consent():
+            res = ensure_agy_hooks_registered(hook_argv, ctx.platform)
+            return LaunchAddition(meta={"hooks": "installed" if res.get("registered") else "none"})
+        if agy_hooks_registered(hook_argv, ctx.platform):
+            return LaunchAddition(meta={"hooks": "installed"})
+        return LaunchAddition(meta={"hooks": "needs_consent"})
 
     if hook_install == "codex_notify":
         argv = tuple(codex_notify_args(hook_argv))

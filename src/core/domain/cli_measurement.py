@@ -24,7 +24,7 @@ DEFAULT_SUBMIT_DELAY_MS = 300
 DEFAULT_MAX_INJECT_BYTES = 2048
 
 EVENT_ALIASES: Mapping[str, Tuple[str, ...]] = {
-    "session_started": ("session_started", "claude.SessionStart"),
+    "session_started": ("session_started", "claude.SessionStart", "agy.SessionStart"),
     "turn_started": ("turn_started", "claude.UserPromptSubmit", "agy.PreInvocation"),
     "turn_ended": ("turn_ended", "claude.Stop", "agy.Stop", "codex.notify", "session.idle"),
     "permission_requested": (
@@ -40,10 +40,15 @@ EVENT_ALIASES: Mapping[str, Tuple[str, ...]] = {
 }
 
 _VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,31}")
+_VERSION_FIND_RE = re.compile(r"[0-9]+(?:\.[0-9]+)+(?:[-+][0-9A-Za-z.]+)?")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
 
 REASONS_ES: Mapping[str, str] = {
     "SPAWN_FAILED": "No se pudo abrir el CLI en una terminal de prueba.",
+    "NEEDS_WORKSPACE_TRUST": (
+        "El CLI pidió confirmar que confía en la carpeta de prueba. Ábrelo una vez en tu proyecto (o en esa carpeta) "
+        "y elige «Yes, I trust this folder», luego vuelve a medir."
+    ),
     "NO_HOOK_EVENTS": (
         "El CLI no envió ningún aviso. Abre el CLI una vez, inicia sesión y acepta los avisos de primera vez, "
         "y vuelve a medir."
@@ -58,6 +63,8 @@ REASONS_ES: Mapping[str, str] = {
     "TIMEOUT": "La prueba tardó demasiado y se cortó.",
     "UNSUPPORTED_CLI": "Este CLI no admite la medición automática.",
     "CLI_NOT_INSTALLED": "El CLI no está instalado.",
+    "VERSION_UNKNOWN": "No se pudo leer la versión del CLI (`--version`); sin ella la medición no se puede guardar.",
+    "RECORD_INVALID": "La medición guardada ya no es válida. Vuelve a medir.",
 }
 
 
@@ -82,6 +89,7 @@ class Attempt:
     screen_after_paste: str = ""
     cancelled: bool = False
     timed_out: bool = False
+    trust_prompt_cwd: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,6 +100,7 @@ class AttemptResult:
     confirm_event: str = ""
     session_id_field: str = ""
     permission_seen: bool = False
+    detail: str = ""
 
 
 def strip_ansi(text: str) -> str:
@@ -129,6 +138,8 @@ def evaluate_attempt(attempt: Attempt) -> AttemptResult:
     """Decide si este intento prueba que el CLI avisa de sus turnos y acepta el pegado + Enter."""
     if attempt.cancelled:
         return AttemptResult(False, "CANCELLED")
+    if attempt.trust_prompt_cwd:
+        return AttemptResult(False, "NEEDS_WORKSPACE_TRUST", detail=attempt.trust_prompt_cwd)
     if not attempt.spawn_ok:
         return AttemptResult(False, "SPAWN_FAILED")
     events = sorted(attempt.events, key=lambda e: e.t_ms)
@@ -163,7 +174,10 @@ def evaluate_attempt(attempt: Attempt) -> AttemptResult:
 
 
 def clean_version(raw: Optional[str]) -> str:
-    value = (raw or "").strip().lstrip("v")
+    """Versión del CLI a partir de lo que imprime `--version` («2.1.330 (Claude Code)», «v1.19.5», «1.5.14»)."""
+    text = (raw or "").strip()
+    found = _VERSION_FIND_RE.search(text)
+    value = found.group(0) if found else text.lstrip("v")
     return value if _VERSION_RE.fullmatch(value) else ""
 
 

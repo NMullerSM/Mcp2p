@@ -28,11 +28,16 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import psutil
 
-from src.adapters.terminal.cli_catalog import CliSpec
+from src.adapters.terminal.cli_catalog import CliSpec, current_platform
+from src.adapters.terminal.hook_configs import (
+    AGY_HOOK_SECTION_NAME,
+    agy_hooks_config,
+    hook_command_argv,
+)
 from src.core.services.message_relay_service import TOOL_TIMEOUT_MS
 
 logger = logging.getLogger("mcp2p.adapters.terminal.mcp_injection")
@@ -123,9 +128,19 @@ AGY_BACKUP_SUFFIX = ".mcp2p.bak"
 HUB_PROXY_ONLY_FLAG = "--hub-proxy-only"
 
 
+def has_global_registration_consent() -> bool:
+    """True solo dentro de un bloque `global_registration_consent(True)` de la UI."""
+    return bool(_GLOBAL_CONSENT.get())
+
+
 def default_agy_config_path() -> Path:
     """Archivo GLOBAL de Antigravity donde se registra el servidor `mcp2p` (fuera del perfil del panel)."""
     return Path.home() / ".gemini" / "config" / "mcp_config.json"
+
+
+def default_agy_hooks_path() -> Path:
+    """Archivo GLOBAL de Antigravity donde se registran los *hooks* cuando el usuario lo consiente."""
+    return Path.home() / ".gemini" / "config" / "hooks.json"
 
 
 def _app_version() -> str:
@@ -366,6 +381,70 @@ def agy_registration_state(config_path: Optional[Path] = None) -> Dict[str, Any]
         "hub_proxy_only": isinstance(args, list) and HUB_PROXY_ONLY_FLAG in args,
         "path": str(target),
     }
+
+
+def _default_hook_argv() -> Callable[[str], List[str]]:
+    frozen = bool(getattr(sys, "frozen", False))
+    return lambda ev: hook_command_argv(ev, frozen=frozen, executable=sys.executable)
+
+
+def agy_hooks_registered(
+    hook_argv: Optional[Callable[[str], List[str]]] = None,
+    platform: Optional[str] = None,
+    hooks_path: Optional[Path] = None,
+) -> bool:
+    """True si la sección `mcp2p` está registrada en `hooks.json` de Antigravity con los comandos actuales."""
+    target = Path(hooks_path) if hooks_path is not None else default_agy_hooks_path()
+    data, _original, error = _load_agy_config(target)
+    if error is not None or not data:
+        return False
+    existing = data.get(AGY_HOOK_SECTION_NAME)
+    if not isinstance(existing, dict) or not existing:
+        return False
+    argv_fn = hook_argv if callable(hook_argv) else _default_hook_argv()
+    plat = platform or current_platform()
+    desired = agy_hooks_config(argv_fn, plat)[AGY_HOOK_SECTION_NAME]
+    return existing == desired
+
+
+def ensure_agy_hooks_registered(
+    hook_argv: Optional[Callable[[str], List[str]]] = None,
+    platform: Optional[str] = None,
+    hooks_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Registra la sección `mcp2p` en `~/.gemini/config/hooks.json` conservando el resto de *hooks*. Llamar solo con consentimiento."""
+    target = Path(hooks_path) if hooks_path is not None else default_agy_hooks_path()
+    data, original, error = _load_agy_config(target)
+    if error is not None:
+        return error
+    argv_fn = hook_argv if callable(hook_argv) else _default_hook_argv()
+    plat = platform or current_platform()
+    desired = agy_hooks_config(argv_fn, plat)[AGY_HOOK_SECTION_NAME]
+    existing = data.get(AGY_HOOK_SECTION_NAME)
+    if isinstance(existing, dict) and existing == desired:
+        return {"registered": True, "already_present": True, "path": str(target)}
+    data[AGY_HOOK_SECTION_NAME] = desired
+    try:
+        _save_agy_config(target, data, original)
+    except OSError as exc:
+        return {"registered": False, "reason": "write_failed", "error": str(exc), "path": str(target)}
+    return {"registered": True, "already_present": False, "path": str(target)}
+
+
+def unregister_agy_hooks(hooks_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Quita únicamente la sección `mcp2p` de `~/.gemini/config/hooks.json` (no toca otros *hooks*)."""
+    target = Path(hooks_path) if hooks_path is not None else default_agy_hooks_path()
+    data, original, error = _load_agy_config(target)
+    if error is not None:
+        return {"removed": False, "reason": error["reason"], "path": str(target)}
+    if AGY_HOOK_SECTION_NAME not in data:
+        return {"removed": False, "reason": "not_registered", "path": str(target)}
+    data.pop(AGY_HOOK_SECTION_NAME, None)
+    try:
+        _save_agy_config(target, data, original)
+    except OSError as exc:
+        return {"removed": False, "reason": "write_failed", "error": str(exc), "path": str(target)}
+    return {"removed": True, "path": str(target)}
 
 
 def _default_base_dir() -> Path:

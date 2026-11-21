@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import tempfile
 import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from src.proc_utils import no_window_kwargs
 from src.core.domain.cli_measurement import HOOK_INSTALL_BY_CLI, MEASURABLE_CLIS, SCHEMA_VERSION
 
 logger = logging.getLogger("mcp2p.adapters.terminal.cli_measurement_store")
@@ -111,6 +114,25 @@ def binary_stamp(path: str) -> Optional[Tuple[int, int]]:
     except OSError:
         return None
     return st.st_mtime_ns, st.st_size
+
+
+def detect_cli_version(path: str, *, timeout_s: float = 10.0) -> Optional[str]:
+    """Salida de `<programa> --version` (sin shell, sin entrada, en una carpeta neutra) o None si no responde."""
+    try:
+        done = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
+            cwd=tempfile.gettempdir(),
+            check=False,
+            **no_window_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    text = ((done.stdout or "") + " " + (done.stderr or "")).strip()
+    return text[:200] or None
 
 
 def validate_record(record: Mapping[str, Any], spec: Any, platform: str) -> Tuple[Optional[Dict[str, Any]], str]:

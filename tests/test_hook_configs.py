@@ -9,7 +9,11 @@ import pytest
 
 from src.adapters.terminal.hook_configs import (
     AGY_HOOK_EVENTS,
+    AGY_HOOK_SECTION_NAME,
+    AGY_SIMPLE_EVENTS,
+    AGY_TOOL_EVENTS,
     CLAUDE_SIMPLE_EVENTS,
+    agy_hooks_config,
     agy_settings,
     claude_settings,
     codex_notify_args,
@@ -112,9 +116,18 @@ def test_opencode_config_keeps_mcp_and_adds_plugin(tmp_path: Path) -> None:
 
 
 def test_agy_settings_and_opencode_plugin_source() -> None:
-    cfg = agy_settings(lambda ev: ["Mcp2p", "--hook-post", ev], "linux")
-    assert set(cfg["hooks"]) == set(AGY_HOOK_EVENTS)
-    assert "agy.Stop" in cfg["hooks"]["Stop"][0]["hooks"][0]["command"]
+    cfg = agy_hooks_config(lambda ev: ["Mcp2p", "--hook-post", ev], "linux")
+    assert cfg == agy_settings(lambda ev: ["Mcp2p", "--hook-post", ev], "linux")
+    assert set(cfg) == {AGY_HOOK_SECTION_NAME}
+    section = cfg[AGY_HOOK_SECTION_NAME]
+    assert set(section) == set(AGY_HOOK_EVENTS)
+    for ev in AGY_SIMPLE_EVENTS:
+        assert isinstance(section[ev], list) and len(section[ev]) == 1
+        assert section[ev][0]["type"] == "command"
+        assert f"agy.{ev}" in section[ev][0]["command"]
+    for ev in AGY_TOOL_EVENTS:
+        assert section[ev][0]["matcher"] == "*"
+        assert f"agy.{ev}" in section[ev][0]["hooks"][0]["command"]
 
     src_js = opencode_plugin_source()
     assert "session.status" in src_js
