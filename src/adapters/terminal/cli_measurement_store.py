@@ -42,38 +42,47 @@ def _key(cli_id: str, platform: str) -> str:
 
 
 class MeasurementStore:
-    """Archivo JSON `{schema, records: {"<cli>:<plataforma>": registro}}`, escritura atómica y permisos `0600`."""
+    """Archivo JSON `{schema, records, attempts}`, escritura atómica y permisos `0600`.
+
+    `records`: `"<cli>:<plataforma>"` -> medición correcta. `attempts`: `"<cli>:<plataforma>"` -> último intento
+    AUTOMÁTICO fallido (sello del programa y motivo) para no repetir con el mismo programa y gastar tokens otra vez.
+    """
 
     def __init__(self, path: Optional[Path] = None) -> None:
         self._path = Path(path) if path is not None else default_measurements_path()
         self._lock = threading.Lock()
-        self._cache: Optional[Tuple[Tuple[int, int], Dict[str, Any]]] = None
+        self._cache: Optional[Tuple[Tuple[int, int], Tuple[Dict[str, Any], Dict[str, Any]]]] = None
 
     @property
     def path(self) -> Path:
         return self._path
 
-    def _read(self) -> Dict[str, Any]:
+    def _load(self) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         try:
             st = self._path.stat()
         except OSError:
             self._cache = None
-            return {}
+            return {}, {}
         stamp = (st.st_mtime_ns, st.st_size)
         if self._cache is not None and self._cache[0] == stamp:
             return self._cache[1]
         records: Dict[str, Any] = {}
+        attempts: Dict[str, Any] = {}
         try:
             if st.st_size <= MAX_MEASUREMENTS_BYTES:
                 data = json.loads(self._path.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data.get("schema") == SCHEMA_VERSION and isinstance(
-                    data.get("records"), dict
-                ):
-                    records = {str(k): v for k, v in data["records"].items() if isinstance(v, dict)}
+                if isinstance(data, dict) and data.get("schema") == SCHEMA_VERSION:
+                    if isinstance(data.get("records"), dict):
+                        records = {str(k): v for k, v in data["records"].items() if isinstance(v, dict)}
+                    if isinstance(data.get("attempts"), dict):
+                        attempts = {str(k): v for k, v in data["attempts"].items() if isinstance(v, dict)}
         except (OSError, ValueError):
-            records = {}
-        self._cache = (stamp, records)
-        return records
+            records, attempts = {}, {}
+        self._cache = (stamp, (records, attempts))
+        return records, attempts
+
+    def _read(self) -> Dict[str, Any]:
+        return self._load()[0]
 
     def records(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
@@ -82,10 +91,14 @@ class MeasurementStore:
     def get(self, cli_id: str, platform: str) -> Optional[Dict[str, Any]]:
         return self.records().get(_key(cli_id, platform))
 
-    def _write(self, records: Mapping[str, Any]) -> None:
+    def _write(self, records: Mapping[str, Any], attempts: Mapping[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_name(self._path.name + ".tmp")
-        payload = json.dumps({"schema": SCHEMA_VERSION, "records": dict(records)}, indent=2, ensure_ascii=False)
+        payload = json.dumps(
+            {"schema": SCHEMA_VERSION, "records": dict(records), "attempts": dict(attempts)},
+            indent=2,
+            ensure_ascii=False,
+        )
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload + "\n")
@@ -94,17 +107,31 @@ class MeasurementStore:
 
     def put(self, record: Mapping[str, Any]) -> None:
         with self._lock:
-            records = dict(self._read())
-            records[_key(str(record["cli_id"]), str(record["platform"]))] = dict(record)
-            self._write(records)
+            records, attempts = (dict(x) for x in self._load())
+            key = _key(str(record["cli_id"]), str(record["platform"]))
+            records[key] = dict(record)
+            attempts.pop(key, None)  # una medición correcta cierra el historial de fallos
+            self._write(records, attempts)
 
     def forget(self, cli_id: str, platform: str) -> bool:
         with self._lock:
-            records = dict(self._read())
-            if records.pop(_key(cli_id, platform), None) is None:
-                return False
-            self._write(records)
-            return True
+            records, attempts = (dict(x) for x in self._load())
+            key = _key(cli_id, platform)
+            removed = records.pop(key, None) is not None
+            had_attempt = attempts.pop(key, None) is not None
+            if removed or had_attempt:
+                self._write(records, attempts)
+            return removed
+
+    def get_attempt(self, cli_id: str, platform: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return self._load()[1].get(_key(cli_id, platform))
+
+    def put_attempt(self, cli_id: str, platform: str, attempt: Mapping[str, Any]) -> None:
+        with self._lock:
+            records, attempts = (dict(x) for x in self._load())
+            attempts[_key(cli_id, platform)] = dict(attempt)
+            self._write(records, attempts)
 
 
 def binary_stamp(path: str) -> Optional[Tuple[int, int]]:
