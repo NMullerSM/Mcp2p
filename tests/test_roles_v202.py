@@ -460,7 +460,7 @@ def test_whoami_reports_only_the_caller(gui) -> None:
     assert me["capabilities"]["readonly"] == "none"
     assert me["delivery"]["mode"] == "inbox"  # catálogo sin medir: solo bandeja (con motivo si ya hay motor de entrega)
     assert me["delivery"]["reason"] in (None, "CLI_NOT_VERIFIED", "TARGET_ELEVATED")
-    assert me["worker_mode"] is False
+    assert "worker_mode" not in me
     assert "Secreto ajeno" not in json.dumps(me)
     assert "pid" not in me and "session_token" not in me and "cwd" not in me
 
@@ -493,7 +493,7 @@ def test_team_roster_lists_members_without_pid_token_cwd_or_foreign_mandates(gui
     for m in roster["members"]:
         assert set(m.keys()) == {
             "pane_id", "label", "node_uuid", "role", "role_label", "cli_profile",
-            "state", "delivery", "worker_mode", "inbox_pending", "is_me",
+            "state", "delivery", "inbox_pending", "is_me",
         }
 
 

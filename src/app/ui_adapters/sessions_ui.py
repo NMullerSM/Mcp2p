@@ -149,7 +149,6 @@ class SessionsUIAdapter(_BaseUIAdapter):
                     "role": item.role,
                     "mandate": item.mandate,
                     "auto_relay": item.auto_relay,
-                    "worker_mode": item.worker_mode,
                     "delivery_mode": item.delivery_mode,
                     "resume_mode": item.resume_mode,
                     "cli_session_id": item.cli_session_id,

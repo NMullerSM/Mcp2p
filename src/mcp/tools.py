@@ -29,7 +29,6 @@ from src.mcp.pane_registry import (
     get_current_pane_session,
 )
 from src.mcp.peer_binding import legacy_peer_warning, peer_mismatch_response, relay_peer_allowed
-from src.mcp.worker_protocol import worker_fields
 from src.storage.okf_adapter import OKFAdapter
 from src.storage.validators import InvalidIdentifierError, ensure_within, is_safe_id
 
@@ -1912,9 +1911,7 @@ class MCPToolsHandler:
             n = int(limit)
         except (TypeError, ValueError):
             n = 10
-        return self._relay_json(
-            worker_fields(service.next_for(rec, limit=n, include_unacked=include_unacked is True), rec)
-        )
+        return self._relay_json(service.next_for(rec, limit=n, include_unacked=include_unacked is True))
 
     def inbox_wait(
         self,
@@ -1931,7 +1928,7 @@ class MCPToolsHandler:
             n = int(limit)
         except (TypeError, ValueError):
             n = 10
-        return self._relay_json(worker_fields(service.wait_for(rec, timeout_ms=timeout_ms, limit=n), rec))
+        return self._relay_json(service.wait_for(rec, timeout_ms=timeout_ms, limit=n))
 
     def inbox_ack(
         self,
@@ -2052,7 +2049,6 @@ class MCPToolsHandler:
                 "mandate": str(getattr(rec, "mandate", "") or ""),
                 "capabilities": caps,
                 "delivery": self._delivery_info(rec.node_uuid),
-                "worker_mode": bool(rec.worker_mode),
             }
         )
 
@@ -2094,7 +2090,6 @@ class MCPToolsHandler:
                     "cli_profile": pane.get("cli_profile"),
                     "state": self._member_state(node_uuid, service),
                     "delivery": "directa" if delivery_info.get("mode") == "direct" else "bandeja",
-                    "worker_mode": bool(pane.get("worker_mode", False)),
                     "inbox_pending": pending,
                     "is_me": node_uuid == rec.node_uuid and pane_id == rec.pane_id,
                 }

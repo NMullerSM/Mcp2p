@@ -32,13 +32,6 @@ _SPECS: tuple[ConfirmationSpec, ...] = (
         label_es="Activar Auto-Relay en un panel",
     ),
     ConfirmationSpec(
-        action_id="worker_mode.enable",
-        risk="low",
-        surface="app",
-        rememberable=True,
-        label_es="Activar modo trabajador en un panel",
-    ),
-    ConfirmationSpec(
         action_id="delivery.enable_pane",
         risk="medium",
         surface="app",

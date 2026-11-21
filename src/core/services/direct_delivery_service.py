@@ -323,8 +323,6 @@ class DirectDeliveryService:
         mode, why = self._mode_for(rec)
         if mode != "direct":
             return Eligibility(False, why)
-        if self._relay.is_waiting(node):
-            return Eligibility(False, "AGENT_IN_INBOX_WAIT")
         with self._lock:
             busy = node in self._inflight
         if busy:
@@ -476,8 +474,6 @@ class DirectDeliveryService:
             if getattr(snap, "state", None) == AgentState.PERMISSION:
                 return "AGENT_PERMISSION"
             return None
-        if self._relay.is_waiting(node):
-            return "AGENT_IN_INBOX_WAIT"
         return self._activity_reason(node, incarnation)
 
     def _clear_inflight(self, node: str) -> None:

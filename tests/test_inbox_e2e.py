@@ -1,4 +1,4 @@
-"""Modo trabajador extremo a extremo (F2.4): dos «agentes» con procesos reales, cada uno con una sesion MCP persistente
+"""Bandeja extremo a extremo: dos «agentes» con procesos reales, cada uno con una sesion MCP persistente
 dentro del arbol de procesos de su panel, conversan por la bandeja SIN que el sistema escriba en ninguna terminal.
 
 A (en inbox_wait) y B (en inbox_wait): A envia -> B despierta al instante y responde con inbox_reply -> A despierta.
@@ -54,14 +54,12 @@ def _join(waiter: _Waiter, timeout: float = 60.0) -> Dict[str, Any]:
     return waiter.reply
 
 
-def test_two_worker_agents_converse_through_the_inbox_without_touching_any_terminal(lab, capsys) -> None:
+def test_two_agents_converse_through_the_inbox_without_touching_any_terminal(lab, capsys) -> None:
     lab, pty_calls = lab
-    lab.registry.set_worker_mode("pane_1", True)
-    lab.registry.set_worker_mode("pane_2", True)
     for idx in (1, 2):
         lab.root(idx).session_start(lab.url, lab.token(idx))
 
-    # B se queda esperando (modo trabajador).
+    # B se queda esperando en inbox_wait.
     b_wait = _Waiter(lab, 2, "inbox_wait", {"timeout_ms": WAIT_MS})
     b_wait.start()
     import time
@@ -77,8 +75,8 @@ def test_two_worker_agents_converse_through_the_inbox_without_touching_any_termi
     wake_ab = got_b["t1"] - sent["t0"]
 
     result_b = got_b["result"]
-    assert result_b["worker_mode"] is True and result_b["timed_out"] is False
-    assert "inbox_wait" in result_b["hint"] and result_b["timeout_ms_recommended"] > 0
+    assert result_b["timed_out"] is False
+    assert "worker_mode" not in result_b and "hint" not in result_b
     (message,) = result_b["messages"]
     env = message["mcp2p_envelope"]
     assert env["verified"] is True and env["from"]["node_uuid"] == lab.node(1)
@@ -103,38 +101,34 @@ def test_two_worker_agents_converse_through_the_inbox_without_touching_any_termi
     assert aenv["parent_msg_id"] == env["msg_id"] and aenv["chain"]["hop"] == 1
     assert aenv["chain"]["chain_id"] == env["chain"]["chain_id"]
     assert answer["payload_untrusted_text"] == "4"
-    assert got_a["result"]["worker_mode"] is True
 
     # Latencia: despierta al instante (no por sondeo) y NADIE escribio en un PTY.
     with capsys.disabled():
-        print(f"\n[latencia modo trabajador] A->B {wake_ab * 1000:.0f} ms | B->A {wake_ba * 1000:.0f} ms")
+        print(f"\n[latencia bandeja] A->B {wake_ab * 1000:.0f} ms | B->A {wake_ba * 1000:.0f} ms")
     assert wake_ab < MAX_WAKE_S, wake_ab
     assert wake_ba < MAX_WAKE_S, wake_ba
     assert pty_calls == [], f"el relevo escribio en un PTY: {pty_calls}"
 
 
-def test_worker_wait_that_times_out_keeps_the_loop_alive_and_a_late_message_is_not_lost(lab) -> None:
+def test_wait_that_times_out_returns_empty_and_a_late_message_is_not_lost(lab) -> None:
     lab, pty_calls = lab
-    lab.registry.set_worker_mode("pane_2", True)
     for idx in (1, 2):
         lab.root(idx).session_start(lab.url, lab.token(idx))
 
     quiet = lab.root(2).session_call("inbox_wait", {"timeout_ms": 1_000})["result"]
     assert quiet["timed_out"] is True and quiet["messages"] == []
-    assert quiet["worker_mode"] is True and "inbox_wait" in quiet["hint"]  # el hint repite el bucle
+    assert "worker_mode" not in quiet and "hint" not in quiet
 
     lab.root(1).session_call("send_message", {"target_pane_id": "pane_2", "text": "tarde"})
     late = lab.root(2).session_call("inbox_wait", {"timeout_ms": 1_000})["result"]
     assert [m["payload_untrusted_text"] for m in late["messages"]] == ["tarde"]
-    assert "inbox_ack" in late["hint"] and "inbox_reply" in late["hint"]
     assert pty_calls == []
 
 
-def test_a_third_automatic_message_in_the_chain_waits_for_the_human_even_between_workers(lab) -> None:
-    """La cadena sellada (EGM-93) tambien frena a dos trabajadores: A->B, B->A y el siguiente A->B queda aparcado."""
+def test_a_third_automatic_message_in_the_chain_waits_for_the_human(lab) -> None:
+    """La cadena sellada (EGM-93) frena a dos agentes: A->B, B->A y el siguiente A->B queda aparcado."""
     lab, pty_calls = lab
     for idx in (1, 2):
-        lab.registry.set_worker_mode(f"pane_{idx}", True)
         lab.root(idx).session_start(lab.url, lab.token(idx))
 
     lab.root(1).session_call("send_message", {"target_pane_id": "pane_2", "text": "uno"})

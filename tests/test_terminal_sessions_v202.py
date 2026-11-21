@@ -942,7 +942,6 @@ def test_restored_slot_recovers_node_uuid_flags_and_role(tmp_path: Path, monkeyp
         orig_node_uuid = r1["node_uuid"]
 
         bridge1.db.set_pane_auto_relay(proj, "pane_2", True)
-        bridge1.db.set_pane_worker_mode(proj, "pane_2", True)
         with bridge1.db.get_connection() as conn:
             with conn:
                 conn.execute(
@@ -962,7 +961,7 @@ def test_restored_slot_recovers_node_uuid_flags_and_role(tmp_path: Path, monkeyp
         assert item["role"] == "auditor"
         assert item["mandate"] == "Solo lectura"
         assert item["auto_relay"] is True
-        assert item["worker_mode"] is True
+        assert "worker_mode" not in item
         assert item["delivery_mode"] == "inbox"
 
         restored = bridge2.pty_restore_session(proj, ["pane_2"])
@@ -975,7 +974,7 @@ def test_restored_slot_recovers_node_uuid_flags_and_role(tmp_path: Path, monkeyp
         assert rec.role == "auditor"
         assert rec.mandate == "Solo lectura"
         assert rec.auto_relay_enabled is True
-        assert rec.worker_mode is True
+        assert not hasattr(rec, "worker_mode")
         assert rec.delivery_mode == "inbox"
     finally:
         bridge2._close_terminal_matrix()

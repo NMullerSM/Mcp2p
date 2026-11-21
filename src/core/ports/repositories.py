@@ -392,7 +392,6 @@ class PaneIdentityRepositoryPort(Protocol):
 
     def set_pane_auto_relay(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]: ...
 
-    def set_pane_worker_mode(self, project_uuid: str, pane_slot: str, enabled: bool) -> Dict[str, Any]: ...
 
     def set_pane_delivery(
         self, project_uuid: str, pane_slot: str, mode: Optional[str] = None, batch: Optional[bool] = None

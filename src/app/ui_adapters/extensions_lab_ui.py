@@ -1801,66 +1801,6 @@ class ExtensionsLabUIAdapter(_BaseUIAdapter):
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
 
-    def pty_set_worker_mode(self, pane_id: Any, enabled: Any = None) -> Dict[str, Any]:
-        """Activa o desactiva el MODO TRABAJADOR de UN panel (F2.4) y lo persiste por (proyecto, ranura).
-
-        Con el modo activo, las respuestas de `inbox_next`/`inbox_wait` de ese panel traen `worker_mode: true` y una
-        instruccion para que el agente se quede en `inbox_wait` y responda con `inbox_reply`. Nunca escribe en un PTY.
-        Activarlo pasa por `ConfirmationGate` (`worker_mode.enable`, recordable); apagarlo no pregunta.
-        """
-        try:
-            if not isinstance(enabled, bool):
-                return _fail("INVALID_ARGUMENT", "Indique el panel y enabled (booleano): el modo trabajador es por panel.")
-            registry = self._get_pane_registry()
-            try:
-                rec = registry.get_pane(pane_id)
-            except (TypeError, ValueError):
-                rec = None
-            if rec is None or rec.status == "closed":
-                return _fail("PANE_NOT_FOUND", "No hay un panel activo con ese identificador.")
-
-            def _apply() -> Dict[str, Any]:
-                updated = registry.set_worker_mode(rec.pane_id, enabled)
-                if updated is None:
-                    return _fail("PANE_NOT_FOUND", "El panel se cerro antes de aplicar el cambio.")
-                return {
-                    "success": True,
-                    "code": "OK",
-                    "pane_id": updated.pane_id,
-                    "project_uuid": updated.project_uuid,
-                    "worker_mode": bool(updated.worker_mode),
-                }
-
-            if not enabled:
-                return _apply()
-
-            gate = getattr(self._bridge, "confirm_gate", None)
-            if gate is None:
-                return _fail("CONFIRMATION_UNAVAILABLE", "No hay servicio de confirmacion; la accion se rechaza.")
-            project_label = rec.project_uuid or "(sin proyecto)"
-            try:
-                proj = self.db.get_project_by_uuid(rec.project_uuid) if rec.project_uuid else None
-                if proj and proj.get("name"):
-                    project_label = f"{proj['name']} ({rec.project_uuid})"
-            except Exception:
-                pass
-            res = gate.require(
-                "worker_mode.enable",
-                "Activar el modo trabajador en un panel",
-                f"Panel: {rec.pane_id} ({rec.cli_profile})\nProyecto: {project_label}\n\n"
-                "Con el modo trabajador, el agente de este panel se quedara esperando mensajes de otros agentes "
-                "(inbox_wait) y respondera con inbox_reply, sin que usted escriba en su terminal.\n\n"
-                "Sin la entrega directa activada, MCP2P no escribe en ninguna terminal. Mientras espera, el agente consume turnos del modelo "
-                "cada pocos minutos. Acepte solo si quiere ese comportamiento.",
-                _apply,
-                args_digest=f"worker_mode:{rec.project_uuid}:{rec.pane_id}:1",
-            )
-            if res.get("success") is False and "pane_id" not in res:
-                return {**res, "pane_id": rec.pane_id}
-            return res
-        except Exception as exc:
-            return _fail("INTERNAL_ERROR", str(exc))
-
     def pty_get_kanban_swarm_snapshot(
         self, project_uuid: Optional[str] = None, all_projects: bool = False
     ) -> Dict[str, Any]:

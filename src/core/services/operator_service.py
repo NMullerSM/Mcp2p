@@ -544,7 +544,6 @@ class OperatorChannelService:
                     "project_uuid": rec.project_uuid,
                     "project_name": names.get(rec.project_uuid, ""),
                     "status": rec.status,
-                    "worker_mode": bool(getattr(rec, "worker_mode", False)),
                     "auto_relay_enabled": bool(getattr(rec, "auto_relay_enabled", False)),
                     "privilege_class": privilege,
                     "requires_human_confirmation": requires_human_confirmation(privilege),
@@ -601,7 +600,7 @@ class OperatorChannelService:
         if result.get("success"):
             result["privilege_class"] = privilege
             result["wake"] = (
-                "none: el agente lo lee con inbox_next/inbox_wait (modo trabajador) o cuando el humano se lo pida; "
+                "none: el agente lo lee con inbox_next/inbox_wait cuando el humano se lo pida; "
                 "el despertar automatico llega en la ola siguiente"
             )
             if park == PARK_ELEVATED:
