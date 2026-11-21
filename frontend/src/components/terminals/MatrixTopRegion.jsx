@@ -1,6 +1,7 @@
 import React from 'react';
 import { RestoreSessionBanner } from './RestoreSessionBanner';
 import { HumanChatPanel } from '../relay/HumanChatPanel';
+import { useAutoMeasure } from './useAutoMeasure';
 
 /**
  * Región superior de la matriz de terminales: banner de restauración de sesiones (WP-4b)
@@ -15,6 +16,7 @@ export function MatrixTopRegion({
   relay,
   onOpenSettings
 }) {
+  useAutoMeasure(api, projectUuid);
   return (
     <div
       data-testid="matrix-top-region"

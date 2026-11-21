@@ -226,6 +226,28 @@ def build_record(
     }
 
 
+DOT_COLORS: Mapping[str, Tuple[str, str]] = {
+    "measured": ("green", "Medido y activo"),
+    "measuring": ("yellow", "Midiendo ahora"),
+    "stale": ("yellow", "Desactualizado: el programa cambió desde la medición"),
+    "failed": ("red", "La medición falló"),
+    "not_measured": ("gray", "Sin medir"),
+    "not_installed": ("gray", "No instalado"),
+    "unsupported": ("gray", "No admite medición automática"),
+}
+
+
+def status_dot(state: str, *, installed: bool = True, measuring: bool = False) -> Tuple[str, str]:
+    """Color y texto del punto de estado de un CLI (el color nunca va solo: el texto es parte del contrato)."""
+    if measuring:
+        return DOT_COLORS["measuring"]
+    if state == "unsupported":
+        return DOT_COLORS["unsupported"]
+    if not installed:
+        return DOT_COLORS["not_installed"]
+    return DOT_COLORS.get(state, DOT_COLORS["not_measured"])
+
+
 def reason_text(code: Optional[str]) -> str:
     return REASONS_ES.get(code or "", "La medición no pudo completarse.")
 

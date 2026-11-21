@@ -249,4 +249,152 @@ describe('CliMeasurementSettingsSection', () => {
     fireEvent.click(await screen.findByTestId('measure-claude'));
     await waitFor(() => expect(api.pty_measure_cli).toHaveBeenCalledWith('claude', 'proj-123'));
   });
+
+  it('dot_has_accessible_label_for_each_state', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => snapshot([
+        item({ cli_id: 'claude', display_name: 'Claude Code', state: 'measured', dot: 'green', dot_label: 'Medido y activo' }),
+        item({ cli_id: 'opencode', display_name: 'OpenCode', state: 'stale', dot: 'yellow', dot_label: 'Hay que volver a medir' }),
+        item({
+          cli_id: 'codex',
+          display_name: 'Codex',
+          state: 'failed',
+          dot: 'red',
+          dot_label: 'No se pudo medir',
+          reason_text: 'El CLI no acepta mensajes pegados en una sola línea.'
+        }),
+        item({ cli_id: 'gemini', display_name: 'Gemini', state: 'not_measured', dot: 'gray', dot_label: 'Sin medir' })
+      ])),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+
+    await screen.findByTestId('measure-row-claude');
+    expect(screen.getByRole('img', { name: 'Medido y activo' }).getAttribute('data-dot')).toBe('green');
+    expect(screen.getByRole('img', { name: 'Hay que volver a medir' }).getAttribute('data-dot')).toBe('yellow');
+    expect(screen.getByRole('img', { name: 'No se pudo medir' }).getAttribute('data-dot')).toBe('red');
+    expect(screen.getByRole('img', { name: 'Sin medir' }).getAttribute('data-dot')).toBe('gray');
+    // El motivo del fallo sigue en texto: el color no transmite el estado por sí solo.
+    expect(screen.getByTestId('measure-reason-codex')).toBeTruthy();
+  });
+
+  it('dot_is_omitted_when_bridge_sends_no_dot', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => snapshot([item({ state: 'measured' })])),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+    await screen.findByTestId('measure-row-claude');
+    expect(screen.queryByRole('img')).toBeNull();
+  });
+
+  it('auto_toggle_calls_bridge_ticks_and_refreshes_when_enabled', async () => {
+    let autoEnabled = false;
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => ({ ...snapshot([item()]), auto_enabled: autoEnabled })),
+      pty_set_cli_measure_auto: vi.fn(async (enabled) => {
+        autoEnabled = enabled;
+        return { success: true, auto_enabled: enabled };
+      }),
+      pty_auto_measure_tick: vi.fn(async () => ({ success: true, started: null, queued: 0, reason: 'idle' })),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+
+    const toggle = await screen.findByTestId('measure-auto-toggle');
+    expect(toggle.checked).toBe(false);
+    expect(screen.getByLabelText('Medir automáticamente al detectar cambios')).toBe(toggle);
+    expect(screen.getByText(/Cada medición gasta unos pocos tokens/)).toBeTruthy();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.pty_set_cli_measure_auto).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(api.pty_auto_measure_tick).toHaveBeenCalledWith(null));
+    expect(api.pty_auto_measure_tick).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByTestId('measure-auto-toggle').checked).toBe(true));
+    expect(api.pty_get_cli_measurements.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('auto_toggle_off_does_not_tick', async () => {
+    let autoEnabled = true;
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => ({ ...snapshot([item()]), auto_enabled: autoEnabled })),
+      pty_set_cli_measure_auto: vi.fn(async (enabled) => {
+        autoEnabled = enabled;
+        return { success: true, auto_enabled: enabled };
+      }),
+      pty_auto_measure_tick: vi.fn(async () => ({ success: true })),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+
+    const toggle = await screen.findByTestId('measure-auto-toggle');
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.pty_set_cli_measure_auto).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(screen.getByTestId('measure-auto-toggle').checked).toBe(false));
+    expect(api.pty_auto_measure_tick).not.toHaveBeenCalled();
+  });
+
+  it('auto_toggle_shows_error_and_keeps_state_when_bridge_refuses', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => ({ ...snapshot([item()]), auto_enabled: false })),
+      pty_set_cli_measure_auto: vi.fn(async () => ({ success: false, code: 'SETTINGS_WRITE_FAILED', message: 'No se pudo guardar.' })),
+      pty_auto_measure_tick: vi.fn(),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+
+    fireEvent.click(await screen.findByTestId('measure-auto-toggle'));
+    expect((await screen.findByTestId('measure-feedback')).textContent).toContain('No se pudo cambiar la medición automática');
+    expect(screen.getByTestId('measure-auto-toggle').checked).toBe(false);
+    expect(api.pty_auto_measure_tick).not.toHaveBeenCalled();
+  });
+
+  it('auto_toggle_absent_without_bridge_method', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => snapshot([item()])),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+    await screen.findByTestId('measure-row-claude');
+    expect(screen.queryByTestId('measure-auto-toggle')).toBeNull();
+    expect(screen.queryByText('Medir automáticamente al detectar cambios')).toBeNull();
+  });
+
+  it('renders_nothing_when_list_method_is_missing_even_with_auto_method', () => {
+    const { container } = render(
+      <CliMeasurementSettingsSection api={{ pty_set_cli_measure_auto: vi.fn(), pty_auto_measure_tick: vi.fn() }} />
+    );
+    expect(container.textContent).toBe('');
+  });
+
+  it('keeps_polling_while_an_item_is_auto_pending', async () => {
+    const api = {
+      pty_get_cli_measurements: vi.fn(async () => ({
+        ...snapshot([item({ auto_pending: true })]),
+        auto_enabled: true
+      })),
+      pty_set_cli_measure_auto: vi.fn(),
+      pty_auto_measure_tick: vi.fn(),
+      pty_measure_cli: vi.fn(),
+      pty_cancel_cli_measurement: vi.fn(),
+      pty_forget_cli_measurement: vi.fn()
+    };
+    render(<CliMeasurementSettingsSection api={api} />);
+    await screen.findByTestId('measure-auto-toggle');
+    await waitFor(() => expect(api.pty_get_cli_measurements.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 4000 });
+    expect(api.pty_auto_measure_tick).not.toHaveBeenCalled();
+  });
 });

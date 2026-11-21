@@ -907,6 +907,12 @@ class ApiBridge:
     def pty_get_cli_measurements(self) -> Dict[str, Any]:
         return self.measurement_ui.pty_get_cli_measurements()
 
+    def pty_set_cli_measure_auto(self, enabled: Any) -> Dict[str, Any]:
+        return self.measurement_ui.pty_set_cli_measure_auto(enabled=enabled)
+
+    def pty_auto_measure_tick(self, project_uuid: Any = None) -> Dict[str, Any]:
+        return self.measurement_ui.pty_auto_measure_tick(project_uuid=project_uuid)
+
     def pty_measure_cli(self, cli_id: Any, project_uuid: Any = None) -> Dict[str, Any]:
         return self.measurement_ui.pty_measure_cli(cli_id=cli_id, project_uuid=project_uuid)
 

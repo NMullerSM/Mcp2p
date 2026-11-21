@@ -22,6 +22,7 @@ from src.core.domain.cli_measurement import (
     evaluate_attempt,
     infer_normalized_events,
     prompt_lines,
+    status_dot,
     strip_ansi,
 )
 from src.core.services.cli_measurement_service import CliMeasurementService
@@ -445,6 +446,26 @@ def test_bridge_status_lists_catalog_clis_and_unsupported_ones(bridge):
     assert "custom_shell" not in by_id
 
 
+def test_bridge_auto_switch_defaults_off_validates_and_is_reported_in_status(bridge):
+    assert bridge.pty_get_cli_measurements()["auto_enabled"] is False
+    assert bridge.pty_set_cli_measure_auto("si")["code"] == "INVALID_ARGUMENT"
+    assert bridge.pty_set_cli_measure_auto(1)["code"] == "INVALID_ARGUMENT", "solo un booleano de verdad"
+    assert bridge.pty_set_cli_measure_auto(True) == {"success": True, "code": "OK", "auto_enabled": True}
+    assert bridge.pty_get_cli_measurements()["auto_enabled"] is True
+    assert bridge.pty_set_cli_measure_auto(False)["auto_enabled"] is False
+    assert bridge.pty_get_cli_measurements()["auto_enabled"] is False
+
+
+def test_bridge_auto_tick_is_a_noop_while_the_switch_is_off(bridge):
+    res = bridge.pty_auto_measure_tick()
+    assert res["success"] is True and res["started"] is None and res["reason"] == "AUTO_DISABLED"
+
+
+def test_bridge_items_carry_a_dot_and_its_text(bridge):
+    for it in bridge.pty_get_cli_measurements()["items"]:
+        assert it["dot"] in ("green", "yellow", "red", "gray") and it["dot_label"]
+
+
 def test_bridge_measured_cli_shows_verified_in_delivery_overview(bridge, tmp_path, fake_binary):
     store = bridge.extensions_ui._catalog_service().measurement_store()
     store.put(make_record(fake_binary, platform=bridge.extensions_ui._catalog_service().platform))
@@ -557,3 +578,206 @@ def test_measurement_adapter_resolves_project_cwd_only_for_claude(bridge, tmp_pa
     assert bridge.measurement_ui._probe_cwd_for("antigravity", proj["project_uuid"]) is None
     fallback = bridge.measurement_ui._probe_cwd_for("claude", None)
     assert fallback == tmp_path / "userdata" / "cli_probe_cwd" and fallback.is_dir()
+
+
+# ---------------------------------------------------------------- WP-5e: punto de color y medición automática
+
+@pytest.mark.parametrize(
+    "state, installed, measuring, color",
+    [
+        ("measured", True, False, "green"),
+        ("stale", True, False, "yellow"),
+        ("failed", True, False, "red"),
+        ("not_measured", True, False, "gray"),
+        ("not_measured", False, False, "gray"),
+        ("unsupported", True, False, "gray"),
+        ("not_measured", True, True, "yellow"),
+        ("measured", True, True, "yellow"),
+        ("desconocido", True, False, "gray"),
+    ],
+)
+def test_status_dot_color_and_label_for_every_state(state, installed, measuring, color):
+    got_color, label = status_dot(state, installed=installed, measuring=measuring)
+    assert got_color == color
+    assert label, "el color nunca va solo: siempre hay texto"
+
+
+def test_store_attempts_roundtrip_are_cleared_by_success_and_forget(tmp_path, fake_binary):
+    path = tmp_path / "m.json"
+    store = MeasurementStore(path)
+    assert store.get_attempt("claude", PLATFORM) is None
+    store.put_attempt("claude", PLATFORM, {"path": "/x", "stamp": [1, 2], "reason_code": "NO_HOOK_EVENTS"})
+    assert MeasurementStore(path).get_attempt("claude", PLATFORM)["reason_code"] == "NO_HOOK_EVENTS"
+    store.put(make_record(fake_binary))
+    assert store.get_attempt("claude", PLATFORM) is None, "una medición correcta cierra el historial de fallos"
+    assert store.forget("claude", PLATFORM) is True and store.get("claude", PLATFORM) is None
+    store.put_attempt("claude", PLATFORM, {"path": "/x", "stamp": [1, 2], "reason_code": "TIMEOUT"})
+    store.put_attempt("codex", PLATFORM, {"path": "/y", "stamp": [3, 4], "reason_code": "TIMEOUT"})
+    assert store.forget("claude", PLATFORM) is False, "solo había un intento fallido, no una medición"
+    assert store.get_attempt("claude", PLATFORM) is None, "olvidar también limpia el intento para poder reintentar"
+    assert store.get_attempt("codex", PLATFORM) is not None
+    path.write_text(json.dumps({"schema": 1, "records": {}, "attempts": {"claude:linux": "texto"}}))
+    assert MeasurementStore(path).get_attempt("claude", PLATFORM) is None
+
+
+class AutoEnv:
+    """Servicio con varios CLIs instalados y un interruptor de medición automática; los intentos se encolan."""
+
+    def __init__(self, tmp_path, clis=("claude", "codex", "opencode"), enabled=True):
+        self.paths = {}
+        for cli in clis:
+            binary = tmp_path / f"fake-{cli}"
+            binary.write_text("#!/bin/sh\n")
+            self.paths[cli] = binary
+        self.enabled = enabled
+        self.measured: set = set()
+        self.attempts_log: Dict[str, Dict[str, Any]] = {}
+        self.queue: List[Attempt] = []
+        self.order: List[str] = []
+        self.gate: Optional[threading.Event] = None
+        self.cwds: List[Any] = []
+        self.svc = CliMeasurementService(
+            probe_run=self.probe,
+            list_clis=lambda: [{"cli_id": c, "display_name": c} for c in clis],
+            resolve=lambda cli: {"path": str(self.paths[cli]), "version": "1.0.0"} if cli in self.paths else None,
+            stamp=binary_stamp,
+            record_state=lambda cli: ("measured", {"measured_on": "x", "delivery": {"paste_mode": "bracketed",
+                                      "confirm_event": ""}}) if cli in self.measured else ("none", None),
+            save=lambda rec: self.measured.add(rec["cli_id"]),
+            forget=lambda cli: self.measured.discard(cli) is None,
+            platform=PLATFORM,
+            today=lambda: "2026-11-21",
+            auto_enabled=lambda: self.enabled,
+            attempt_get=self.attempts_log.get,
+            attempt_put=lambda cli, att: self.attempts_log.__setitem__(cli, att),
+        )
+
+    def probe(self, cli_id, *, paste_mode, progress, cancel, step_offset, steps_total, cwd=None):
+        self.order.append(cli_id)
+        self.cwds.append(cwd)
+        if self.gate is not None:
+            self.gate.wait(5)
+        if cancel.is_set():
+            return Attempt(paste_mode, True, cancelled=True)
+        return self.queue.pop(0) if self.queue else good_attempt()
+
+    def settle(self):
+        for _ in range(20):
+            assert self.svc.wait()
+            with self.svc._lock:
+                if self.svc._running is None and not self.svc._auto_pending:
+                    return
+        raise AssertionError("la cola automática no terminó")
+
+
+@pytest.fixture
+def auto(tmp_path):
+    return AutoEnv(tmp_path)
+
+
+def test_auto_tick_does_nothing_when_the_switch_is_off(tmp_path):
+    env = AutoEnv(tmp_path, enabled=False)
+    res = env.svc.auto_tick()
+    assert res["started"] is None and res["reason"] == "AUTO_DISABLED"
+    assert env.order == []
+
+
+def test_auto_tick_measures_every_pending_cli_one_at_a_time_in_catalog_order(auto):
+    res = auto.svc.auto_tick()
+    assert res["started"] == "claude" and res["queued"] == 2
+    auto.settle()
+    assert auto.order == ["claude", "codex", "opencode"]
+    assert auto.measured == {"claude", "codex", "opencode"}
+    assert auto.svc.auto_candidates() == []
+
+
+def test_auto_tick_passes_the_per_cli_working_folder(auto):
+    auto.svc.auto_tick(cwd_for=lambda cli: f"/proyecto/{cli}")
+    auto.settle()
+    assert auto.cwds == ["/proyecto/claude", "/proyecto/codex", "/proyecto/opencode"]
+
+
+def test_auto_skips_measured_not_installed_and_unmeasurable(tmp_path):
+    env = AutoEnv(tmp_path, clis=("claude", "cursor"))
+    env.measured.add("claude")
+    assert env.svc.auto_candidates() == []  # claude ya medido; cursor no es medible
+    env2 = AutoEnv(tmp_path, clis=("claude",))
+    del env2.paths["claude"]
+    assert env2.svc.auto_candidates() == []
+
+
+def test_auto_does_not_retry_a_failed_cli_until_its_binary_changes(auto):
+    auto.queue = [Attempt("bracketed", True, events=(), enter_at_ms=1)]  # claude falla sin avisos
+    auto.svc.auto_tick()
+    auto.settle()
+    assert auto.measured == {"codex", "opencode"}
+    assert auto.attempts_log["claude"]["reason_code"] == "NO_HOOK_EVENTS"
+    assert auto.svc.auto_candidates() == [], "mismo programa: no se repite y no gasta tokens"
+    assert auto.svc.auto_tick()["reason"] == "NOTHING_TO_DO"
+    binary = auto.paths["claude"]
+    binary.write_text("#!/bin/sh\necho actualizado\n")  # el CLI se actualizó: cambia tamaño y fecha
+    assert auto.svc.auto_candidates() == ["claude"]
+    auto.svc.auto_tick()
+    auto.settle()
+    assert "claude" in auto.measured
+
+
+def test_manual_failure_also_blocks_the_automatic_retry_for_the_same_binary(tmp_path):
+    env = AutoEnv(tmp_path, clis=("claude",))
+    env.queue = [Attempt("bracketed", True, events=(), enter_at_ms=1)]
+    env.svc.start("claude")
+    env.svc.wait()
+    assert env.svc.auto_candidates() == []
+
+
+def test_cancelled_run_is_not_recorded_as_an_attempt(tmp_path):
+    env = AutoEnv(tmp_path, clis=("claude",))
+    env.gate = threading.Event()
+    env.svc.start("claude")
+    env.svc.cancel()
+    env.gate.set()
+    env.svc.wait()
+    assert "claude" not in env.attempts_log
+
+
+def test_auto_tick_reports_busy_while_a_measurement_runs(auto):
+    auto.gate = threading.Event()
+    assert auto.svc.start("claude")["started"] is True
+    res = auto.svc.auto_tick()
+    assert res["started"] is None and res["reason"] == "BUSY"
+    auto.gate.set()
+    auto.settle()
+
+
+def test_cancel_clears_the_pending_automatic_queue(auto):
+    auto.gate = threading.Event()
+    auto.svc.auto_tick()
+    assert auto.svc.status()["items"][1]["auto_pending"] is True
+    auto.svc.cancel()
+    auto.gate.set()
+    auto.svc.wait()
+    assert auto.order == ["claude"], "tras cancelar no arranca el siguiente de la cola"
+    assert all(not i["auto_pending"] for i in auto.svc.status()["items"])
+
+
+def test_switching_off_in_the_middle_stops_the_queue(auto):
+    auto.gate = threading.Event()
+    auto.svc.auto_tick()
+    auto.enabled = False
+    auto.gate.set()
+    auto.svc.wait()
+    assert auto.order == ["claude"]
+
+
+def test_status_reports_switch_and_dot_per_item(auto):
+    st = auto.svc.status()
+    assert st["auto_enabled"] is True
+    claude = item(st, "claude")
+    assert claude["dot"] == "gray" and claude["dot_label"]
+    auto.measured.add("claude")
+    assert item(auto.svc.status(), "claude")["dot"] == "green"
+    auto.gate = threading.Event()
+    auto.svc.start("codex")
+    assert item(auto.svc.status(), "codex")["dot"] == "yellow"
+    auto.gate.set()
+    auto.settle()

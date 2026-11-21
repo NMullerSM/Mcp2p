@@ -16,6 +16,10 @@ from src.app.ui_adapters import _BaseUIAdapter
 
 logger = logging.getLogger("mcp2p.app.ui_adapters.measurement")
 
+AUTO_MEASURE_SETTING = "cli_measure_auto"
+# Por defecto apagada: medir abre el CLI y gasta tokens, así que el usuario la activa una vez (interruptor en Ajustes).
+AUTO_MEASURE_DEFAULT = "0"
+
 
 def _fail(code: str, message: str, **extra: Any) -> Dict[str, Any]:
     return {"success": False, "code": code, "message": message, **extra}
@@ -74,8 +78,17 @@ class MeasurementUIAdapter(_BaseUIAdapter):
             forget=lambda cli_id: store.forget(cli_id, platform),
             platform=platform,
             today=lambda: datetime.date.today().isoformat(),
+            auto_enabled=self._auto_enabled,
+            attempt_get=lambda cli_id: store.get_attempt(cli_id, platform),
+            attempt_put=lambda cli_id, attempt: store.put_attempt(cli_id, platform, attempt),
         )
         return self._svc
+
+    def _auto_enabled(self) -> bool:
+        try:
+            return self.db.get_setting(AUTO_MEASURE_SETTING, AUTO_MEASURE_DEFAULT) == "1"
+        except Exception:
+            return False
 
     def pty_get_cli_measurements(self) -> Dict[str, Any]:
         try:
@@ -136,5 +149,24 @@ class MeasurementUIAdapter(_BaseUIAdapter):
     def pty_forget_cli_measurement(self, cli_id: Any) -> Dict[str, Any]:
         try:
             return self._service().forget(cli_id)
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+
+    def pty_set_cli_measure_auto(self, enabled: Any) -> Dict[str, Any]:
+        """Interruptor «medir automáticamente al detectar cambios»; el consentimiento es activarlo una vez."""
+        if not isinstance(enabled, bool):
+            return _fail("INVALID_ARGUMENT", "El valor debe ser verdadero o falso.")
+        try:
+            self.db.set_setting(AUTO_MEASURE_SETTING, "1" if enabled else "0")
+            if not enabled:
+                self._service().cancel()
+        except Exception as exc:
+            return _fail("INTERNAL_ERROR", str(exc))
+        return {"success": True, "code": "OK", "auto_enabled": enabled}
+
+    def pty_auto_measure_tick(self, project_uuid: Any = None) -> Dict[str, Any]:
+        """Mide en segundo plano los CLIs pendientes si el interruptor está activo (idempotente, un intento a la vez)."""
+        try:
+            return self._service().auto_tick(cwd_for=lambda cli_id: self._probe_cwd_for(cli_id, project_uuid))
         except Exception as exc:
             return _fail("INTERNAL_ERROR", str(exc))
