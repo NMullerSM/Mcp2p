@@ -40,7 +40,7 @@ MAX_PATH_LEN = 4096
 
 # Hosts desde los que se acepta descargar un instalador (`curl | sh` / `irm | iex`).
 # Cambiarla exige tocar codigo (y por tanto revision), no un archivo de datos.
-TRUSTED_INSTALL_HOSTS = frozenset({"claude.ai", "chatgpt.com", "antigravity.google", "opencode.ai"})
+TRUSTED_INSTALL_HOSTS = frozenset({"claude.ai", "chatgpt.com", "antigravity.google", "opencode.ai", "cursor.com"})
 
 _ID_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _BINARY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
@@ -51,13 +51,15 @@ _WIN_ABS_RE = re.compile(r"[A-Za-z]:[\\/]")
 
 _NPM_PACKAGE = r"(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(?:@[A-Za-z0-9._-]+)?"
 _URL = r"https://[a-z0-9][a-z0-9.-]*/[A-Za-z0-9._/-]*"
+# El instalador de Windows de Cursor distingue la plataforma con una consulta (`?win32=true`); solo PowerShell la admite.
+_URL_QUERY = _URL + r"(?:\?[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+)?"
 _INSTALL_PATTERNS: Dict[str, "re.Pattern[str]"] = {
     "npm": re.compile(rf"npm install -g {_NPM_PACKAGE}"),
     "brew": re.compile(r"brew install (?:--cask )?[a-z0-9][a-z0-9._+@-]*(?:/[a-z0-9][a-z0-9._+-]*){0,2}"),
     "winget": re.compile(r"winget install [A-Za-z0-9]+(?:\.[A-Za-z0-9][A-Za-z0-9-]*)+"),
     "curl_sh": re.compile(rf"curl -fsSL ({_URL}) \| (?:sh|bash)"),
     "powershell_irm": re.compile(
-        rf"(?:irm ({_URL}) \| iex|powershell -ExecutionPolicy ByPass -c \"irm ({_URL}) \| iex\")"
+        rf"(?:irm ({_URL_QUERY}) \| iex|powershell -ExecutionPolicy ByPass -c \"irm ({_URL_QUERY}) \| iex\")"
     ),
 }
 _SCRIPT_METHODS = frozenset({"curl_sh", "powershell_irm"})

