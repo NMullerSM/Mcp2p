@@ -16,6 +16,7 @@ import { APP_VERSION } from './version';
 import { UpdateNotificationPill } from './components/UpdateNotificationPill';
 import { UpdateModal } from './components/UpdateModal';
 import { ChatDock } from './chat';
+import { usePermissionsTab } from './components/relay/usePermissionsTab';
 
 function parseSemVer(v) {
   const parts = v.replace(/^v/, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
@@ -396,6 +397,9 @@ export default function App() {
     ? activeProject.project_uuid
     : null;
 
+  // Pestaña «Permisos» del chat: la compone la app (el modulo de chat no la conoce). Hook fuera de cualquier condicional.
+  const permissionsTab = usePermissionsTab(api, chatProjectUuid);
+
   return (
     <div style={{
       display: 'flex',
@@ -459,7 +463,7 @@ export default function App() {
       <Footer />
 
       {/* Chat global (WP-8): un solo montaje, visible desde todas las secciones del proyecto. */}
-      <ChatDock api={api} projectUuid={chatProjectUuid} />
+      <ChatDock api={api} projectUuid={chatProjectUuid} extraTabs={permissionsTab} />
 
       {/* Drawer de Configuración Desplegable desde la Derecha */}
       <SettingsDrawer
