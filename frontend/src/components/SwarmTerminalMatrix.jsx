@@ -289,10 +289,6 @@ export function SwarmTerminalMatrix({ api, project, searchQuery = '', active = t
         api={api}
         projectUuid={project?.project_uuid}
         onRestored={refreshAll}
-        panes={panes}
-        catalogById={catalogById}
-        relay={relay}
-        onOpenSettings={onOpenSettings}
       />
 
       <MatrixBanners
