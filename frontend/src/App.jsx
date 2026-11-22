@@ -15,6 +15,7 @@ import { JoinRequestPending } from './components/JoinRequestPending';
 import { APP_VERSION } from './version';
 import { UpdateNotificationPill } from './components/UpdateNotificationPill';
 import { UpdateModal } from './components/UpdateModal';
+import { ChatDock } from './chat';
 
 function parseSemVer(v) {
   const parts = v.replace(/^v/, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
@@ -390,6 +391,11 @@ export default function App() {
     setIsSettingsOpen(true);
   };
 
+  // El chat global solo existe con un proyecto real abierto (no en el hub ni en la pantalla de espera).
+  const chatProjectUuid = !pendingJoinRequest && activeProject?.project_uuid && activeProject.project_uuid !== '__hub__'
+    ? activeProject.project_uuid
+    : null;
+
   return (
     <div style={{
       display: 'flex',
@@ -451,6 +457,9 @@ export default function App() {
 
       {/* Footer Minimalista: Solo SQLite WAL Activo */}
       <Footer />
+
+      {/* Chat global (WP-8): un solo montaje, visible desde todas las secciones del proyecto. */}
+      <ChatDock api={api} projectUuid={chatProjectUuid} />
 
       {/* Drawer de Configuración Desplegable desde la Derecha */}
       <SettingsDrawer

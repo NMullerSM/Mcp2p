@@ -8,29 +8,14 @@ afterEach(() => {
   cleanup();
   vi.resetModules();
   vi.doUnmock('./RestoreSessionBanner');
-  vi.doUnmock('../relay/HumanChatPanel');
 });
 
 describe('MatrixTopRegion', () => {
-  it('renders_slots_in_order_and_nothing_when_stubs_return_null', async () => {
+  it('renders_the_banner_slot_and_nothing_when_the_stub_returns_null', async () => {
     const api = { dummy: true };
     const onRestored = vi.fn();
-    const onOpenSettings = vi.fn();
-    const panes = { pane_1: { paneId: 'pane_1' } };
-    const catalogById = { claude: { id: 'claude' } };
-    const relay = { parked: [] };
 
-    const { unmount } = render(
-      <MatrixTopRegion
-        api={api}
-        projectUuid="proj_1"
-        onRestored={onRestored}
-        panes={panes}
-        catalogById={catalogById}
-        relay={relay}
-        onOpenSettings={onOpenSettings}
-      />
-    );
+    const { unmount } = render(<MatrixTopRegion api={api} projectUuid="proj_1" onRestored={onRestored} />);
     const emptyRegion = screen.getByTestId('matrix-top-region');
     expect(emptyRegion.children.length).toBe(0);
     expect(emptyRegion.textContent).toBe('');
@@ -46,34 +31,14 @@ describe('MatrixTopRegion', () => {
         />
       )
     }));
-    vi.doMock('../relay/HumanChatPanel', () => ({
-      HumanChatPanel: (props) => (
-        <div
-          data-slot="human-chat"
-          data-project={props.projectUuid}
-          data-has-settings={String(props.onOpenSettings === onOpenSettings)}
-        />
-      )
-    }));
 
     const { MatrixTopRegion: MockedMatrixTopRegion } = await import('./MatrixTopRegion');
-    render(
-      <MockedMatrixTopRegion
-        api={api}
-        projectUuid="proj_1"
-        onRestored={onRestored}
-        panes={panes}
-        catalogById={catalogById}
-        relay={relay}
-        onOpenSettings={onOpenSettings}
-      />
-    );
+    render(<MockedMatrixTopRegion api={api} projectUuid="proj_1" onRestored={onRestored} />);
 
     const region = screen.getByTestId('matrix-top-region');
-    expect(region.children.length).toBe(2);
+    expect(region.children.length).toBe(1);
     expect(region.children[0].getAttribute('data-slot')).toBe('restore-banner');
-    expect(region.children[1].getAttribute('data-slot')).toBe('human-chat');
+    expect(region.children[0].getAttribute('data-project')).toBe('proj_1');
     expect(region.children[0].getAttribute('data-has-callback')).toBe('true');
-    expect(region.children[1].getAttribute('data-has-settings')).toBe('true');
   });
 });
