@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { useAppConfirmation } from '../common/useAppConfirmation';
 import { HumanInbox } from './HumanInbox';
 import { RelayStatus } from './RelayStatus';
 import { SendToAgent } from './SendToAgent';
 import { describeRelayError } from './relayModel';
+import { useInboxResolution } from './useInboxResolution';
 
 /**
  * Sección «Relevo entre agentes» del slider de Terminales: parada global + auditoría, bandeja del humano y envío de
@@ -14,39 +14,10 @@ import { describeRelayError } from './relayModel';
  * necesita). `targets` = terminales abiertas del proyecto `[{ paneId, label }]`.
  */
 export function RelayPanel({ api, projectUuid, relay, targets = [] }) {
-  const [busyId, setBusyId] = useState(null);
-  const [inboxFeedback, setInboxFeedback] = useState(null);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [resumingNode, setResumingNode] = useState(null);
   const [pauseFeedback, setPauseFeedback] = useState(null);
-  const { dialog, run: runWithAppConfirmation } = useAppConfirmation(api);
-
-  const resolve = useCallback(
-    async (msgId, decision) => {
-      if (!api?.relay_resolve_parked || busyId) return;
-      const verb = decision === 'release' ? 'liberar el mensaje' : 'descartar el mensaje';
-      setBusyId(msgId);
-      setInboxFeedback(null);
-      try {
-        const invoke = () => api.relay_resolve_parked(msgId, decision);
-        const res = await (decision === 'discard' ? runWithAppConfirmation(invoke) : invoke());
-        if (res?.success === false) {
-          setInboxFeedback({ tone: res.code === 'CONFIRMATION_DECLINED' ? 'info' : 'error', text: describeRelayError(res, verb) });
-        } else {
-          setInboxFeedback({
-            tone: 'ok',
-            text: decision === 'release' ? 'Mensaje liberado: ya está en la bandeja del agente destino.' : 'Mensaje descartado: el destino no lo verá.'
-          });
-        }
-      } catch (err) {
-        setInboxFeedback({ tone: 'error', text: describeRelayError(err, verb) });
-      } finally {
-        setBusyId(null);
-        await relay.refresh();
-      }
-    },
-    [api, busyId, relay, runWithAppConfirmation]
-  );
+  const { resolve, busyId, feedback: inboxFeedback, dialog } = useInboxResolution(api, relay);
 
   const setGlobalPause = useCallback(
     async (enabled) => {
