@@ -165,6 +165,11 @@ class ApiBridge:
 
         self.measurement_ui = MeasurementUIAdapter(self)
         # --- fin WP-5d ---
+        # --- v2.0.2 WP-8: modulo de chat (src/chat) ---
+        from src.app.ui_adapters.chat_ui import ChatUIAdapter
+
+        self.chat_ui = ChatUIAdapter(self)
+        # --- fin WP-8 ---
         # --- v2.0.2 WP-7: politica de nodos ---
         from src.app.ui_adapters.nodes_ui import NodesUIAdapter, wire_nodes
 
@@ -901,6 +906,16 @@ class ApiBridge:
     def relay_list_threads(self, project_uuid: Any, since_ms: Any = 0, limit: Any = 200) -> Dict[str, Any]:
         return self.delivery_ui.relay_list_threads(project_uuid=project_uuid, since_ms=since_ms, limit=limit)
     # --- fin WP-6b ---
+    # --- v2.0.2 WP-8: modulo de chat (src/chat) ---
+    def chat_get_channels(self, project_uuid: Any = None) -> Dict[str, Any]:
+        return self.chat_ui.chat_get_channels(project_uuid=project_uuid)
+
+    def chat_get_feed(self, project_uuid: Any = None, since_ms: Any = 0, limit: Any = 200) -> Dict[str, Any]:
+        return self.chat_ui.chat_get_feed(project_uuid=project_uuid, since_ms=since_ms, limit=limit)
+
+    def chat_send(self, project_uuid: Any = None, text: Any = None) -> Dict[str, Any]:
+        return self.chat_ui.chat_send(project_uuid=project_uuid, text=text)
+    # --- fin WP-8 ---
     # --- v2.0.2 WP-5d: medicion automatica de CLIs ---
     def pty_get_cli_measurements(self) -> Dict[str, Any]:
         return self.measurement_ui.pty_get_cli_measurements()

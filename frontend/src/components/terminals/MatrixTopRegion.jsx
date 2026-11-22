@@ -1,21 +1,13 @@
 import React from 'react';
 import { RestoreSessionBanner } from './RestoreSessionBanner';
-import { HumanChatPanel } from '../relay/HumanChatPanel';
 import { useAutoMeasure } from './useAutoMeasure';
 
 /**
- * Región superior de la matriz de terminales: banner de restauración de sesiones (WP-4b)
- * seguido del panel de chat del humano y permisos (WP-8), encima de los banners y la cuadrícula.
+ * Región superior de la matriz de terminales: banner de restauración de sesiones (WP-4b),
+ * encima de los banners y la cuadrícula. El chat del humano ya no vive aquí: es el módulo
+ * global de chat (src/chat), montado una vez desde App.
  */
-export function MatrixTopRegion({
-  api,
-  projectUuid,
-  onRestored,
-  panes,
-  catalogById,
-  relay,
-  onOpenSettings
-}) {
+export function MatrixTopRegion({ api, projectUuid, onRestored }) {
   useAutoMeasure(api, projectUuid);
   return (
     <div
@@ -23,14 +15,6 @@ export function MatrixTopRegion({
       style={{ display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}
     >
       <RestoreSessionBanner api={api} projectUuid={projectUuid} onRestored={onRestored} />
-      <HumanChatPanel
-        api={api}
-        projectUuid={projectUuid}
-        panes={panes}
-        catalogById={catalogById}
-        relay={relay}
-        onOpenSettings={onOpenSettings}
-      />
     </div>
   );
 }
