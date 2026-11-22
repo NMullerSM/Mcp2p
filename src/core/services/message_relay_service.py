@@ -791,6 +791,18 @@ class MessageRelayService:
         rows = self.store.thread_rows(
             str(project_uuid or ""), since_ms=max(0, int(since_ms or 0)), limit=max(1, min(int(limit or 200), 500))
         )
+        return self._present_thread_rows(rows)
+
+    def chat_view(self, project_uuid: str, *, since_rev_ms: int = 0, limit: int = 200) -> List[Dict[str, Any]]:
+        """Igual que `thread_view`, incremental por revisión (cada fila trae `rev_ms`): alimenta el módulo de chat."""
+        rows = self.store.chat_rows(
+            str(project_uuid or ""),
+            since_rev_ms=max(0, int(since_rev_ms or 0)),
+            limit=max(1, min(int(limit or 200), 500)),
+        )
+        return self._present_thread_rows(rows)
+
+    def _present_thread_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for row in rows:
             if row.get("state") == "parked" and row.get("state_reason") == "UNTRUSTED_NODE_QUEUED":
@@ -831,6 +843,7 @@ class MessageRelayService:
                     "created_at": int(row["created_at_ms"]),
                     "reply_count": replies,
                     "remote": self.remote_info(row["msg_id"]) if callable(self.remote_info) else None,
+                    **({"rev_ms": int(row["rev_ms"])} if row.get("rev_ms") is not None else {}),
                 }
             )
         return out

@@ -547,6 +547,25 @@ class SqliteRelayStore:
             ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def chat_rows(self, project_uuid: str, *, since_rev_ms: int, limit: int) -> List[Dict[str, Any]]:
+        """Como `thread_rows`, pero incremental por REVISIÓN: trae también los mensajes antiguos cuyo estado, entrega o
+        respuestas cambiaron desde `since_rev_ms`, para que el chat actualice sus ticks. `rev_ms` es esa fecha."""
+        with self.db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ("
+                "SELECT m.msg_id, m.chain_id, m.hop, m.parent_msg_id, m.from_principal, m.to_principal, m.kind, m.trust, "
+                "m.state, m.state_reason, m.content, m.created_at_ms, m.expires_at_ms, "
+                "d.state AS delivery_state, d.reason AS delivery_reason, "
+                "(SELECT COUNT(*) FROM relay_messages r WHERE r.parent_msg_id = m.msg_id) AS reply_count, "
+                "MAX(m.created_at_ms, COALESCE(m.updated_at_ms, 0), COALESCE(d.updated_at_ms, 0), "
+                "COALESCE((SELECT MAX(r.created_at_ms) FROM relay_messages r WHERE r.parent_msg_id = m.msg_id), 0)) "
+                "AS rev_ms "
+                "FROM relay_messages m LEFT JOIN relay_delivery d ON d.msg_id = m.msg_id WHERE m.project_uuid = ?"
+                ") WHERE rev_ms >= ? ORDER BY rev_ms DESC, msg_id LIMIT ?;",
+                (project_uuid, int(since_rev_ms), max(1, int(limit))),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
     # -- parada ------------------------------------------------------------------------------------------------------
 
     def set_pause(self, scope: str, paused: bool, *, actor: str, reason: str, now_ms: int) -> None:
