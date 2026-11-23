@@ -18,6 +18,7 @@ from src.adapters.outbound.extension_gate import ExtensionSecurityGate
 from src.app.auto_updater import AutoUpdateManager
 from src.app.identity import local_node_uuid
 from src.app.native_confirm import NativeConfirmationService
+from src.app.webview_guard import RPC_STATS, result_text_bytes
 from src.app.paths import get_bundle_dir, get_user_data_dir
 from src.app.ui_adapters import (
     CollabMeshUIAdapter,
@@ -75,7 +76,13 @@ def _make_public_rpc(method_name: str, bound: Callable[..., Any]) -> Callable[..
     """
 
     def _rpc(*args: Any, **kwargs: Any) -> Any:
-        return bound(*args, **kwargs)
+        result: Any = None
+        try:
+            result = bound(*args, **kwargs)
+            return result
+        finally:
+            # Contador barato para el guardián de la ventana: qué métodos se llaman más y cuánto texto devuelven.
+            RPC_STATS.record(method_name, result_text_bytes(result))
 
     _rpc.__name__ = method_name
     _rpc.__qualname__ = method_name
