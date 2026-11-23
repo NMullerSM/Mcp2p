@@ -86,3 +86,6 @@ docs/SINCRONIZACION_*.md
 brand/NAMING_PROPOSALS.md
 REPORTE_EJECUCION_*.md
 *.docx
+
+# Informes del guardian de la ventana web (datos locales)
+diagnostics/
