@@ -348,6 +348,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if operator_ui is not None:  # Ola 4: canal local del operador (se aprueba con dialogo nativo; tolerante a fallos)
         operator_ui.start_channel()
 
+    from src.app.webview_guard import build_window_guard
+    from src.runtime.paths import get_user_data_dir
+
+    window_guard = build_window_guard(window, target_url, Path(get_user_data_dir()) / "diagnostics")
+    window_guard.start()
+
     try:
         print(f"[MCP2P] Iniciando ventana de escritorio con PyWebView ({target_url})...")
         start_kwargs: dict[str, Any] = {"debug": args.debug}
@@ -360,6 +366,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             start_kwargs["icon"] = str(icon_cand)
         webview.start(**start_kwargs)
     finally:
+        window_guard.stop()
         if operator_ui is not None:
             operator_ui.stop_channel()
         if hasattr(api, "_close_terminal_matrix"):
